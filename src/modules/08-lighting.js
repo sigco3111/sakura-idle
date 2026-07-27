@@ -1,0 +1,553 @@
+import * as THREE from 'three';
+import { WIND } from '../lib/wind.js';
+import {
+  createLightUniforms, samplePalette, writePhaseColors, phaseOf,
+  createNprMaterial, applyNprToStandard, createSkyUniforms, createSkyMaterial,
+  DAY_LENGTH, DEFAULT_DAY_T, PHASE_ANCHORS, GROUND_BOUNCE, DAPPLE_FREQ,
+} from '../lib/lighting.js';
+
+/**
+ * Lighting rig + time-of-day.  order 8 — after the renderer, before everything
+ * that shades a surface.
+ *
+ * Publishes
+ *   ctx.assets.lightUniforms  the shared uniform bag (CONTRACT.md). The Color /
+ *                             Vector3 objects inside are shared BY REFERENCE with
+ *                             every module that spreads them; we only ever mutate
+ *                             `.value`, never reassign it.
+ *   ctx.assets.lightRig       { sun, hemi, fill, back, phase, dayT, palette, shadowTexel }
+ *   ctx.assets.envMap         PMREM environment from the procedural gradient sky
+ *   ctx.assets.applyNPR       applyNPR(material, opts) — retro-fits ART_BIBLE §2 onto a
+ *                             stock MeshStandard/MeshPhysical material (also auto-applied to
+ *                             every such material in the scene; opt out with
+ *                             material.userData.noNpr = true)
+ *   ctx.assets.lighting       { createNprMaterial, applyNPR, setDayT, setPhase, palette, skyUniforms }
+ *
+ * Emits `time:phase` { phase, t } whenever the named phase changes.
+ */
+
+/** World fit: the interesting garden is a ~60-unit disc, tree ~14 units tall.
+ *  The pad is deliberately small: the ortho box only has to contain the
+ *  CASTERS, and every metre of slack is texel resolution thrown away. With the
+ *  tree + props caster set (union sphere r ~9) this lands a 24 m box, i.e.
+ *  5.9 mm/texel at 4096 and 11.7 mm at 2048 — under the 12 mm target. */
+const SHADOW_PAD = 3;            // world units of slack around the caster set
+const SHADOW_HALF_MIN = 12;      // -> 24 m extent, the tight-fit floor
+const SHADOW_HALF_MAX = 110;
+const SHADOW_DEPTH_TAIL = 80;    // extra far-plane depth so long grazing shadows land
+const ENV_SIZE = 128;            // PMREM cube size — plenty for a gradient sky
+const ENV_STEPS = 16;            // regenerate the IBL this many times per day
+const NPR_RESCAN_FRAMES = 45;    // how often to sweep the scene for un-shaded materials
+
+/* Animated key breakup (ART_BIBLE §6: "light dapples through the canopy onto
+   the ground"). Amplitudes are the art-direction values; the pattern drifts
+   with the ONE global wind field so the dapple, the grass and the petals all
+   agree on which way the air is moving. */
+const DAPPLE_AMP = 0.18;         // depth of the shade/gap modulation on the key
+const DAPPLE_DRIFT = 0.06;       // m/s bulk drift of the field along the wind
+const DAPPLE_SWAY = 0.42;        // m of extra sway advection (the canopy moving)
+const DAPPLE_SWAY_HZ = 0.132;    // ...at this rate
+const GUST_AMP = 0.06;           // global "the whole key breathes" amplitude
+const GUST_HZ = 0.25;
+
+export default {
+  name: 'lighting',
+  order: 8,
+
+  async setup(ctx) {
+    const { scene, renderer } = ctx;
+    const group = new THREE.Group();
+    group.name = 'lighting-rig';
+
+    /* ---------------------------------------------------------------- *
+     * Shared uniform bag + palette state
+     * ---------------------------------------------------------------- */
+    const L = createLightUniforms();
+    ctx.assets.lightUniforms = L;
+
+    let dayT = DEFAULT_DAY_T;          // golden hour, the mood target
+    let paused = false;
+    const pal = samplePalette(dayT);   // reused every frame, no per-frame alloc
+
+    /* ---------------------------------------------------------------- *
+     * r185 quirk: PCFSoftShadowMap is no longer wired to a shader define,
+     * so it silently falls back to hard BASIC shadows (aliased edges = an
+     * instant-fail tell). PCFShadowMap is the Vogel-disk soft path and is
+     * the only type that honours `shadow.radius` in this version.
+     * ---------------------------------------------------------------- */
+    renderer.shadowMap.enabled = true;
+    renderer.shadowMap.type = THREE.PCFShadowMap;
+
+    /* ---------------------------------------------------------------- *
+     * Key light — tight, correctly fitted shadow camera
+     * ---------------------------------------------------------------- */
+    const mapSize = Math.max(512, ctx.quality.shadowMap | 0);
+    const sun = new THREE.DirectionalLight(0xffffff, 3);
+    sun.castShadow = true;
+    sun.shadow.mapSize.set(mapSize, mapSize);
+    sun.shadow.bias = 0;
+    sun.shadow.autoUpdate = true;
+    group.add(sun, sun.target);
+
+    /* ---------------------------------------------------------------- *
+     * Shadow frustum fitting.
+     *
+     * A fixed extent wastes most of the map on empty ground and drifts as the
+     * sun swings. Refit the ortho box to the actual shadow-casting set every
+     * frame, snap the frustum centre to shadow-map texel increments (otherwise
+     * the whole shadow crawls one texel at a time as the sun moves, which reads
+     * as a shimmer on every contact edge), and keep the depth range long enough
+     * that a grazing dusk sun's 100-unit shadows still land inside it.
+     *
+     * NOTE: only the CASTERS need to be inside the box. A receiver in a
+     * caster's shadow shares that caster's light-space XY by construction, and
+     * three's getShadow() returns "lit" outside the frustum (verified in
+     * r185 shadowmap_pars_fragment), so nothing self-shadows on the boundary.
+     * ---------------------------------------------------------------- */
+    const UPV = new THREE.Vector3(0, 1, 0);
+    const _right = new THREE.Vector3(), _up = new THREE.Vector3(), _fwd = new THREE.Vector3();
+    const _snap = new THREE.Vector3(), _tmpSphere = new THREE.Sphere();
+    const casterCentre = new THREE.Vector3(0, 6, 0);
+    let casterRadius = 12;
+    let shadowTexel = (SHADOW_HALF_MIN * 2) / mapSize;
+
+    /** Union bounding sphere of every visible shadow caster, in world space. */
+    function measureCasters() {
+      let found = false;
+      const acc = new THREE.Sphere(new THREE.Vector3(), -1);
+      scene.traverseVisible((o) => {
+        if (!o.castShadow || !(o.isMesh || o.isLine || o.isPoints)) return;
+        // InstancedMesh keeps its own instance-aware sphere; plain meshes use the
+        // geometry's, transformed by the world matrix.
+        let s = null;
+        if (o.isInstancedMesh) {
+          if (!o.boundingSphere) { try { o.computeBoundingSphere(); } catch { /* ignore */ } }
+          s = o.boundingSphere;
+        }
+        if (!s) {
+          const g = o.geometry;
+          if (!g) return;
+          if (!g.boundingSphere) g.computeBoundingSphere();
+          s = g.boundingSphere;
+        }
+        if (!s || !(s.radius >= 0)) return;
+        _tmpSphere.copy(s).applyMatrix4(o.matrixWorld);
+        if (!found) { acc.copy(_tmpSphere); found = true; } else acc.union(_tmpSphere);
+      });
+      if (!found || !(acc.radius > 0)) return;
+      casterCentre.copy(acc.center);
+      casterRadius = acc.radius;
+    }
+
+    function fitShadow(keyDir) {
+      const half = THREE.MathUtils.clamp(casterRadius + SHADOW_PAD, SHADOW_HALF_MIN, SHADOW_HALF_MAX);
+      const texel = (half * 2) / mapSize;
+      shadowTexel = texel;
+
+      _fwd.copy(keyDir).normalize();
+      _right.crossVectors(UPV, _fwd);
+      if (_right.lengthSq() < 1e-8) _right.set(1, 0, 0); else _right.normalize();
+      _up.crossVectors(_fwd, _right).normalize();
+
+      // snap the frustum centre onto the texel grid in the light's own lateral basis
+      const cx = casterCentre.dot(_right), cy = casterCentre.dot(_up);
+      _snap.copy(casterCentre)
+        .addScaledVector(_right, Math.round(cx / texel) * texel - cx)
+        .addScaledVector(_up, Math.round(cy / texel) * texel - cy);
+
+      const dist = half * 2 + 40;
+      sun.target.position.copy(_snap);
+      sun.target.updateMatrixWorld();
+      sun.position.copy(_snap).addScaledVector(_fwd, dist);
+
+      const sc = sun.shadow.camera;
+      // 2 texels of slack so a border sample can never read the caster set's edge
+      const ext = half + texel * 2;
+      sc.left = -ext; sc.right = ext; sc.top = ext; sc.bottom = -ext;
+      sc.near = 1;
+      sc.far = dist + half * 2 + SHADOW_DEPTH_TAIL;
+      sc.updateProjectionMatrix();
+
+      // texel footprint -> bias budget, both derived from world units per texel
+      // so they track the fitted box instead of being magic numbers.
+      sun.shadow.normalBias = THREE.MathUtils.clamp(texel * 3.0, 0.02, 0.12);
+      // shadow.bias is added to shadowCoord.z, i.e. it is in NORMALISED ortho
+      // depth, not metres. Author the offset in metres (a bit over one texel of
+      // slope allowance) and convert, otherwise the same constant peter-pans by
+      // 100 mm on a long frustum and does nothing at all on a short one.
+      const depthRange = Math.max(sc.far - sc.near, 1);
+      sun.shadow.bias = -Math.max(0.018, texel * 1.5) / depthRange;
+      // penumbra: aim for ~0.18 world units, capped in TEXELS so the 5-tap
+      // Vogel disk never has to span more ground than it can resolve.
+      sun.shadow.radius = THREE.MathUtils.clamp(0.18 / texel, 1.0, 8.0);
+    }
+
+    /* Cool fill opposite the sun + a low warm back/rim graze.
+       These only reach stock lit materials — every NPR surface derives its own
+       fill from uSkyColor/uGroundColor — so they are deliberately weak. */
+    const fill = new THREE.DirectionalLight(0xffffff, 0.35);
+    const back = new THREE.DirectionalLight(0xffffff, 0.6);
+    group.add(fill, fill.target, back, back.target);
+
+    const hemi = new THREE.HemisphereLight(0xffffff, 0xffffff, 1);
+    group.add(hemi);
+    const _bounce = new THREE.Color();
+
+    /* ---------------------------------------------------------------- *
+     * Procedural gradient sky -> PMREM environment (no external HDRI)
+     * ---------------------------------------------------------------- */
+    const skyU = createSkyUniforms();
+    const envScene = new THREE.Scene();
+    const envSphereGeo = new THREE.SphereGeometry(40, 32, 20);
+    const envSkyMat = createSkyMaterial(L, skyU);
+    envScene.add(new THREE.Mesh(envSphereGeo, envSkyMat));
+
+    const pmrem = new THREE.PMREMGenerator(renderer);
+    let envRT = null;
+    let envKey = -999;
+
+    function buildEnv(force = false) {
+      const key = Math.floor(pal.dayT * ENV_STEPS);
+      if (!force && key === envKey) return;
+      envKey = key;
+      const prev = envRT;
+      try {
+        envRT = pmrem.fromScene(envScene, 0.0, 1, 200, { size: ENV_SIZE });
+      } catch (e) {
+        envRT = prev;
+        return;
+      }
+      if (prev && prev !== envRT) prev.dispose();
+      scene.environment = envRT.texture;
+      ctx.assets.envMap = envRT.texture;
+    }
+
+    /* Fallback sky dome: only if nobody owns `sky`. 15-sky replaces this. */
+    const domeGeo = new THREE.SphereGeometry(420, 40, 24);
+    const domeMat = createSkyMaterial(L, skyU);
+    const dome = new THREE.Mesh(domeGeo, domeMat);
+    dome.name = 'lighting-fallback-sky';
+    dome.frustumCulled = false;
+    dome.renderOrder = -1000;
+    dome.matrixAutoUpdate = false;
+    group.add(dome);
+
+    /* ---------------------------------------------------------------- *
+     * Fog, from the phase palette, kept in sync with uFogColor.
+     * A later module may legitimately swap in its own Fog instance; sync
+     * whatever is actually on the scene rather than assuming ours is still
+     * there, and never bolt a .density onto a linear THREE.Fog.
+     * ---------------------------------------------------------------- */
+    scene.fog = new THREE.FogExp2(0x000000, 0.012);
+
+    /* ---------------------------------------------------------------- *
+     * Apply a sampled palette to every consumer
+     * ---------------------------------------------------------------- */
+    const _v = new THREE.Vector3();
+    let lastPhase = null;
+    let bloomLift = 1;
+
+    /* ---------------------------------------------------------------- *
+     * Animated key breakup.
+     *
+     * ART_BIBLE §6 forbids a frozen frame, and half of any frame here is the
+     * lighting. Two coupled terms, both published through `uDapple` so every
+     * NPR surface in the project inherits them for free:
+     *
+     *   spatial  a curl-warped 2-octave field in world XZ that scrolls along the
+     *            ONE global wind direction — canopy shade sliding over the
+     *            ground. Bulk drift is slow (0.06 m/s, the sun moving); the sway
+     *            term is what actually shimmers, because it is the canopy
+     *            itself swinging in the gust.
+     *   temporal a 0.25 Hz gust that scales the whole key, coupled to WIND.gust
+     *            so the light breathes on the same beat the foliage bends.
+     *
+     * Drift is INTEGRATED rather than computed as speed*time so the wind field's
+     * slowly wandering heading cannot teleport the pattern sideways.
+     * ---------------------------------------------------------------- */
+    let driftX = 0, driftZ = 0;
+    const _dap = new THREE.Vector4(0, 0, 0, 1);
+
+    function advanceDapple(dt) {
+      const wd = WIND?.uniforms?.uWindDir?.value;
+      const wx = wd ? wd.x : 0.86, wz = wd ? wd.y : 0.51;
+      driftX -= wx * DAPPLE_DRIFT * DAPPLE_FREQ * dt;
+      driftZ -= wz * DAPPLE_DRIFT * DAPPLE_FREQ * dt;
+    }
+
+    function writeDapple() {
+      const t = ctx.time;
+      const wd = WIND?.uniforms?.uWindDir?.value;
+      const wx = wd ? wd.x : 0.86, wz = wd ? wd.y : 0.51;
+      const gustEnv = WIND?.uniforms?.uWindGust?.value ?? 0.5;
+      const sway = Math.sin(t * DAPPLE_SWAY_HZ * Math.PI * 2) * DAPPLE_SWAY * DAPPLE_FREQ;
+      // dapple fades with the key: no sun through the canopy means no dapple.
+      const amp = DAPPLE_AMP * (1 - 0.55 * pal.night) * pal.shadowIntensity;
+      const gust = 1 + GUST_AMP * Math.sin(t * GUST_HZ * Math.PI * 2)
+                 + 0.030 * (gustEnv - 0.5);
+      _dap.set(driftX - wx * sway, driftZ - wz * sway, amp, Math.max(gust, 0.05));
+      L.uDapple.value.copy(_dap);
+    }
+
+    function apply(emit = true) {
+      samplePalette(dayT, pal);
+      writePhaseColors(L, pal);
+
+      // ---- key light: whichever body is above the horizon owns the shadow.
+      const keyDir = pal.keyAboveHorizon ? pal.sunDir : pal.moonDir;
+      fitShadow(keyDir);
+      sun.color.copy(pal.sun);
+      sun.intensity = pal.sunInt;
+      // shadow.intensity is NOT a brightness dial — the ramp owns how dark a
+      // shadow is. It is used only for the two physically real fades: the cast
+      // shadow dissolving as the key grazes the horizon (which also hides the
+      // sun -> moon handover), and a moon key throwing a far softer, weaker
+      // shadow than a noon sun.
+      sun.shadow.intensity = pal.shadowIntensity * (1 - 0.55 * pal.night);
+      sun.castShadow = pal.shadowIntensity > 0.004;
+
+      // ---- cool fill: the shadow-tint colour (#6E76A8 at day), from the
+      // anti-sun direction. Only stock lit materials ever see it.
+      _v.copy(keyDir).negate().normalize();
+      fill.position.copy(_v).multiplyScalar(60);
+      fill.color.copy(pal.shadow);
+      fill.intensity = 0.35;
+
+      // ---- low warm back/rim graze, swung off the key azimuth
+      const a = Math.atan2(keyDir.z, keyDir.x) + 1.05;
+      back.position.set(Math.cos(a) * 58, 9, Math.sin(a) * 58);
+      back.color.copy(pal.rim);
+      back.intensity = pal.rimInt;
+
+      // ---- hemisphere ambient (bloom stage lifts the garden a touch).
+      // groundColor is the colour light takes on bouncing OFF the garden, not
+      // the ground's own dark value — same correction as uGroundColor.
+      hemi.color.copy(pal.sky);
+      _bounce.copy(GROUND_BOUNCE).multiplyScalar(0.55);
+      hemi.groundColor.copy(pal.ground).lerp(_bounce, 0.62 * (1 - pal.night));
+      hemi.intensity = pal.hemi * bloomLift;
+
+      // ---- sky gradient (shared by the IBL sphere and the fallback dome)
+      skyU.uZenith.value.copy(pal.zenith);
+      skyU.uHorizon.value.copy(pal.horizon);
+      skyU.uGroundHaze.value.copy(pal.fog).multiplyScalar(0.62);
+      skyU.uStars.value = Math.max(0, pal.night * pal.night);
+
+      // ---- fog stays locked to uFogColor / uFogParams
+      const fg = scene.fog;
+      if (fg) {
+        if (fg.color) fg.color.copy(L.uFogColor.value);
+        if (fg.isFogExp2) fg.density = L.uFogParams.value.x;
+      }
+
+      // ---- animated key breakup (dapple + gust), see writeDapple()
+      writeDapple();
+
+      // ---- exposure + IBL weight
+      renderer.toneMappingExposure = pal.exp;
+      scene.environmentIntensity = pal.env;
+
+      const rig = ctx.assets.lightRig;
+      if (rig) { rig.phase = pal.phase; rig.dayT = pal.dayT; }
+
+      if (emit && pal.phase !== lastPhase) {
+        lastPhase = pal.phase;
+        ctx.bus.emit('time:phase', { phase: pal.phase, t: pal.phaseT });
+      }
+    }
+
+    ctx.assets.lightRig = {
+      sun, hemi, fill, back, phase: pal.phase, dayT, palette: pal,
+      /** world-space size of one shadow-map texel — handy for contact-shadow tuning */
+      get shadowTexel() { return shadowTexel; },
+    };
+
+    apply(false);
+    buildEnv(true);
+    lastPhase = pal.phase;
+
+    /* ---------------------------------------------------------------- *
+     * Public API + debug scenarios
+     * ---------------------------------------------------------------- */
+    function setDayT(t, { emit = true } = {}) {
+      dayT = ((t % 1) + 1) % 1;
+      apply(emit);
+      buildEnv(true);
+      lastPhase = pal.phase;
+      ctx.bus.emit('time:phase', { phase: pal.phase, t: pal.phaseT });
+    }
+
+    ctx.assets.lighting = {
+      createNprMaterial: (o = {}) => createNprMaterial({ lightUniforms: L, ...o }),
+      /** Retro-fit ART_BIBLE §2 onto a stock MeshStandard/Physical material. */
+      applyNPR,
+      skyUniforms: skyU,
+      palette: pal,
+      samplePalette,
+      phaseOf,
+      setDayT,
+      setPhase: (name) => setDayT(PHASE_ANCHORS[name] ?? DEFAULT_DAY_T),
+      get dayT() { return dayT; },
+      set dayT(v) { setDayT(v); },
+      pause(v = true) { paused = !!v; },
+      dayLength: DAY_LENGTH,
+    };
+
+    const sc_ = (window.__game && window.__game.scenarios) || null;
+    if (sc_) {
+      // `raw-*` bypasses the post pipeline so the lighting rig can be judged
+      // (and regression-shot) without bloom/DOF/grade on top of it.
+      const noPost = () => { ctx.pipeline = null; };
+      for (const name of ['dawn', 'day', 'dusk', 'night']) {
+        sc_[name] = () => { setDayT(PHASE_ANCHORS[name]); };
+        sc_[`raw-${name}`] = () => { noPost(); setDayT(PHASE_ANCHORS[name]); };
+      }
+      sc_['golden'] = () => { setDayT(DEFAULT_DAY_T); };
+      sc_['noon'] = () => { setDayT(0.5); };
+      sc_['raw'] = () => { noPost(); setDayT(DEFAULT_DAY_T); };
+      sc_['nopost'] = noPost;
+    }
+
+    /* ---------------------------------------------------------------- *
+     * The NPR retro-fit, published for everyone.
+     *
+     * ART_BIBLE §2 is only shipped if it actually runs on visible pixels, so
+     * this rig does not wait for surface modules to opt in: it hands out
+     * `ctx.assets.applyNPR(material, opts)` and, on top of that, sweeps the
+     * scene for any MeshStandard/MeshPhysical material that has not been
+     * shaded yet and installs the model on it. Opt out with
+     * `material.userData.noNpr = true`.
+     * ---------------------------------------------------------------- */
+    function applyNPR(material, opts = {}) {
+      if (Array.isArray(material)) { for (const m of material) applyNPR(m, opts); return material; }
+      if (!material || material.userData?.noNpr) return material;
+      return applyNprToStandard(material, { lightUniforms: L, ...opts });
+    }
+    ctx.assets.applyNPR = applyNPR;
+
+    /** Per-surface tuning guesses for materials nobody told us about.
+        The shadowHue split is ART_BIBLE §3: a petal's shadow is #EE8CAF (still
+        pink), bark's is a cool brown, but a grass shadow really does go all the
+        way to #6E76A8. One global value cannot serve all three. */
+    function autoOpts(mesh, mat) {
+      const c = mat.color;
+      // pink-ish + translucent => foliage/petals; keep them PINK in shadow
+      if (c && c.r > c.b && c.b > c.g * 0.9 && c.r > 0.25) {
+        return {
+          translucency: 1.0, thickness: 0.85, rimScale: 1.15, specScale: 0.22,
+          shadowHue: 0.34, shadowChroma: 1.0,
+        };
+      }
+      const geo = mesh.geometry;
+      if (geo && !geo.boundingSphere) geo.computeBoundingSphere();
+      const r = geo?.boundingSphere?.radius ?? 1;
+      // a huge ground plane grazes over half the frame — the rim must be almost off
+      if (r > 20) return { translucency: 0, thickness: 0.3, specScale: 0.16, rimScale: 0.06 };
+      // bark / stone / small props: cool the shadow without repainting it blue
+      return { specScale: 0.10, rimScale: 0.75, shadowHue: 0.56, shadowChroma: 0.90 };
+    }
+
+    let sweepChildren = -1;
+    let sweepCountdown = 0;
+    function sweepScene(force = false) {
+      if (!force && scene.children.length === sweepChildren && sweepCountdown-- > 0) return;
+      sweepChildren = scene.children.length;
+      sweepCountdown = NPR_RESCAN_FRAMES;
+      scene.traverse((o) => {
+        if (!o.isMesh && !o.isInstancedMesh) return;
+        const mats = Array.isArray(o.material) ? o.material : [o.material];
+        for (const m of mats) {
+          if (!m || m.__npr || m.userData?.noNpr) continue;
+          if (!(m.isMeshStandardMaterial || m.isMeshPhysicalMaterial)) continue;
+          applyNPR(m, autoOpts(o, m));
+        }
+      });
+    }
+
+    /* ---------------------------------------------------------------- *
+     * Placeholder-scene adoption.
+     *
+     * 50-smoke.js is the temporary smoke-test tree. It ships its own sun and
+     * hemisphere light, which would fight this rig and give a washed-out
+     * double-lit frame, and ART_BIBLE-illegal albedos. While it is present we
+     * mute its lights and recolour it; the NPR sweep above then shades it, so
+     * the frame you judge is shaded by exactly the code path Phase 2 inherits.
+     * Guarded by module name, so it becomes a no-op the moment the real world
+     * modules land — and it never touches any other module's objects.
+     * ---------------------------------------------------------------- */
+    function adoptPlaceholder() {
+      const smoke = ctx.modules.get('smoke');
+      const root = smoke && smoke.object3D;
+      if (!root || root.userData.__nprAdopted) return;
+      root.userData.__nprAdopted = true;
+      const kill = [];
+      root.traverse((o) => {
+        if (o.isLight) { kill.push(o); return; }
+        if (!o.isMesh) return;
+        const geo = o.geometry;
+        if (geo && !geo.boundingSphere) geo.computeBoundingSphere();
+        const r = geo?.boundingSphere?.radius ?? 1;
+        const mat = o.material;
+        if (mat?.color) {
+          if (geo?.type === 'IcosahedronGeometry') mat.color.setHex(0xffb6ce, THREE.SRGBColorSpace);
+          else if (r > 20) mat.color.setHex(0x5E8040, THREE.SRGBColorSpace);
+          else mat.color.setHex(0x6a5344, THREE.SRGBColorSpace);
+        }
+        o.receiveShadow = true;
+        // A big flat receiver must not cast — it only self-shadows into acne.
+        // A single convex blob cannot legitimately cast onto itself either.
+        o.castShadow = r < 20;
+        if (geo?.type === 'IcosahedronGeometry') o.receiveShadow = false;
+      });
+      for (const l of kill) { l.intensity = 0; l.visible = false; if (l.castShadow) l.castShadow = false; }
+    }
+
+    ctx.bus.on('game:ready', () => {
+      adoptPlaceholder();
+      sweepScene(true);
+      measureCasters();
+      apply(false);
+      // A real sky module owns the background; drop the fallback dome for it.
+      if (ctx.modules.has('sky')) { group.remove(dome); dome.visible = false; }
+    });
+
+    /* Growth stages brighten the tree's world a touch — cheap but it reads. */
+    ctx.bus.on('bloom:stage', (p) => {
+      const s = THREE.MathUtils.clamp((p?.stage ?? 0) / 5, 0, 1);
+      bloomLift = 1 + 0.12 * s;
+    });
+
+    let envAccum = 0;
+    let casterAccum = 99;
+    return {
+      object3D: group,
+      update(dt) {
+        if (!paused) dayT = (dayT + dt / DAY_LENGTH) % 1;
+        advanceDapple(dt);
+        // Late-booting modules inherit the shading model and the shadow fit.
+        sweepScene(false);
+        casterAccum += dt;
+        if (casterAccum > 0.5) { casterAccum = 0; measureCasters(); }
+        apply(true);
+        // Border shadow samples must read "unoccluded", never wrap round.
+        const sm = sun.shadow.map;
+        if (sm?.texture && !sm.__sakuraClamped) {
+          sm.__sakuraClamped = true;
+          sm.texture.wrapS = sm.texture.wrapT = THREE.ClampToEdgeWrapping;
+        }
+        // Regenerate the IBL only when the phase has moved materially.
+        envAccum += dt;
+        if (envAccum > 1.0) { envAccum = 0; buildEnv(false); }
+      },
+      dispose() {
+        pmrem.dispose();
+        envRT?.dispose();
+        envSphereGeo.dispose(); envSkyMat.dispose();
+        domeGeo.dispose(); domeMat.dispose();
+        scene.environment = null;
+        ctx.assets.envMap = null;
+        ctx.assets.applyNPR = null;
+      },
+    };
+  },
+};
