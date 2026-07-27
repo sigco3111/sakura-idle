@@ -1,0 +1,144 @@
+# Module contract — read this fully before writing a line
+
+`Sakura — Petals of the Everblossom`. Three.js r0.185, Vite, plain JS (no TS), ESM.
+Target: 60 fps at 1920×1080 on an Apple M1 Pro.
+
+## The one rule that matters
+
+**You own exactly one file.** Write only the file(s) named in your brief. Never edit
+another module, never edit `src/main.js`, `src/core/*`, `index.html`, `vite.config.js`,
+`tools/*`, or another agent's `src/lib/*` file. Other agents are editing this repo at
+the same moment; touching a shared file corrupts their work and yours.
+
+Need something from another module? Get it through `ctx` (below) and code defensively
+for it being absent — modules boot in `order` sequence and yours must not throw if a
+later one hasn't run yet.
+
+## Module shape
+
+Every file in `src/modules/*.js` is auto-discovered by `src/main.js` via `import.meta.glob`.
+No registration step. Default-export this descriptor:
+
+```js
+import * as THREE from 'three';
+
+export default {
+  name: 'tree',          // unique, short, lowercase
+  order: 30,             // boot + update order, ascending
+  async setup(ctx) {
+    const group = new THREE.Group();
+    // ...build everything here; await any async asset work
+    return {
+      object3D: group,                     // optional — auto-added to ctx.scene
+      update(dt, time) {},                 // optional — dt seconds, time = total sim seconds
+      resize(w, h, dpr) {},                // optional
+      dispose() {},                        // optional
+    };
+  },
+};
+```
+
+`order` slots (do not squat on someone else's):
+
+| order | module | file |
+|---|---|---|
+| 0 | renderer/scene/camera/input | `00-renderer.js` |
+| 5 | procedural texture + material library | `05-textures.js` |
+| 8 | lighting & time-of-day rig | `08-lighting.js` |
+| 10 | camera rig / player camera motion | `10-camera.js` |
+| 15 | sky, atmosphere, clouds, fog | `15-sky.js` |
+| 20 | terrain, grass, ground scatter | `20-terrain.js` |
+| 25 | water / pond | `25-water.js` |
+| 30 | the sakura tree | `30-tree.js` |
+| 35 | props — torii, lanterns, rocks, shrine | `35-props.js` |
+| 40 | petal particle system | `40-petals.js` |
+| 45 | click / gameplay VFX | `45-vfx.js` |
+| 60 | game state, economy, save/load | `60-game.js` |
+| 65 | UI / HUD (DOM) | `65-ui.js` |
+| 70 | audio | `70-audio.js` |
+| 90 | post-processing pipeline (**last**) | `90-postfx.js` |
+
+## `ctx` — the shared context (`src/core/ctx.js`)
+
+```
+ctx.renderer      THREE.WebGLRenderer      (exists from order 0 on)
+ctx.scene         THREE.Scene
+ctx.camera        THREE.PerspectiveCamera
+ctx.pipeline      null | { render(dt) }    set ONLY by 90-postfx; if set, main.js calls it
+                                           instead of renderer.render
+ctx.assets        { textures:{}, materials:{}, geometries:{}, envMap }
+                                           publish reusable assets here under your own key
+ctx.time          seconds of simulated time (deterministic in shot mode)
+ctx.frame         frame counter
+ctx.quality       { tier, petals, shadowMap, ssao, taa, dof, godrays, pixelRatioCap,
+                    waterReflect, grass }  — RESPECT THESE BUDGETS
+ctx.shotMode      true when running under the screenshot harness (RAF loop disabled)
+ctx.size          { w, h, dpr }
+ctx.bus           .on(evt, fn) / .emit(evt, payload)
+ctx.modules        Map name -> instance
+ctx.pointer       { x, y, ndc:{x,y}, down }
+ctx.clickTargets  push meshes here to make them clickable
+```
+
+### Event bus contract
+
+Emit and listen only for these names; add new ones with a `yourmodule:` prefix.
+
+| event | payload | emitted by | consumed by |
+|---|---|---|---|
+| `game:ready` | — | main | anyone |
+| `resize` | `{w,h,dpr}` | main | anyone |
+| `world:click` | `{hit, point, screen:{x,y}, ndc:{x,y}}` | renderer | game, vfx |
+| `tree:clicked` | `{point, worldNormal, power}` | tree | vfx, game, audio |
+| `petals:gain` | `{amount, point, crit:boolean}` | game | vfx, ui, audio |
+| `petals:burst` | `{point, count, power}` | game/vfx | petals |
+| `state:changed` | full serialisable game state | game | ui |
+| `upgrade:bought` | `{id, level, tier}` | game | ui, vfx, tree, audio |
+| `bloom:stage` | `{stage:0..5}` tree growth stage | game | tree, sky, lighting, audio |
+| `time:phase` | `{phase:'dawn'\|'day'\|'dusk'\|'night', t:0..1}` | lighting | sky, water, props, ui |
+| `sfx` | `{id, gain?, pan?}` | anyone | audio |
+
+## Non-negotiable technical rules
+
+1. **No network requests.** No CDN, no external textures/fonts/HDRIs/audio files.
+   Everything procedural or generated at runtime (canvas, noise, DataTexture, WebAudio).
+   The harness will flag any request. Fonts: system stack only.
+2. **Colour management.** Renderer is `SRGBColorSpace` output + `ACESFilmicToneMapping`.
+   Any colour you author for display goes through `new THREE.Color().setHex(0x..., THREE.SRGBColorSpace)`
+   or `setStyle`. Canvas-generated colour textures need `texture.colorSpace = THREE.SRGBColorSpace`;
+   data/normal/roughness maps must stay `NoColorSpace`.
+3. **Instance everything repeated.** `InstancedMesh` / instanced attributes for grass,
+   petals, leaves, rocks. Budget: **< 420 draw calls** in the `hero` preset.
+4. **Custom shaders** as JS template strings in `src/lib/<yourname>-shaders.js`
+   (a file you own) or inline. Use `onBeforeCompile` patching or raw `ShaderMaterial`.
+   Any `ShaderMaterial` that must receive shadows/fog needs the relevant `#include`s.
+5. **Determinism.** No `Math.random()` at module scope for anything that affects layout —
+   use the seeded RNG from `src/lib/rng.js` (`mulberry32`). Screenshots must be
+   byte-comparable between runs; the critics rely on it.
+6. **`dt` is clamped** to 1/20 s max. Never assume 60 Hz. In shot mode `dt` is exactly 1/60.
+7. **Dispose** geometries/materials/textures you create in `dispose()`.
+8. **Never `console.log` per-frame.** The harness treats console errors/warnings as failures.
+
+## Verifying your own work — you MUST do this
+
+```bash
+cd /Users/dan/Projects/claude-experiments/sakura-idle
+node tools/shot.mjs --out shots/<yourname>-r1 --presets hero,canopy --w 1920 --h 1080
+```
+
+Runs its own Vite server on a free port, so it is safe to run while other agents run it.
+Exit code 0 = clean. Non-zero = your module threw; `shots/<...>/report.json` has the stack.
+**Then `Read` the PNG and look at it.** Never report success on a screenshot you have not
+looked at. Check `report.json` for `msPerFrame`, `drawCalls`, `triangles`.
+
+Useful presets: `hero canopy bark wide pond petals lantern gameplay` (see `src/core/cameras.js`).
+Extra flags: `--ui 0` (hide DOM UI), `--q high|medium|low`, `--warm 600` (advance sim),
+`--scenario <name>` (calls `window.__game.scenarios[name]()` before shooting — register
+your own debug scenarios there, e.g. night, stage-5 bloom).
+
+## Definition of done
+
+- Harness exits 0 at `--q ultra` **and** `--q low`.
+- `hero` preset ≥ 60 fps equivalent (`msPerFrame` ≤ 16.6) with all modules present.
+- You have looked at the PNG and it matches `ART_BIBLE.md`.
+- Your file has no TODOs and no placeholder art.
