@@ -98,6 +98,46 @@ Emit and listen only for these names; add new ones with a `yourmodule:` prefix.
 | `time:phase` | `{phase:'dawn'\|'day'\|'dusk'\|'night', t:0..1}` | lighting | sky, water, props, ui |
 | `sfx` | `{id, gain?, pan?}` | anyone | audio |
 
+## Shared lighting uniforms — every custom shader must use these
+
+`08-lighting.js` owns and per-frame updates a single uniform bag published at
+`ctx.assets.lightUniforms`. Any module writing a custom NPR shader **spreads these same
+uniform objects** into its material so all surfaces agree on sun direction, colour and fog:
+
+```js
+const L = ctx.assets.lightUniforms;          // may be undefined if lighting hasn't booted
+material.uniforms = { ...L, ...WIND.uniforms, ...myOwnUniforms };
+```
+
+Guaranteed members (all `{ value }` objects, shared by reference — never replace them):
+
+```
+uSunDir        vec3   normalised, world space, pointing FROM surface TO sun
+uSunColor      vec3   linear-space key light colour * intensity
+uSkyColor      vec3   linear zenith ambient
+uGroundColor   vec3   linear bounce ambient from below
+uShadowTint    vec3   linear colour shadowed albedo is pushed toward (hue-shifted, never black)
+uFogColor      vec3   linear aerial-perspective colour
+uFogParams     vec3   (density, heightFalloff, startDistance)
+uMoonDir       vec3   night key direction
+uNightMix      float  0 = full day, 1 = full night
+uPhaseT        float  0..1 progress through the current phase
+uExposure      float  scene exposure multiplier
+```
+
+And `ctx.assets.lightRig = { sun, hemi, fill, phase }` for direct THREE.Light access.
+
+Companion GLSL helper (`src/lib/lighting.js`, owned by the lighting agent) must export
+`GLSL_LIGHT_UNIFORMS` (the `uniform` declarations) and `GLSL_NPR` providing at least:
+
+```
+vec3  nprShade(vec3 albedo, vec3 N, vec3 V, float shadowMask, float translucency, float thickness)
+float rimTerm(vec3 N, vec3 V, float power)
+vec3  applyAerial(vec3 color, float viewDist, float worldY)
+```
+
+Every surface module calls `nprShade` + `applyAerial` rather than rolling its own lighting.
+
 ## Non-negotiable technical rules
 
 1. **No network requests.** No CDN, no external textures/fonts/HDRIs/audio files.
