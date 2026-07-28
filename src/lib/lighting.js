@@ -109,14 +109,42 @@ const vec3 NPR_TRANSMIT_TINT = vec3(1.000, 0.768, 0.838);
   // navy — ART_BIBLE §2 requires the surface to stay recognisably its own
   // colour while shifting cool. A near-NEUTRAL albedo is exempt (it has no hue
   // of its own to protect) and takes the tint's hue outright.
-  #define NPR_SHADOW_HUE_MAX 22.0
+  #define NPR_SHADOW_HUE_MAX 30.0
 #endif
 #ifndef NPR_SHADOW_LEVEL
   // Linear HDR level of the shadow diffuse as a fraction of albedo*key, before
   // the albedo-luminance compensation in nprShadowLevel(). Calibrated against
-  // the 0.50-grey ball in 50-smoke.js measured in the COMPOSITED, GRADED png:
-  // ART_BIBLE §2 wants the shadow side at ~0.55 of the lit side's luminance.
+  // the 0.50-grey ball measured in the COMPOSITED, GRADED png: ART_BIBLE §2
+  // wants the shadow side at ~0.55 of the lit side's luminance.
+  //
+  // This is a FAKE FILL — a flat fraction of the key handed back to a surface
+  // the key cannot reach. CALIBRATED, not guessed: the 'calib' scenario's
+  // 0.50-grey ball, sampled in the final graded png, must sit at 0.50..0.60 of
+  // its own lit side. The grade's S-curve (pivot 0.34, slope 1.38) makes the
+  // DISPLAY ratio roughly (scene ratio)^1.19, so a display 0.55 needs a scene
+  // ratio of 0.60 — which is why this number is much larger than it looks like
+  // it should be. Measured: 0.55 -> display ratio 0.345 (too dark), 0.82 ->
+  // 0.5x. It is not a brightness dial for the whole frame, because the fill is
+  // occluded (NPR_SHADOW_AO) and plateau-deepened (NPR_SHADOW_CORE). It is deliberately back at its old value: cutting it
+  // is NOT how the frame gets a low end (0.30 dropped open shadowed grass to
+  // display 0.09, i.e. onto the grade's blue floor — the navy-paint failure).
+  // The low end comes from NPR_SHADOW_AO below, which is the occlusion this
+  // term used to ignore completely.
   #define NPR_SHADOW_LEVEL 0.55
+#endif
+#ifndef NPR_SHADOW_AO
+  // How much of the fake fill survives at zero ambient occlusion.
+  //
+  // THIS is the frame's dark anchor. The fill above used to be applied flat, so
+  // a fully enclosed pocket — the far side of the trunk under the canopy, the
+  // interior of a blossom cluster, the underside of a branch — was handed
+  // exactly as much "shadow light" as open grass in the tree's ground shadow.
+  // Nothing in frame could ever be dark, whatever the shadow level was set to
+  // (hero lum p1 0.238 with nothing crushed). Scaling the fill by the surface's
+  // own occlusion separates the two cases: an open shadow keeps its ART_BIBLE
+  // 0.55 ratio, an enclosed one falls to a fifth of it and becomes the black
+  // the histogram was missing.
+  #define NPR_SHADOW_AO 0.16
 #endif
 #ifndef NPR_SHADOW_CHROMA
   // How far the shadowed albedo's SATURATION is pulled toward the tint's. Not a
@@ -127,15 +155,51 @@ const vec3 NPR_TRANSMIT_TINT = vec3(1.000, 0.768, 0.838);
   #define NPR_SHADOW_CHROMA 0.62
 #endif
 #ifndef NPR_AMBIENT_SHADOW
-  // an occluded point sees less sky. Below ~0.45 the cast shadow stops reading
-  // as shadowed GROUND and starts reading as a painted-on dark decal.
-  #define NPR_AMBIENT_SHADOW 0.38
+  // Sky reaching a point in a FORM shadow. A surface turned away from the key
+  // is usually also turned into the scene, so it sees materially less sky than
+  // an open, up-facing one — that is what makes a turned surface read as solid
+  // rather than as flatly-repainted albedo. Kept mild: a normal turned away
+  // from the SUN is not the same fact as a normal that cannot see the SKY, and
+  // over-driving this is what dropped every away-facing grass blade out of the
+  // image (ART_BIBLE §3's grass rule, inverted). Real occlusion belongs in ao.
+  #define NPR_AMBIENT_SHADOW 0.72
+#endif
+#ifndef NPR_AMBIENT_CAST
+  // Sky reaching a point in a CAST shadow, which is a completely different
+  // situation and used to share the number above. A patch of grass inside the
+  // tree's ground shadow has lost the SUN and almost nothing else: it still
+  // sees essentially the whole sky dome. Killing its ambient too is what forced
+  // the fake NPR_SHADOW_LEVEL fill to be so large, which is what flattened the
+  // frame. Keep the ambient, drop the key: that is what a cast shadow IS.
+  #define NPR_AMBIENT_CAST 0.86
 #endif
 #ifndef NPR_SHADOW_CORE
   // Depth of the 4th "deep interior" plateau in the very core of a FORM shadow,
   // as a multiplier on the shadow level. Cast shadows never get it — that is
   // what turned the tree's ground shadow into an opaque lozenge.
-  #define NPR_SHADOW_CORE 0.86
+  //
+  // This plateau is the frame's DARK ANCHOR (ART_BIBLE §3 "deep interior"): the
+  // far side of the trunk, branch undersides, canopy interiors. Everything else
+  // in an open golden-hour garden is lit or sky, so if this band is shallow the
+  // histogram has no bottom at all. 0.86 (14% darker than a plain shadow) was
+  // no anchor whatsoever.
+  #define NPR_SHADOW_CORE 0.42
+#endif
+#ifndef NPR_SHADOW_CORE_HI
+  // Half-Lambert value at which the core plateau has fully faded out. The old
+  // window (0.150..0.190) is 2.3 degrees wide at the very bottom of the
+  // half-Lambert range, i.e. only a surface facing within 20 deg of DIRECTLY
+  // away from the key ever saw it. Widening it to 0.335 (ndl -0.70 .. -0.33)
+  // gives the far quarter of a trunk or a branch a real deep-interior value.
+  #define NPR_SHADOW_CORE_HI 0.300
+#endif
+#ifndef NPR_SHADOW_FLOOR
+  // Weight of the "never black" pedestal (nprShadowFloor) on the shadow diffuse.
+  // It carries most of uShadowTint's own hue, so as the plateaus above get
+  // deeper this term is what stops the deep core going neutral-black AND what
+  // swings the darkest quartile of the frame cool (ART_BIBLE §2 / the
+  // groundSplitTone metric).
+  #define NPR_SHADOW_FLOOR 0.045
 #endif
 #ifndef NPR_PENUMBRA_SLOPE
   // World metres of penumbra per metre of blocker distance — i.e. the key's
@@ -294,13 +358,16 @@ vec3 nprShadowHue(vec3 albedo){
    slab while grass still reads. This keeps the ON-SCREEN light:shadow ratio
    roughly constant across the palette. */
 float nprShadowLevel(float al){
-  // The transition is over albedo luma 0.01..0.10, NOT 0.03..0.24. Measured on
-  // the calibration chart: with the wider window a bark-dark albedo (luma 0.10)
-  // sat halfway up the boost curve and its shadow came out at 0.91 of its lit
-  // side while the 0.50 grey next to it sat at 0.55. Only genuinely near-black
-  // albedos need the lift (ACES + sRGB crush the bottom of the range); anything
-  // from bark upward wants the same flat fraction.
-  return NPR_SHADOW_LEVEL * mix(2.20, 0.66, smoothstep(0.010, 0.100, al));
+  // This curve is what makes ART_BIBLE §2's 0.55 ratio hold across the PALETTE
+  // rather than only at mid grey, and the window was measured, not guessed. The
+  // grade's S-curve (pivot 0.34, slope 1.38) is far steeper below the pivot than
+  // at it: the same SCENE ratio prints as a DISPLAY ratio of ^1.36 at the 0.50
+  // grey ball's level and ^2.07 at bark's, so a flat fill that reads 0.55 on
+  // grey reads 0.28 on bark. Ending the window at 0.270 (just above the 0.50
+  // grey's 0.216) gives bark 27% of the boost and grey 11%, and both land on
+  // 0.55 in the graded png. Measured on the 'calib' balls: window 0.100 -> bark
+  // 0.28 / grey 0.43; window 0.270 -> bark 0.55 / grey 0.56.
+  return NPR_SHADOW_LEVEL * mix(2.20, 0.66, smoothstep(0.010, 0.270, al));
 }
 
 /* The "never black" floor. It keeps the tint's LEVEL but takes 45% of its HUE
@@ -314,15 +381,24 @@ vec3 nprShadowAlbedo(vec3 albedo, vec3 kcol){
   float kl = clamp(nprLuma(kcol), 0.05, 1.15);
   vec3 shHue = nprShadowHue(albedo);
   vec3 sh = shHue * (nprShadowLevel(nprLuma(albedo)) * kl);
-  sh += nprShadowFloor(shHue) * (0.040 * kl);
+  sh += nprShadowFloor(shHue) * (NPR_SHADOW_FLOOR * kl);
   return max(sh, vec3(0.006));                         // never pure black
 }
 vec3 nprShadowAlbedo(vec3 albedo){ return nprShadowAlbedo(albedo, uSunColor); }
 
-/* --- directional ambient: sky from above, bounce from below ---------- */
+/* --- directional ambient: sky from above, bounce from below ----------
+   The sky/bounce split is the cosine-weighted fraction of the hemisphere a
+   surface can see, which for a VERTICAL surface is exactly half sky and half
+   ground. The old curve (up*up*0.82 + up*0.18) returned 0.295 there, i.e. it
+   handed a vertical surface 70% ground bounce, so every grass blade, every
+   trunk flank and every leaf card was ambient-lit by the dark ground term and
+   came out darker than the flat ground next to it (ART_BIBLE §3's grass rule,
+   inverted). This curve passes through 0.45 at up = 0.5 — still slightly
+   ground-biased, because a blade of grass really is surrounded by other grass,
+   but no longer inventing occlusion that is not there. */
 vec3 nprAmbient(vec3 N){
   float up = clamp(N.y * 0.5 + 0.5, 0.0, 1.0);
-  return mix(uGroundColor, uSkyColor, up * up * 0.82 + up * 0.18);
+  return mix(uGroundColor, uSkyColor, up * 0.72 + up * up * 0.28);
 }
 
 /* --- true faceted normal from screen-space derivatives.
@@ -466,12 +542,19 @@ vec3 nprKeyG(vec3 albedo, vec3 N, vec3 Ng, vec3 V, vec3 L, vec3 kcol,
   float kl = clamp(nprLuma(kcol), 0.05, 1.15);
   vec3  shHue = nprShadowHue(albedo);
   // A deeper 4th plateau in the very core of the form shadow — the palette's
-  // "deep interior" value. Banded, so it stays a flat plateau too.
-  // ...and it is keyed off the FORM value d only, so a cast shadow lying on
-  // otherwise sunlit ground never drops into it.
-  float core = 1.0 - smoothstep(0.150, 0.190, d);
-  vec3  shDiff = shHue * (nprShadowLevel(nprLuma(albedo)) * kl * mix(1.0, NPR_SHADOW_CORE, core))
-               + nprShadowFloor(shHue) * (0.040 * kl);
+  // "deep interior" value, and the frame's dark anchor. Banded, so it stays a
+  // flat plateau too, and keyed off the FORM value d only, so a cast shadow
+  // lying on otherwise sunlit ground never drops into it.
+  float core = 1.0 - smoothstep(0.150, NPR_SHADOW_CORE_HI, d);
+  // The fake fill is OCCLUDED. An open cast shadow keeps all of it (ART_BIBLE's
+  // 0.55 ratio); an enclosed pocket keeps a fifth. The "never black" pedestal
+  // underneath is deliberately NOT occluded, so even the deepest interior keeps
+  // uShadowTint's violet rather than going to zero.
+  float occ = clamp(ao, 0.0, 1.0);
+  vec3  shDiff = shHue * (nprShadowLevel(nprLuma(albedo)) * kl
+                          * mix(1.0, NPR_SHADOW_CORE, core)
+                          * mix(NPR_SHADOW_AO, 1.0, occ))
+               + nprShadowFloor(shHue) * (NPR_SHADOW_FLOOR * kl);
 
   vec3 col = mix(shDiff, albedo * kcol, t);
 
@@ -480,9 +563,21 @@ vec3 nprKeyG(vec3 albedo, vec3 N, vec3 Ng, vec3 V, vec3 L, vec3 kcol,
   // dragging it back to the surface's own hue. Only partly, though: uSkyColor is
   // already strongly blue, and stacking a blue tint on a blue ambient overshoots
   // into an electric-blue shadow.
-  vec3 ambA = mix(mix(albedo, shHue, 0.35), albedo, t);
-  col += ambA * nprAmbient(N) * clamp(ao, 0.0, 1.0)
-       * mix(NPR_AMBIENT_SHADOW, 1.0, max(t, clamp(sm, 0.0, 1.0) * 0.58));
+  //
+  // FORM occlusion and CAST occlusion are separate factors because they are
+  // separate physical facts. A surface turned away from the key is turned into
+  // the scene and sees less sky (NPR_AMBIENT_SHADOW); a patch of ground inside
+  // the tree's cast shadow is still staring straight up at the whole dome and
+  // has only lost the sun (NPR_AMBIENT_CAST, near 1). Sharing one number here
+  // is what made cast shadows read as painted-on decals and forced the fake
+  // key fill to be large enough to flatten the whole frame.
+  float formT = nprRamp(d);
+  float ambOcc = mix(NPR_AMBIENT_SHADOW, 1.0, formT) * mix(NPR_AMBIENT_CAST, 1.0, castT);
+  vec3 ambA = mix(mix(albedo, shHue, 0.46), albedo, t);
+  // occ^1.35, not occ: sky visibility falls off faster than a linear AO term
+  // suggests once a point is inside a pocket, and this is the second half of
+  // the dark anchor (the first is NPR_SHADOW_AO on the fill above).
+  col += ambA * nprAmbient(N) * pow(max(occ, 1e-4), 1.35) * ambOcc;
 
   // one sharp CLIPPED specular core + a BANDED broad sheen. Neither is a PBR
   // roughness lobe, and the sheen is stepped so it does not smear a glossy
@@ -510,8 +605,16 @@ vec3 nprKeyG(vec3 albedo, vec3 N, vec3 Ng, vec3 V, vec3 L, vec3 kcol,
   // leaf/petal cluster, which from any camera is its grazing silhouette. Without
   // that gate a strong wrap lifts the whole shadow side into flat pink soup and
   // the form shadow disappears.
-  float thin = mix(0.10, 1.0, fres);
-  col += tcol * (back * 0.95 + wrap * wrap * 0.62 * thin)
+  //
+  // ...but the floor was 0.10, i.e. a single blade of grass or one petal card
+  // seen FACE ON transmitted almost nothing, even though a blade is the same
+  // fraction of a millimetre thick whichever way you look at it. That is why
+  // every grass blade whose normal turned away from the key fell into the plain
+  // form shadow and the lawn read darker than the bare ground under it. The
+  // floor is 0.34 now and the grazing amplitude is trimmed to compensate, so
+  // the silhouette glow is unchanged and the face-on bleed is 3x.
+  float thin = mix(0.34, 1.0, fres);
+  col += tcol * (back * 0.95 + wrap * wrap * 0.50 * thin)
        * translucency * thickness * mix(0.30, 1.0, sm);
 
   // ---- Rim, part 1: the KEY's hot silhouette line. Narrow band so it reads as
@@ -651,60 +754,80 @@ export function phaseOf(dayT) {
  * the same family so the whole cycle reads as one film.
  *
  *  elev/azim  degrees. azim is monotonically increasing so the sun never
- *             back-tracks; dir = (cos(elev)cos(azim), sin(elev), cos(elev)sin(azim)).
- *             azim 166 @ golden hour puts the key ~110 deg off the hero camera:
- *             lit left edge, hue-shifted right side, long shadow to frame-right.
+ *             back-tracks (and t=1 is exactly t=0 + 360 so midnight wraps
+ *             continuously); dir = (cos(elev)cos(azim), sin(elev), cos(elev)sin(azim)).
  *
- *             ELEVATION CEILING 38 deg. The day rows used to peak at 66 deg,
- *             which is a near-top-lit key: the tree's shadow collapsed inside
- *             its own ground footprint (nothing to compose with), the canopy's
- *             lit top and shaded underside came within 5% of each other, and
- *             the trunk had no readable terminator. Ground shadow length is
- *             height/tan(elev), so 26 deg at the golden-hour anchor throws
- *             ~2.05x the tree's height and 34 deg at the `day` anchor ~1.5x —
- *             both long enough to cross open grass and read as a cast shadow.
+ *  THE BACKLIGHT / CAST-SHADOW TRADE, resolved deliberately.
+ *
+ *  The hero camera sits at (14, 6.5, 21) looking at (0, 7.5, 0), so its bottom
+ *  edge hits the ground at (1.4, 0, 2.1) — right at the tree base. EVERY
+ *  visible square metre of ground is therefore FARTHER from the camera than the
+ *  tree is. A cast shadow is visible if and only if it runs AWAY from the
+ *  camera; and a shadow running away from the camera means the key is BEHIND
+ *  the camera, i.e. front light and no backlit rim. The two cannot both be
+ *  maximised in this composition.
+ *
+ *  Resolution: the shadow gets the golden hour, the backlight gets dawn and
+ *  dusk. At the golden-hour anchor the key azimuth is +6 deg — 50 deg off the
+ *  camera-to-tree axis, a textbook three-quarter key from camera RIGHT. Its
+ *  shadow runs 0.64 away / 0.77 to frame-LEFT, so at 36 deg elevation the
+ *  canopy's ~16 m shadow ellipse covers the open grass in the lower-left third
+ *  instead of sliding off the right edge (which is where azim 152 put it, and
+ *  why no cast shadow had ever appeared in a hero shot). The trunk is then lit
+ *  on its camera-right flank and turned away on its camera-left one, which is
+ *  also the only way to get a readable terminator on a cylinder.
+ *  Dawn (azim -105) and dusk (azim +34 falling to a grazing 8 deg elevation)
+ *  keep the key in FRONT of the camera, so the canopy is properly backlit and
+ *  translucent exactly when the palette is at its warmest.
+ *
+ *  ELEVATION: ground shadow length is height/tan(elev), and the tree is ~14 m.
+ *  36 deg at the golden-hour anchor throws 19 m, ~1.4x the tree's height — long
+ *  enough to cross open grass. Above ~55 deg the shadow collapses inside the
+ *  tree's own footprint, the canopy's lit top and shaded underside come within
+ *  5% of each other, and the trunk loses its terminator, so 50 deg at noon is
+ *  the ceiling.
  */
 const KEYS = [
   { t: 0.000, sun: 0x9FB6E8, sunInt: 0.82, sky: 0x33456F, skyInt: 0.62, ground: 0x1E2438, groundInt: 0.62,
     shadow: 0x1E2A4A, fog: 0x1B2440, fogD: 0.0075, zenith: 0x0C1530, horizon: 0x2A3355,
     fill: 0x4A5C8C, fillInt: 0.22, rim: 0xAFC4EE, rimInt: 0.50, hemi: 0.55,
-    elev: -52, azim: -60, night: 1.00, exp: 1.20, env: 0.35 },
+    elev: -52, azim: -190, night: 1.00, exp: 1.20, env: 0.35 },
   { t: 0.070, sun: 0xB6A6C8, sunInt: 0.98, sky: 0x424D78, skyInt: 0.62, ground: 0x262436, groundInt: 0.62,
     shadow: 0x2A3358, fog: 0x2E3352, fogD: 0.0072, zenith: 0x152040, horizon: 0x53516E,
     fill: 0x5A6690, fillInt: 0.25, rim: 0xC0B6DE, rimInt: 0.55, hemi: 0.60,
-    elev: -22, azim: -15, night: 0.82, exp: 1.16, env: 0.42 },
+    elev: -22, azim: -150, night: 0.82, exp: 1.16, env: 0.42 },
   { t: 0.135, sun: 0xFFDCC2, sunInt: 1.90, sky: 0x6E7FB8, skyInt: 0.80, ground: 0x3E3440, groundInt: 0.60,
     shadow: 0x5E6A9E, fog: 0xD9C3D2, fogD: 0.0058, zenith: 0x3E6BB0, horizon: 0xF3C4D0,
     fill: 0x8FA6D8, fillInt: 0.42, rim: 0xFFD2B4, rimInt: 0.85, hemi: 0.85,
-    elev: 8, azim: 25, night: 0.10, exp: 1.06, env: 0.85 },
+    elev: 8, azim: -105, night: 0.10, exp: 1.06, env: 0.85 },
   { t: 0.240, sun: 0xFFF0DC, sunInt: 3.00, sky: 0x7EA0D8, skyInt: 0.95, ground: 0x4E5240, groundInt: 0.70,
     shadow: 0x6E76A8, fog: 0xBCD3EA, fogD: 0.0038, zenith: 0x4E86D4, horizon: 0xCFE0F2,
     fill: 0x9FBCE8, fillInt: 0.50, rim: 0xFFF0D8, rimInt: 0.60, hemi: 1.00,
-    elev: 34, azim: 70, night: 0.00, exp: 1.00, env: 1.00 },
+    elev: 30, azim: -48, night: 0.00, exp: 1.00, env: 1.00 },
   { t: 0.500, sun: 0xFFF8EE, sunInt: 3.30, sky: 0x8FB0E2, skyInt: 1.00, ground: 0x585C46, groundInt: 0.75,
     shadow: 0x7A82AE, fog: 0xC6DAEE, fogD: 0.0030, zenith: 0x4E86D4, horizon: 0xD8E6F5,
     fill: 0xA8C4EE, fillInt: 0.50, rim: 0xFFF6E8, rimInt: 0.50, hemi: 1.05,
-    elev: 58, azim: 115, night: 0.00, exp: 0.98, env: 1.05 },
+    elev: 50, azim: -20, night: 0.00, exp: 0.98, env: 1.05 },
   { t: 0.665, sun: 0xFFE6CE, sunInt: 2.95, sky: 0x7C96CE, skyInt: 0.82, ground: 0x5A4A3C, groundInt: 0.75,
     shadow: 0x6470A8, fog: 0xDCBFA6, fogD: 0.0048, zenith: 0x4574B8, horizon: 0xF2CBA0,
     fill: 0x92A8DE, fillInt: 0.42, rim: 0xFFD9A8, rimInt: 1.00, hemi: 0.92,
-    elev: 46, azim: 152, night: 0.00, exp: 1.02, env: 0.95 },
+    elev: 36, azim: 6, night: 0.00, exp: 1.02, env: 0.95 },
   { t: 0.765, sun: 0xFFB683, sunInt: 2.05, sky: 0x64709E, skyInt: 0.70, ground: 0x54382E, groundInt: 0.70,
     shadow: 0x5A4A78, fog: 0xE8A57E, fogD: 0.0062, zenith: 0x3A4E86, horizon: 0xF5A86E,
     fill: 0x7A88C0, fillInt: 0.38, rim: 0xFFB070, rimInt: 1.05, hemi: 0.85,
-    elev: 8.0, azim: 182, night: 0.16, exp: 1.06, env: 0.80 },
+    elev: 8.0, azim: 34, night: 0.16, exp: 1.06, env: 0.80 },
   { t: 0.840, sun: 0xD5A3B4, sunInt: 1.00, sky: 0x424E80, skyInt: 0.55, ground: 0x2E2836, groundInt: 0.60,
     shadow: 0x35375E, fog: 0x6B5A78, fogD: 0.0070, zenith: 0x22305C, horizon: 0x8A6A82,
     fill: 0x5E6A98, fillInt: 0.30, rim: 0xD8A0C0, rimInt: 0.70, hemi: 0.70,
-    elev: -14, azim: 205, night: 0.62, exp: 1.12, env: 0.55 },
+    elev: -14, azim: 55, night: 0.62, exp: 1.12, env: 0.55 },
   { t: 0.920, sun: 0x9FB6E8, sunInt: 0.82, sky: 0x33456F, skyInt: 0.62, ground: 0x1E2438, groundInt: 0.62,
     shadow: 0x1E2A4A, fog: 0x1B2440, fogD: 0.0075, zenith: 0x0C1530, horizon: 0x2A3355,
     fill: 0x4A5C8C, fillInt: 0.22, rim: 0xAFC4EE, rimInt: 0.50, hemi: 0.55,
-    elev: -46, azim: 250, night: 1.00, exp: 1.20, env: 0.35 },
+    elev: -46, azim: 110, night: 1.00, exp: 1.20, env: 0.35 },
   { t: 1.000, sun: 0x9FB6E8, sunInt: 0.82, sky: 0x33456F, skyInt: 0.62, ground: 0x1E2438, groundInt: 0.62,
     shadow: 0x1E2A4A, fog: 0x1B2440, fogD: 0.0075, zenith: 0x0C1530, horizon: 0x2A3355,
     fill: 0x4A5C8C, fillInt: 0.22, rim: 0xAFC4EE, rimInt: 0.50, hemi: 0.55,
-    elev: -52, azim: 300, night: 1.00, exp: 1.20, env: 0.35 },
+    elev: -52, azim: 170, night: 1.00, exp: 1.20, env: 0.35 },
 ];
 
 const COLOUR_FIELDS = ['sun', 'sky', 'ground', 'shadow', 'fog', 'zenith', 'horizon', 'fill', 'rim'];

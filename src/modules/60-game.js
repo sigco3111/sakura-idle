@@ -1,0 +1,1031 @@
+import * as THREE from 'three';
+import { WIND } from '../lib/wind.js';
+import { mulberry32 } from '../lib/rng.js';
+import * as E from '../lib/economy.js';
+
+/**
+ * 60-game — the whole idle simulation. Owner: game agent.
+ *
+ * This module owns STATE ONLY. It never touches the scene graph, never creates
+ * a material, never writes DOM. `65-ui.js` renders it, `45-vfx.js` animates it,
+ * `70-audio.js` sounds it — all through `ctx.bus` and `ctx.assets.game`.
+ *
+ * Simulation runs on a FIXED 20 Hz accumulator, so it is frame-rate independent
+ * and bit-identical in shot mode (where dt is exactly 1/60).
+ *
+ * Emits:  state:changed, petals:gain, petals:burst, upgrade:bought, bloom:stage,
+ *         sfx, and the game-prefixed set:
+ *         game:event {id,active,remain,dur}     — Storm / Rain / Moon / Golden Hour
+ *         game:golden {id,ttl,seed}             — spawn a Golden Petal (VFX owns the mesh)
+ *         game:golden:end {id,caught,boon}
+ *         game:stageup {stage,name,kanji,blossoms}
+ *         game:offline {awayS,cappedS,gained,stages}
+ *         game:prestige {season,essence,gain}
+ *         game:toast {kind,title,body,rarity}   — achievements / codex / boons
+ *         game:reset
+ *
+ * Listens: world:click, tree:clicked, time:phase.
+ */
+
+const STEP = 1 / E.TUNING.SIM_HZ;
+const clamp = (v, a, b) => (v < a ? a : v > b ? b : v);
+
+export default {
+  name: 'game',
+  order: 60,
+
+  async setup(ctx) {
+    const bus = ctx.bus;
+    const persist = !ctx.shotMode && typeof localStorage !== 'undefined';
+
+    /* ---------------------------------------------------------------- *
+     * state
+     * ---------------------------------------------------------------- */
+    let state = E.newState();
+    let loadedSave = null;
+    if (persist) {
+      try {
+        const raw = localStorage.getItem(E.SAVE_KEY);
+        if (raw) loadedSave = E.migrate(JSON.parse(raw));
+      } catch { loadedSave = null; }
+      if (loadedSave) state = loadedSave;
+    }
+
+    /** Seeded stream for crits, event timing and Golden Petal drops. */
+    let rng = mulberry32((state.seed | 0) ^ 0x5a4b12);
+    const rand = () => rng();
+
+    /* live (non-persisted) runtime -------------------------------------- */
+    const timers = { storm: 0, rain: 0, frenzy: 0, clickFrenzy: 0, bloomfall: 0 };
+    let bloomfallRate = 0;
+    let bloomfallBurst = 0;
+    let phase = 'day';
+    let nextStorm = E.TUNING.STORM_PERIOD + (rand() * 2 - 1) * E.TUNING.STORM_JITTER;
+    let nextGolden = E.TUNING.GOLDEN_MIN + rand() * (E.TUNING.GOLDEN_MAX - E.TUNING.GOLDEN_MIN);
+    let rainRoll = 0;
+    let golden = null;              // { id, ttl }
+    let goldenSeq = 1;
+    let autoAcc = 0;
+    let idleFor = 0;
+    let windBase = null;            // wind strength before a storm grabbed it
+    let acc = 0;
+    let saveAcc = 0;
+    let emitAcc = 0;
+    let wallLast = typeof Date !== 'undefined' ? Date.now() : 0;
+    let offlineReport = null;
+
+    const live = { storm: false, rain: false, moon: false, goldenHour: false, frenzy: false, clickFrenzy: false };
+
+    /* derived cache ----------------------------------------------------- */
+    let D = E.computeDerived(state, live);
+    let dirty = false;
+    const invalidate = () => { dirty = true; };
+    function derived() {
+      if (dirty) { D = E.computeDerived(state, live); dirty = false; }
+      return D;
+    }
+
+    /* scratch vectors — never allocate per click in a hot path */
+    const _v = new THREE.Vector3();
+
+    function treePoint() {
+      const tree = ctx.assets.tree;
+      if (tree?.sampleBranchPoint) {
+        try { return tree.sampleBranchPoint(rand()).point; } catch { /* fallthrough */ }
+      }
+      return _v.set(0, 8.5, 0).clone();
+    }
+
+    /* ---------------------------------------------------------------- *
+     * currency
+     * ---------------------------------------------------------------- */
+    function credit(amount) {
+      if (!(amount > 0)) return;
+      state.petals += amount;
+      state.totalThisSeason += amount;
+      state.totalAllTime += amount;
+      if (state.petals > state.stats.bestBank) state.stats.bestBank = state.petals;
+      invalidate();
+    }
+
+    function spend(cost) {
+      if (!(state.petals >= cost)) return false;
+      state.petals -= cost;
+      invalidate();
+      return true;
+    }
+
+    /* ---------------------------------------------------------------- *
+     * clicking
+     * ---------------------------------------------------------------- */
+    function shake(point, opts = {}) {
+      const d = derived();
+      const auto = !!opts.auto;
+      const power = auto ? (d.grove.autoFull ? 1 : 0.5) : 1;
+      let amount = d.clickValue * power;
+
+      let crit = false;
+      if (!auto || d.grove.autoFull) {
+        crit = rand() < d.critChance;
+        if (crit) amount *= d.critMult;
+      }
+      // Constellation "Second Hand" — one shake in four lands twice.
+      let twice = false;
+      if (d.grove.doubleShake > 0 && rand() < d.grove.doubleShake) { amount *= 2; twice = true; }
+
+      credit(amount);
+      state.stats.clicks += 1;
+      state.stats.seasonClicks += 1;
+      if (crit) state.stats.crits += 1;
+      if (!auto) idleFor = 0;
+
+      const p = point || treePoint();
+      if (opts.emitTreeClick !== false) {
+        bus.emit('tree:clicked', { point: p.clone ? p.clone() : p, worldNormal: null, power: crit ? 2 : 1 });
+      }
+      bus.emit('petals:gain', { amount, point: p, crit });
+      bus.emit('petals:burst', {
+        point: p,
+        count: Math.round((crit ? 46 : 14) * (twice ? 1.4 : 1) * (auto ? 0.5 : 1)),
+        power: crit ? 1.8 : twice ? 1.25 : 1,
+      });
+      bus.emit('sfx', { id: crit ? 'shake-crit' : 'shake', gain: crit ? 1 : 0.7 });
+      pushState();
+      return { amount, crit };
+    }
+
+    /* ---------------------------------------------------------------- *
+     * purchasing
+     * ---------------------------------------------------------------- */
+    function tenderPrice(id, count = 1) {
+      const d = derived();
+      const owned = state.tenders[id] || 0;
+      return E.tenderBulkCost(id, owned, count, d.costMul);
+    }
+
+    function resolveCount(id, count) {
+      if (count === 'max' || count === -1) {
+        const d = derived();
+        return Math.max(1, E.tenderMaxAffordable(id, state.tenders[id] || 0, state.petals, d.costMul));
+      }
+      return Math.max(1, Math.floor(count || 1));
+    }
+
+    function canAfford(id, count = 1) {
+      if (E.TENDER_BY_ID[id]) return state.petals >= tenderPrice(id, resolveCount(id, count));
+      const u = E.UPGRADE_BY_ID[id];
+      if (u) return state.petals >= upgradePrice(u) && E.upgradeUnlocked(u, state) && !state.upgrades[id];
+      const n = E.NODE_BY_ID[id];
+      if (n) return state.essence >= n.cost && nodeUnlocked(n) && !state.nodes[id];
+      const h = E.HEARTWOOD_BY_ID[id];
+      if (h) return state.blossoms >= h.cost && !state.heartwood[id];
+      return false;
+    }
+
+    /** Buy a Tender. `count` may be a number or 'max'. Returns how many landed. */
+    function buy(id, count = 1) {
+      const t = E.TENDER_BY_ID[id];
+      if (!t) return 0;
+      const d = derived();
+      const n = resolveCount(id, count);
+      const cost = E.tenderBulkCost(id, state.tenders[id] || 0, n, d.costMul);
+      if (!spend(cost)) return 0;
+      const before = state.tenders[id] || 0;
+      state.tenders[id] = before + n;
+      if (state.tenders[id] > state.stats.maxTender) state.stats.maxTender = state.tenders[id];
+      invalidate();
+      const crossed = E.MILESTONES.some((m) => before < m && state.tenders[id] >= m);
+      bus.emit('upgrade:bought', { id, level: state.tenders[id], tier: 'tender', count: n, milestone: crossed });
+      bus.emit('sfx', { id: crossed ? 'milestone' : 'buy', gain: crossed ? 1 : 0.8 });
+      if (crossed) {
+        bus.emit('petals:burst', { point: treePoint(), count: 60, power: 1.4 });
+        bus.emit('game:toast', {
+          kind: 'milestone', title: `${t.name} ×${E.milestoneMult(state.tenders[id])}`,
+          body: `${state.tenders[id]} tending the grove. Output doubled.`, rarity: 4,
+        });
+      }
+      checkUnlocks();
+      pushState(true);
+      return n;
+    }
+
+    function upgradePrice(u) {
+      const d = derived();
+      return u.family === 'grove' ? u.cost : u.cost * d.upCostMul;
+    }
+
+    function buyUpgrade(id) {
+      const u = E.UPGRADE_BY_ID[id];
+      if (!u || state.upgrades[id] || !E.upgradeUnlocked(u, state)) return false;
+      if (!spend(upgradePrice(u))) return false;
+      state.upgrades[id] = 1;
+      state.stats.upgrades = Object.keys(state.upgrades).length;
+      invalidate();
+      bus.emit('upgrade:bought', { id, level: 1, tier: u.family });
+      bus.emit('sfx', { id: 'buy-upgrade', gain: 0.9 });
+      bus.emit('game:toast', { kind: 'upgrade', title: u.name, body: u.flavour, rarity: 3 });
+      checkUnlocks();
+      pushState(true);
+      return true;
+    }
+
+    function nodeUnlocked(n) {
+      return !n.req || !!state.nodes[n.req];
+    }
+
+    function buyNode(id) {
+      const n = E.NODE_BY_ID[id];
+      if (!n || state.nodes[id] || !nodeUnlocked(n)) return false;
+      if (state.essence < n.cost) return false;
+      state.essence -= n.cost;         // essenceEarned is untouched: spent Essence still pays out
+      state.nodes[id] = 1;
+      invalidate();
+      bus.emit('upgrade:bought', { id, level: 1, tier: 'constellation' });
+      bus.emit('sfx', { id: 'constellation', gain: 1 });
+      bus.emit('game:toast', { kind: 'node', title: `${n.branchName} · ${n.name}`, body: n.flavour, rarity: 5 });
+      pushState(true);
+      return true;
+    }
+
+    function buyHeartwood(id) {
+      const h = E.HEARTWOOD_BY_ID[id];
+      if (!h || state.heartwood[id] || state.blossoms < h.cost) return false;
+      state.blossoms -= h.cost;
+      state.heartwood[id] = 1;
+      invalidate();
+      bus.emit('upgrade:bought', { id, level: 1, tier: 'heartwood' });
+      bus.emit('sfx', { id: 'buy-upgrade', gain: 1 });
+      bus.emit('game:toast', { kind: 'heartwood', title: h.name, body: h.flavour, rarity: 5 });
+      pushState(true);
+      return true;
+    }
+
+    /* ---------------------------------------------------------------- *
+     * bloom stages
+     * ---------------------------------------------------------------- */
+    function applyStage(quiet = false) {
+      const d = derived();
+      const s = E.stageFor(state.totalThisSeason, d.grove.bloomThreshold);
+      if (s === state.stage) return null;
+      const up = s > state.stage;
+      const from = state.stage;
+      state.stage = s;
+      bus.emit('bloom:stage', { stage: s });
+      if (up) {
+        let blossoms = 0;
+        for (let i = from + 1; i <= s; i++) blossoms += i * 3;
+        state.blossoms += blossoms;
+        const info = E.BLOOM_STAGES[s];
+        if (!quiet) {
+          bus.emit('game:stageup', { stage: s, name: info.name, kanji: info.kanji, blurb: info.blurb, blossoms });
+          bus.emit('petals:burst', { point: treePoint(), count: 220, power: 2.4 });
+          bus.emit('sfx', { id: 'stage-up', gain: 1 });
+        }
+      }
+      invalidate();
+      return s;
+    }
+
+    /* ---------------------------------------------------------------- *
+     * codex + achievements
+     * ---------------------------------------------------------------- */
+    function reqMet(r) {
+      const st = state.stats;
+      if (!r) return false;
+      if (r.clicks !== undefined) return st.clicks >= r.clicks;
+      if (r.crits !== undefined) return st.crits >= r.crits;
+      if (r.seasonTotal !== undefined) return state.totalThisSeason >= r.seasonTotal;
+      if (r.allTime !== undefined) return state.totalAllTime >= r.allTime;
+      if (r.stage !== undefined) return state.stage >= r.stage;
+      if (r.seasons !== undefined) return state.season >= r.seasons;
+      if (r.golden !== undefined) return st.golden >= r.golden;
+      if (r.storms !== undefined) return st.storms >= r.storms;
+      if (r.offlineH !== undefined) return st.offlineH >= r.offlineH;
+      if (r.codex !== undefined) return Object.keys(state.codex).length >= r.codex;
+      if (r.upgrades !== undefined) return Object.keys(state.upgrades).length >= r.upgrades;
+      if (r.anyMilestone !== undefined) return st.maxTender >= r.anyMilestone;
+      if (r.night !== undefined) return st.night >= r.night;
+      if (r.idle !== undefined) return st.idle >= r.idle;
+      if (r.frugal !== undefined) {
+        return state.totalThisSeason >= 1e6 && Object.keys(state.upgrades).length < 8;
+      }
+      if (r.tenderExact !== undefined) {
+        for (const id of E.TENDER_IDS) if (state.tenders[id] === r.tenderExact) return true;
+        return false;
+      }
+      if (r.tenderOwned) return (state.tenders[r.tenderOwned[0]] || 0) >= r.tenderOwned[1];
+      if (r.totalTenders !== undefined) {
+        let tot = 0; for (const id of E.TENDER_IDS) tot += state.tenders[id] || 0;
+        return tot >= r.totalTenders;
+      }
+      if (r.oneOfEach !== undefined) return E.TENDER_IDS.every((id) => (state.tenders[id] || 0) > 0);
+      return false;
+    }
+
+    function checkUnlocks(quiet = false) {
+      // Codex first, then achievements: "Botanist" counts Codex entries, so the
+      // other order unlocks it one pass late — which leaks a toast out of a
+      // scenario that was meant to be silent. Repeat until nothing new lands.
+      let changed = false;
+      for (let pass = 0; pass < 3; pass++) if (!unlockPass(quiet)) break; else changed = true;
+      if (changed) invalidate();
+      return changed;
+    }
+
+    function unlockPass(quiet) {
+      let changed = false;
+      for (const c of E.CODEX) {
+        if (state.codex[c.id] || !reqMet(c.req)) continue;
+        state.codex[c.id] = 1;
+        state.blossoms += 2;
+        changed = true;
+        if (!quiet) {
+          bus.emit('game:codex', { id: c.id, ...c });
+          bus.emit('game:toast', { kind: 'codex', title: `${c.kanji} ${c.name}`, body: c.desc, rarity: c.rarity });
+          bus.emit('sfx', { id: 'codex', gain: 1 });
+        }
+      }
+      for (const a of E.ACHIEVEMENTS) {
+        if (state.achievements[a.id] || !reqMet(a.req)) continue;
+        state.achievements[a.id] = 1;
+        state.blossoms += 1;
+        changed = true;
+        if (!quiet) {
+          bus.emit('game:toast', { kind: 'achievement', title: a.name, body: a.desc, rarity: a.secret ? 5 : 4 });
+          bus.emit('sfx', { id: 'achievement', gain: 0.9 });
+        }
+      }
+      return changed;
+    }
+
+    /* ---------------------------------------------------------------- *
+     * live events
+     * ---------------------------------------------------------------- */
+    function setLive() {
+      const before = live.storm + live.rain * 2 + live.moon * 4 + live.goldenHour * 8
+        + live.frenzy * 16 + live.clickFrenzy * 32;
+      live.storm = timers.storm > 0;
+      live.rain = timers.rain > 0;
+      live.frenzy = timers.frenzy > 0;
+      live.clickFrenzy = timers.clickFrenzy > 0;
+      live.moon = phase === 'night';
+      live.goldenHour = phase === 'dusk';
+      const after = live.storm + live.rain * 2 + live.moon * 4 + live.goldenHour * 8
+        + live.frenzy * 16 + live.clickFrenzy * 32;
+      if (before !== after) invalidate();
+      return before !== after;
+    }
+
+    function startStorm() {
+      const d = derived();
+      timers.storm = E.TUNING.STORM_DURATION * d.grove.stormDur;
+      state.stats.storms += 1;
+      if (windBase === null) windBase = WIND.uniforms.uWindStrength.value;
+      WIND.uniforms.uWindStrength.value = windBase * E.TUNING.STORM_WIND;
+      setLive();
+      bus.emit('game:event', { id: 'storm', active: true, dur: timers.storm, remain: timers.storm, mult: d.grove.stormMult });
+      bus.emit('petals:burst', { point: treePoint(), count: 300, power: 2.6 });
+      bus.emit('sfx', { id: 'storm-start', gain: 1 });
+      bus.emit('game:toast', {
+        kind: 'event', title: '花嵐  Petal Storm', rarity: 5,
+        body: `The hillside is in the air. ×${E.format(d.grove.stormMult)} for ${Math.round(timers.storm)} seconds.`,
+      });
+      checkUnlocks();
+    }
+
+    function endStorm() {
+      timers.storm = 0;
+      if (windBase !== null) { WIND.uniforms.uWindStrength.value = windBase; windBase = null; }
+      setLive();
+      bus.emit('game:event', { id: 'storm', active: false, remain: 0 });
+      bus.emit('sfx', { id: 'storm-end', gain: 0.6 });
+    }
+
+    function startRain() {
+      timers.rain = E.TUNING.RAIN_DURATION;
+      setLive();
+      bus.emit('game:event', { id: 'rain', active: true, dur: timers.rain, remain: timers.rain });
+      bus.emit('sfx', { id: 'rain-start', gain: 0.7 });
+      bus.emit('game:toast', { kind: 'event', title: '春雨  Spring Rain', body: 'The fall slows to a drift. +10% while it lasts.', rarity: 3 });
+    }
+
+    /* ---- Golden Petal ---------------------------------------------- */
+    function spawnGolden() {
+      const d = derived();
+      const ttl = E.TUNING.GOLDEN_TTL * d.grove.goldTtl;
+      golden = { id: goldenSeq++, ttl };
+      bus.emit('game:golden', { id: golden.id, ttl, seed: Math.floor(rand() * 1e9) });
+      bus.emit('sfx', { id: 'golden-appear', gain: 0.8 });
+    }
+
+    function rollBoon() {
+      let tot = 0;
+      for (const b of E.GOLDEN_BOONS) tot += b.weight;
+      let r = rand() * tot;
+      for (const b of E.GOLDEN_BOONS) { r -= b.weight; if (r <= 0) return b; }
+      return E.GOLDEN_BOONS[0];
+    }
+
+    function applyBoon(b) {
+      const d = derived();
+      if (b.id === 'frenzy') timers.frenzy = Math.max(timers.frenzy, b.dur);
+      else if (b.id === 'clickfrenzy') timers.clickFrenzy = Math.max(timers.clickFrenzy, b.dur);
+      else if (b.id === 'lucky') {
+        const cap = d.baseRate * 1200;                    // 20 minutes of passive
+        const amt = Math.max(Math.min(state.petals * 0.13, cap), d.clickValue * 20);
+        credit(amt);
+        bus.emit('petals:gain', { amount: amt, point: treePoint(), crit: true });
+      } else if (b.id === 'bloomfall') {
+        bloomfallRate = (d.baseRate * 60) / b.dur;
+        timers.bloomfall = b.dur;
+      }
+      setLive();
+      bus.emit('game:toast', { kind: 'boon', title: `${b.kanji}  ${b.name}`, body: b.desc, rarity: 5 });
+      bus.emit('sfx', { id: 'golden-catch', gain: 1 });
+    }
+
+    function catchGolden(id) {
+      if (!golden || (id !== undefined && id !== golden.id)) return false;
+      const gid = golden.id;
+      const d = derived();
+      state.stats.golden += 1;
+      const boons = [rollBoon()];
+      if (d.grove.goldDouble) {
+        let alt = rollBoon();
+        for (let i = 0; i < 4 && alt.id === boons[0].id; i++) alt = rollBoon();
+        boons.push(alt);
+      }
+      for (const b of boons) applyBoon(b);
+      bus.emit('petals:burst', { point: treePoint(), count: 120, power: 2 });
+      golden = null;
+      bus.emit('game:golden:end', { id: gid, caught: true, boons: boons.map((b) => b.id) });
+      checkUnlocks();
+      pushState(true);
+      return true;
+    }
+
+    /* ---------------------------------------------------------------- *
+     * prestige
+     * ---------------------------------------------------------------- */
+    function essencePreview() {
+      const d = derived();
+      return E.essenceGain(state.totalThisSeason, d.grove.essenceMul);
+    }
+    const canPrestige = () => essencePreview() > 0;
+
+    function prestige() {
+      const gain = essencePreview();
+      if (gain <= 0) return false;
+      const d = derived();
+      const keepFirst = d.grove.keepFirstTierUps;
+
+      state.essence += gain;
+      state.essenceEarned += gain;
+      state.season += 1;
+      state.petals = 0;
+      state.totalThisSeason = 0;
+      state.stage = 0;
+      for (const id of E.TENDER_IDS) state.tenders[id] = 0;
+      const kept = {};
+      if (keepFirst) for (const id in state.upgrades) if (/^up_[a-z]+_1$/.test(id)) kept[id] = 1;
+      state.upgrades = kept;
+      state.stats.upgrades = Object.keys(kept).length;
+      state.stats.seasonTime = 0;
+      state.stats.seasonClicks = 0;
+      invalidate();
+
+      // Constellation / Heartwood "starting Tenders" are granted after the wipe.
+      const d2 = derived();
+      for (const id in d2.grove.startTenders) {
+        state.tenders[id] = Math.max(state.tenders[id] || 0, d2.grove.startTenders[id]);
+      }
+      invalidate();
+
+      timers.storm = timers.rain = timers.frenzy = timers.clickFrenzy = timers.bloomfall = 0;
+      if (windBase !== null) { WIND.uniforms.uWindStrength.value = windBase; windBase = null; }
+      golden = null;
+      setLive();
+
+      bus.emit('bloom:stage', { stage: 0 });
+      bus.emit('game:prestige', { season: state.season, gain, essence: state.essence, essenceEarned: state.essenceEarned });
+      bus.emit('sfx', { id: 'prestige', gain: 1 });
+      bus.emit('petals:burst', { point: treePoint(), count: 320, power: 3 });
+      checkUnlocks();
+      save();
+      pushState(true);
+      return true;
+    }
+
+    /* ---------------------------------------------------------------- *
+     * save / load
+     * ---------------------------------------------------------------- */
+    function snapshot() {
+      state.lastSeen = Date.now();
+      return state;
+    }
+
+    function save() {
+      if (!persist) return false;
+      try {
+        localStorage.setItem(E.SAVE_KEY, JSON.stringify(snapshot()));
+        return true;
+      } catch { return false; }
+    }
+
+    function hardReset() {
+      const seed = state.seed;
+      state = E.newState(seed);
+      rng = mulberry32((seed | 0) ^ 0x5a4b12);
+      timers.storm = timers.rain = timers.frenzy = timers.clickFrenzy = timers.bloomfall = 0;
+      golden = null; offlineReport = null;
+      if (windBase !== null) { WIND.uniforms.uWindStrength.value = windBase; windBase = null; }
+      invalidate(); setLive();
+      if (persist) { try { localStorage.removeItem(E.SAVE_KEY); } catch { /* ignore */ } }
+      bus.emit('bloom:stage', { stage: 0 });
+      bus.emit('game:reset', {});
+      pushState(true);
+      return true;
+    }
+
+    function importSave(b64) {
+      const s = E.decodeSave(b64);
+      if (!s) return false;
+      state = s;
+      rng = mulberry32((state.seed | 0) ^ 0x5a4b12);
+      invalidate(); setLive();
+      applyStage(true);
+      bus.emit('bloom:stage', { stage: state.stage });
+      save();
+      pushState(true);
+      return true;
+    }
+
+    /* ---- offline accrual ------------------------------------------- */
+    function applyOffline() {
+      if (!persist || !loadedSave || !loadedSave.lastSeen) return;
+      const now = Date.now();
+      let dtMs = now - loadedSave.lastSeen;
+      // Never trust the clock: negative (DST / manual change) and absurd deltas → 0.
+      if (!Number.isFinite(dtMs) || dtMs < 0) dtMs = 0;
+      if (dtMs > E.TUNING.OFFLINE_MAX_MS) dtMs = E.TUNING.OFFLINE_MAX_MS;
+      const awayS = dtMs / 1000;
+      if (awayS < 60) return;
+
+      const d = derived();
+      const cappedS = Math.min(awayS, d.offlineCapS);
+      const gained = d.baseRate * d.offlineRate * cappedS;
+      state.stats.offlineH = Math.max(state.stats.offlineH, awayS / 3600);
+
+      const before = state.stage;
+      if (gained > 0) credit(gained);
+      const stages = [];
+      const after = E.stageFor(state.totalThisSeason, derived().grove.bloomThreshold);
+      if (after > before) {
+        for (let i = before + 1; i <= after; i++) stages.push(E.BLOOM_STAGES[i]);
+      }
+      applyStage(true);
+      checkUnlocks(true);
+      offlineReport = {
+        awayS, cappedS, gained, stages,
+        capped: awayS > d.offlineCapS,
+        rate: d.offlineRate, capH: d.grove.dewH,
+      };
+    }
+
+    /* ---------------------------------------------------------------- *
+     * state:changed
+     * ---------------------------------------------------------------- */
+    let stateDirtyForUI = false;
+    function pushState(now = false) {
+      if (now) { emitAcc = 0; bus.emit('state:changed', state); stateDirtyForUI = false; }
+      else stateDirtyForUI = true;
+    }
+
+    /* ---------------------------------------------------------------- *
+     * fixed-step simulation
+     * ---------------------------------------------------------------- */
+    function simStep(dt) {
+      const d = derived();
+
+      // passive income
+      if (d.passiveRate > 0) credit(d.passiveRate * dt);
+
+      // Bloomfall — a minute of passive, delivered as physical petals you catch
+      if (timers.bloomfall > 0) {
+        timers.bloomfall -= dt;
+        credit(bloomfallRate * dt);
+        bloomfallBurst += dt;
+        if (bloomfallBurst >= 0.25) {
+          bloomfallBurst = 0;
+          bus.emit('petals:burst', { point: treePoint(), count: 28, power: 1.5 });
+        }
+        if (timers.bloomfall <= 0) { timers.bloomfall = 0; bloomfallRate = 0; bloomfallBurst = 0; }
+      }
+
+      // timers
+      if (timers.storm > 0) { timers.storm -= dt; if (timers.storm <= 0) endStorm(); }
+      if (timers.rain > 0) {
+        timers.rain -= dt;
+        if (timers.rain <= 0) { timers.rain = 0; setLive(); bus.emit('game:event', { id: 'rain', active: false, remain: 0 }); }
+      }
+      if (timers.frenzy > 0) {
+        timers.frenzy -= dt;
+        if (timers.frenzy <= 0) { timers.frenzy = 0; setLive(); bus.emit('game:event', { id: 'frenzy', active: false, remain: 0 }); }
+      }
+      if (timers.clickFrenzy > 0) {
+        timers.clickFrenzy -= dt;
+        if (timers.clickFrenzy <= 0) { timers.clickFrenzy = 0; setLive(); bus.emit('game:event', { id: 'clickfrenzy', active: false, remain: 0 }); }
+      }
+
+      // storm schedule
+      nextStorm -= dt * (1 / Math.max(0.1, d.grove.stormRate));
+      if (nextStorm <= 0 && !live.storm) {
+        nextStorm = E.TUNING.STORM_PERIOD + (rand() * 2 - 1) * E.TUNING.STORM_JITTER;
+        startStorm();
+      }
+
+      // spring rain — 4% per minute
+      rainRoll += dt;
+      if (rainRoll >= 60) {
+        rainRoll -= 60;
+        if (!live.rain && rand() < E.TUNING.RAIN_CHANCE_PER_MIN * d.grove.rainChance) startRain();
+      }
+
+      // golden petal
+      if (golden) {
+        golden.ttl -= dt;
+        if (golden.ttl <= 0) {
+          const gid = golden.id; golden = null;
+          bus.emit('game:golden:end', { id: gid, caught: false });
+        }
+      } else {
+        nextGolden -= dt;
+        if (nextGolden <= 0) {
+          const span = (E.TUNING.GOLDEN_MAX - E.TUNING.GOLDEN_MIN);
+          nextGolden = (E.TUNING.GOLDEN_MIN + rand() * span) * d.grove.goldRate;
+          spawnGolden();
+        }
+      }
+
+      // auto-shake
+      if (d.grove.auto > 0) {
+        autoAcc += dt;
+        const iv = d.grove.auto;
+        while (autoAcc >= iv) { autoAcc -= iv; shake(null, { auto: true }); }
+      }
+
+      // stats
+      state.stats.playTime += dt;
+      state.stats.seasonTime += dt;
+      idleFor += dt;
+      if (idleFor > state.stats.idle) state.stats.idle = idleFor;
+      if (d.baseRate > state.stats.bestRate) state.stats.bestRate = d.baseRate;
+      if (state.totalThisSeason > state.stats.bestSeasonTotal) state.stats.bestSeasonTotal = state.totalThisSeason;
+
+      applyStage();
+    }
+
+    /** Credit a long gap (background tab) without running thousands of steps. */
+    function fastForward(sec) {
+      const capped = Math.min(Math.max(0, sec), 4 * 3600);
+      if (capped <= 0) return;
+      const d = derived();
+      credit(d.baseRate * capped);          // tab open but unfocused → full rate
+      state.stats.playTime += capped;
+      state.stats.seasonTime += capped;
+      // Schedules advance but never fire retroactively — a storm you did not see
+      // did not happen. Both are re-rolled so nothing bunches up on return.
+      if (nextStorm - capped <= 0) nextStorm = E.TUNING.STORM_PERIOD * 0.35 + rand() * 60;
+      else nextStorm -= capped;
+      if (nextGolden - capped <= 0) nextGolden = 12 + rand() * 30;
+      else nextGolden -= capped;
+      applyStage();
+      checkUnlocks();
+      pushState(true);
+    }
+
+    let unlockAcc = 0;
+    function tick(dt) {
+      acc += dt;
+      let guard = 0;
+      while (acc >= STEP && guard < 240) { acc -= STEP; simStep(STEP); guard++; }
+      if (guard >= 240) acc = 0;
+
+      unlockAcc += dt;
+      if (unlockAcc >= 0.5) { unlockAcc = 0; checkUnlocks(); }
+
+      emitAcc += dt;
+      if (emitAcc >= 0.2) { emitAcc = 0; stateDirtyForUI = false; bus.emit('state:changed', state); }
+
+      saveAcc += dt;
+      if (saveAcc >= E.TUNING.AUTOSAVE) { saveAcc = 0; save(); }
+    }
+
+    /* ---------------------------------------------------------------- *
+     * bus wiring
+     * ---------------------------------------------------------------- */
+    const offs = [];
+
+    offs.push(bus.on('tree:clicked', (e) => {
+      if (e && e.__fromGame) return;
+      shake(e?.point ?? null, { emitTreeClick: false });
+    }));
+
+    offs.push(bus.on('world:click', (e) => {
+      // The Golden Petal is a real 3D object: VFX tags its mesh with
+      // userData.goldenId and pushes it to ctx.clickTargets.
+      let o = e?.hit?.object;
+      while (o) {
+        const gid = o.userData?.goldenId;
+        if (gid !== undefined) { catchGolden(gid); return; }
+        o = o.parent;
+      }
+    }));
+
+    offs.push(bus.on('time:phase', (e) => {
+      phase = e?.phase ?? 'day';
+      if (phase === 'night') state.stats.night = 1;
+      const changed = setLive();
+      if (changed) {
+        bus.emit('game:event', { id: 'moon', active: live.moon, remain: -1 });
+        bus.emit('game:event', { id: 'goldenHour', active: live.goldenHour, remain: -1 });
+      }
+    }));
+
+    /* keyboard: Space shakes, 1–9 buy Tender n. Panels belong to the UI. */
+    function onKey(ev) {
+      const tgt = ev.target;
+      if (tgt && (tgt.tagName === 'INPUT' || tgt.tagName === 'TEXTAREA' || tgt.isContentEditable)) return;
+      if (ev.code === 'Space') {
+        ev.preventDefault();
+        if (!ev.repeat) shake(null);
+        return;
+      }
+      if (ev.code >= 'Digit1' && ev.code <= 'Digit9') {
+        const i = Number(ev.code.slice(5)) - 1;
+        const id = E.TENDER_IDS[i];
+        if (id) { ev.preventDefault(); buy(id, state.ui.bulk || 1); }
+      }
+      if (ev.code === 'Digit0') { const id = E.TENDER_IDS[9]; if (id) buy(id, state.ui.bulk || 1); }
+    }
+    if (typeof window !== 'undefined') window.addEventListener('keydown', onKey);
+
+    function onVisibility() { if (document.visibilityState === 'hidden') save(); }
+    function onUnload() { save(); }
+    if (typeof document !== 'undefined') document.addEventListener('visibilitychange', onVisibility);
+    if (typeof window !== 'undefined') window.addEventListener('beforeunload', onUnload);
+
+    /* ---------------------------------------------------------------- *
+     * public API
+     * ---------------------------------------------------------------- */
+    const api = {
+      get state() { return state; },
+      get derived() { return derived(); },
+      rates() {
+        const d = derived();
+        return {
+          perSecond: d.passiveRate,
+          baseRate: d.baseRate,
+          rawRate: d.rawRate,
+          perShake: d.clickValue,
+          perShakeExpected: d.clickValue * (1 + d.critChance * (d.critMult - 1)),
+          critChance: d.critChance,
+          critMult: d.critMult,
+          eventPassive: d.eventPassive,
+          eventClick: d.eventClick,
+          totalTenders: d.totalTenders,
+          offlineRate: d.offlineRate,
+          offlineCapH: d.grove.dewH,
+        };
+      },
+      // actions
+      shake, buy, buyUpgrade, buyNode, buyHeartwood, prestige, catchGolden,
+      /** VFX hook: force a Golden Petal now (debug / scripted moments). */
+      spawnGolden: () => { if (!golden) spawnGolden(); return golden ? golden.id : null; },
+      canAfford, canPrestige, essencePreview,
+      cost: (id, count = 1) => (E.TENDER_BY_ID[id]
+        ? tenderPrice(id, resolveCount(id, count))
+        : E.UPGRADE_BY_ID[id] ? upgradePrice(E.UPGRADE_BY_ID[id])
+          : E.NODE_BY_ID[id] ? E.NODE_BY_ID[id].cost
+            : E.HEARTWOOD_BY_ID[id] ? E.HEARTWOOD_BY_ID[id].cost : Infinity),
+      maxAffordable: (id) => E.tenderMaxAffordable(id, state.tenders[id] || 0, state.petals, derived().costMul),
+      setBulk(n) { state.ui.bulk = n; pushState(true); },
+      // formatting — the UI must use exactly these
+      format: E.format, formatRate: E.formatRate, formatInt: E.formatInt,
+      formatTime: E.formatTime, formatClock: E.formatClock,
+      // save
+      save, hardReset, importSave,
+      exportSave: () => E.encodeSave(snapshot()),
+      get offlineReport() { return offlineReport; },
+      clearOfflineReport() { offlineReport = null; },
+      // live state for HUD
+      get events() {
+        const d = derived();
+        return {
+          storm: { active: live.storm, remain: timers.storm, mult: d.grove.stormMult },
+          rain: { active: live.rain, remain: timers.rain },
+          moon: { active: live.moon, remain: -1 },
+          goldenHour: { active: live.goldenHour, remain: -1 },
+          frenzy: { active: live.frenzy, remain: timers.frenzy },
+          clickFrenzy: { active: live.clickFrenzy, remain: timers.clickFrenzy },
+          bloomfall: { active: timers.bloomfall > 0, remain: timers.bloomfall },
+        };
+      },
+      get golden() { return golden ? { ...golden } : null; },
+      get phase() { return phase; },
+      get bloom() { return E.BLOOM_STAGES[state.stage]; },
+      nextBloom() {
+        const d = derived();
+        if (state.stage >= 5) return null;
+        const nxt = E.BLOOM_STAGES[state.stage + 1];
+        const need = nxt.threshold * d.grove.bloomThreshold;
+        return { ...nxt, need, progress: clamp(state.totalThisSeason / need, 0, 1) };
+      },
+      // views the UI renders straight from
+      views: {
+        tenders() {
+          const d = derived();
+          return E.TENDERS.map((t) => {
+            const v = E.tenderView(state, d, t.id);
+            // Spec: revealed once you can afford 40% of base cost. The very
+            // first Tender is always shown — an empty panel on a new save is a
+            // worse sin than one row you cannot afford yet.
+            v.revealed = t.id === E.TENDER_IDS[0]
+              || (state.tenders[t.id] || 0) > 0
+              || state.stats.bestBank >= t.baseCost * 0.4;
+            v.affordable = state.petals >= v.cost;
+            v.bulkCost = tenderPrice(t.id, resolveCount(t.id, state.ui.bulk || 1));
+            v.bulkCount = resolveCount(t.id, state.ui.bulk || 1);
+            return v;
+          });
+        },
+        upgrades(family) {
+          const d = derived();
+          const out = [];
+          for (const u of E.UPGRADES) {
+            if (family && u.family !== family) continue;
+            if (state.upgrades[u.id]) continue;
+            if (!E.upgradeUnlocked(u, state)) continue;
+            const cost = u.family === 'grove' ? u.cost : u.cost * d.upCostMul;
+            out.push({ ...u, cost, affordable: state.petals >= cost });
+          }
+          out.sort((a, b) => a.cost - b.cost);
+          return out;
+        },
+        boughtUpgrades: () => E.UPGRADES.filter((u) => state.upgrades[u.id]),
+        heartwood: () => E.HEARTWOOD_LIST.map((h) => ({
+          ...h, owned: !!state.heartwood[h.id], affordable: state.blossoms >= h.cost,
+        })),
+        nodes: () => E.CONSTELLATION.map((n) => ({
+          ...n,
+          owned: !!state.nodes[n.id],
+          available: !state.nodes[n.id] && nodeUnlocked(n),
+          affordable: state.essence >= n.cost && nodeUnlocked(n),
+        })),
+        codex: () => E.CODEX.map((c) => ({ ...c, found: !!state.codex[c.id] })),
+        achievements: () => E.ACHIEVEMENTS.map((a) => ({ ...a, got: !!state.achievements[a.id] })),
+      },
+      data: {
+        TENDERS: E.TENDERS, UPGRADES: E.UPGRADES, CONSTELLATION: E.CONSTELLATION,
+        CONSTELLATION_BRANCHES: E.CONSTELLATION_BRANCHES, CODEX: E.CODEX,
+        ACHIEVEMENTS: E.ACHIEVEMENTS, HEARTWOOD: E.HEARTWOOD_LIST,
+        BLOOM_STAGES: E.BLOOM_STAGES, LIVE_EVENTS: E.LIVE_EVENTS,
+        GOLDEN_BOONS: E.GOLDEN_BOONS, TUNING: E.TUNING, MILESTONES: E.MILESTONES,
+      },
+      /** 60-game already binds Space and 1–0. UI: do not bind them again. */
+      keyboard: true,
+    };
+    ctx.assets.game = api;
+
+    /* ---------------------------------------------------------------- *
+     * boot: offline, first stage push, debug scenarios
+     * ---------------------------------------------------------------- */
+    if (!ctx.shotMode) applyOffline();
+    checkUnlocks(true);
+    invalidate();
+    bus.emit('bloom:stage', { stage: state.stage });
+    setLive();
+    pushState(true);
+
+    /* ---- debug scenarios: the UI agent and the critics shoot these --- */
+    if (typeof window !== 'undefined' && window.__game) {
+      const sc = window.__game.scenarios;
+
+      const rebuild = (mutate) => {
+        state = E.newState(state.seed);
+        mutate(state);
+        state = E.sanitizeState(state);
+        rng = mulberry32((state.seed | 0) ^ 0x5a4b12);
+        timers.storm = timers.rain = timers.frenzy = timers.clickFrenzy = timers.bloomfall = 0;
+        golden = null; offlineReport = null;
+        invalidate(); setLive();
+        applyStage(true);
+        checkUnlocks(true);
+        invalidate();
+        bus.emit('bloom:stage', { stage: state.stage });
+        bus.emit('game:scenario', { state });
+        pushState(true);
+      };
+
+      /** A brand-new save — nothing bought, stage 0. */
+      sc.fresh = () => rebuild(() => {});
+
+      /** Mid-game: ~25 minutes in. Stage 3, real Tender spread, panels populated. */
+      sc.rich = () => rebuild((s) => {
+        Object.assign(s.tenders, { sprite: 47, gatherer: 52, miko: 38, lantern: 26, koi: 14, rabbit: 4 });
+        for (const id of ['shake_f1', 'shake_m1', 'shake_f2', 'shake_m2', 'shake_c1', 'shake_f3',
+          'shake_x1', 'shake_m3', 'shake_c2', 'shake_f4', 'shake_x2', 'shake_m4', 'all_1', 'all_2', 'grove_bulk', 'grove_magnet', 'grove_auto1',
+          'up_sprite_1', 'up_sprite_2', 'up_sprite_3', 'up_gatherer_1', 'up_gatherer_2',
+          'up_gatherer_3', 'up_miko_1', 'up_miko_2', 'up_lantern_1', 'up_koi_1']) s.upgrades[id] = 1;
+        s.heartwood.hw_prod1 = 1;
+        s.season = 1;
+        s.essence = 22;
+        s.essenceEarned = 31;              // 9 spent on the four branch roots below
+        for (const id of ['wind1', 'water1', 'moon1', 'stone1', 'blossom1']) s.nodes[id] = 1;
+        s.petals = 9.4e6;
+        s.totalThisSeason = 6.4e7;
+        s.totalAllTime = 9.6e7;
+        s.blossoms = 11;
+        s.stats.clicks = 1840; s.stats.crits = 96; s.stats.storms = 3; s.stats.golden = 2;
+        s.stats.bestBank = 9.4e6; s.stats.playTime = 3300; s.stats.seasonTime = 1680;
+        s.stats.maxTender = 52;
+      });
+
+      /** Late game: Everblossom, deep Constellation, full Codex, every panel busy. */
+      sc.lategame = () => rebuild((s) => {
+        Object.assign(s.tenders, {
+          sprite: 216, gatherer: 208, miko: 197, lantern: 183, koi: 171,
+          rabbit: 158, kitsune: 141, envoy: 118, heart: 96, bough: 71,
+        });
+        for (const u of E.UPGRADES) s.upgrades[u.id] = 1;
+        for (const h of E.HEARTWOOD_LIST) s.heartwood[h.id] = 1;
+        for (const n of E.CONSTELLATION) if (n.tier <= 3) s.nodes[n.id] = 1;
+        s.season = 9;
+        s.essence = 640;
+        s.essenceEarned = 851;   // 211 spent on the 20 nodes above
+        s.blossoms = 96;
+        s.petals = 8.4e14;
+        s.totalThisSeason = 4.6e15;
+        s.totalAllTime = 9.2e15;
+        s.stats.clicks = 148000; s.stats.crits = 24100; s.stats.storms = 62;
+        s.stats.golden = 71; s.stats.bestBank = 8.4e14; s.stats.playTime = 41000;
+        s.stats.seasonTime = 5400; s.stats.maxTender = 216; s.stats.offlineH = 14;
+        s.stats.night = 1; s.stats.idle = 400;
+      });
+
+      sc['game-storm'] = () => { startStorm(); pushState(true); };
+      sc['game-golden'] = () => { if (!golden) spawnGolden(); };
+      sc['game-frenzy'] = () => { applyBoon(E.GOLDEN_BOONS[0]); applyBoon(E.GOLDEN_BOONS[2]); pushState(true); };
+      sc['game-offline'] = () => {
+        const d = derived();
+        offlineReport = {
+          awayS: 7.4 * 3600, cappedS: Math.min(7.4 * 3600, d.offlineCapS),
+          gained: d.baseRate * d.offlineRate * Math.min(7.4 * 3600, d.offlineCapS),
+          stages: [], capped: 7.4 * 3600 > d.offlineCapS, rate: d.offlineRate, capH: d.grove.dewH,
+        };
+        bus.emit('game:offline', offlineReport);
+      };
+      sc['game-prestige'] = () => { prestige(); };
+      sc['game-stageup'] = () => {
+        const s = Math.min(5, state.stage + 1);
+        const info = E.BLOOM_STAGES[s];
+        state.stage = s; invalidate();
+        bus.emit('bloom:stage', { stage: s });
+        bus.emit('game:stageup', { stage: s, name: info.name, kanji: info.kanji, blurb: info.blurb, blossoms: s * 3 });
+        pushState(true);
+      };
+      sc['game-shake'] = () => { for (let i = 0; i < 8; i++) shake(null); };
+    }
+
+    /* ---------------------------------------------------------------- *
+     * update
+     * ---------------------------------------------------------------- */
+    return {
+      update(dt) {
+        // Background tabs stop RAF; main.js clamps dt to 1/20 so the sim would
+        // lose the missing minutes. Credit them at full rate from the wall clock.
+        if (!ctx.shotMode) {
+          const now = Date.now();
+          let gap = (now - wallLast) / 1000;
+          wallLast = now;
+          if (Number.isFinite(gap) && gap > 1.5) {
+            fastForward(gap - 1);
+            gap = 1;
+          }
+        }
+        tick(dt);
+      },
+      dispose() {
+        save();
+        for (const off of offs) off();
+        if (typeof window !== 'undefined') {
+          window.removeEventListener('keydown', onKey);
+          window.removeEventListener('beforeunload', onUnload);
+        }
+        if (typeof document !== 'undefined') document.removeEventListener('visibilitychange', onVisibility);
+        if (windBase !== null) { WIND.uniforms.uWindStrength.value = windBase; windBase = null; }
+        ctx.assets.game = null;
+      },
+    };
+  },
+};

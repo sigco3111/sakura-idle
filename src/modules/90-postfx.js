@@ -535,6 +535,9 @@ export default {
         // at dusk/hero, per screen quadrant (255 units, top row left->right):
         //   falloff 0.85..3.20 →  9.1  12.1   6.3   2.8
         //   falloff 2.50..6.00 →  9.1  13.4   9.1   6.7
+        // Scale applied while the shafts converge on the antisolar point instead
+        // of radiating from the sun — see updateSunScreen().
+        antiScale: 0.75,
         reach: new THREE.Vector2(1.20, 3.00),
         falloff: new THREE.Vector2(2.50, 6.00),
       },
@@ -600,14 +603,32 @@ export default {
         // this value, darkest pixel 0.052 — i.e. a real low end that still sits on
         // ART_BIBLE §3's 0.055 "never pure black" line rather than under it. 0.025
         // was tried and pushed the darkest pixels to 0.044, below the floor.
-        black: 0.0075,
+        black: 0.018,
+        // SCENE-LINEAR log contrast (contrast, pivot), the curve that owns the
+        // frame's range. Chosen by simulating GRADE_SHADER's luma path against
+        // the measured input distribution (pipeline.histogram('grade')) rather
+        // than by eye — see the MEASURED-BEHAVIOUR log at the bottom of the file.
+        sceneCurve: new THREE.Vector2(2.10, 0.34),
+        // Night has ~1/12 the scene luminance, so a pivot of 0.34 would put the
+        // WHOLE night frame in the crush half of the power law. Its own pivot
+        // sits at the night median and its slope is much gentler.
+        sceneCurveNight: new THREE.Vector2(1.20, 0.035),
         floor: 0.024,          // art bible §3, applied in display space only
-        pivot: 0.34,           // S-curve pivot, below display mid grey
-        contrast: 1.38,        // slope about the pivot (power law, 0 -> 0)
+        pivot: 0.34,           // display S-curve pivot, below display mid grey
+        contrast: 1.00,        // slope about the pivot (power law, 0 -> 0)
         nightPivot: 0.10,      // the night frame's own pivot / slope
-        nightContrast: 1.05,
-        toe: 0.08,             // extra roll of the DEEP shadows only
-        saturation: 1.08,      // art bible §4.6 — never below 1.0
+        nightContrast: 1.02,
+        toe: 0.05,             // extra roll of the DEEP shadows only
+        saturation: 1.14,      // art bible §4.6 — never below 1.0
+        // (amount, falloff power) of the low-chroma-only saturation boost. The
+        // hero frame's satMean is dragged down almost entirely by one band —
+        // measured in 12 horizontal strips, the aerial-haze band at 41-66% of
+        // frame height reads HSL sat 0.12-0.18 while every other strip is
+        // 0.25-0.31 — and that band is near-neutral, so a flat multiplier moves
+        // it hardly at all. Weighting by (1-chroma)^2.2 puts the boost where the
+        // mud is: 2.8x at chroma 0, 1.5x at 0.5, 1.13x on the already-saturated
+        // canopy and vermilion, which is what keeps it from going garish.
+        vibrance: new THREE.Vector2(2.10, 2.2),
         // Signed split-tone directions. Shadows travel along the #6E76A8 axis
         // (b - r strongly positive), highlights toward the warm key.
         splitLo: V3(-0.020, -0.004, 0.052),
@@ -634,6 +655,9 @@ export default {
     gu.uSplitHi.value = params.grade.splitHi.clone();
     gu.uLift.value = params.grade.lift.clone();
     gu.uSplit.value = params.grade.split.clone();
+    gu.uVibrance.value = params.grade.vibrance.clone();
+    gu.uSceneCurve.value = params.grade.sceneCurve.clone();
+    gu.uSceneCurveNight.value = params.grade.sceneCurveNight.clone();
 
     /* ---------------- resize ---------------- */
     let historyValid = false;
@@ -737,29 +761,64 @@ export default {
     /** how far outside the frame the (unclamped) sun sits, in NDC radii. */
     let sunOutside = 0;
 
+    /** 1 when the radial origin is the ANTISOLAR point, 0 when it is the sun. */
+    let rayAnti = 0;
+    const rayDirV = new THREE.Vector3();
+
     /**
      * Returns the god-ray strength for this frame and updates sunUV.
      *
      * The sun is OFF-FRAME in every shipped composition (hero, canopy, wide, bark,
-     * lantern) at every phase, so an on-screen requirement would mean §4.3 never
-     * ships. Instead the projected position is clamped into [-0.6, 1.6] — far
-     * enough out that the radial direction still rakes across the frame, close
-     * enough that the march reaches the light — and the strength falls off
-     * smoothly with how far outside the border the true position lies.
+     * lantern) at almost every phase, so an on-screen requirement would mean §4.3
+     * never ships. The projected position is therefore clamped into [-0.6, 1.6] —
+     * far enough out that the radial direction still rakes across the frame, close
+     * enough that the march reaches the light — and the strength falls off smoothly
+     * with how far outside the border the true position lies.
+     *
+     * MEASURED sun geometry per phase (probe: fwd . uSunDir, and the angle in
+     * frame-corner radii). This is the whole reason the branch below exists:
+     *
+     *            hero            canopy          gameplay
+     *   dawn     +0.94  r1.00    +0.74  r1.00    +0.91  r1.00
+     *   day      -0.07  r2.80    +0.46  r1.39    -0.14  r3.07
+     *   golden   -0.49  r3.57    +0.08  r1.90    -0.56  r3.88
+     *   dusk     -0.86  r4.44    -0.42  r2.57    -0.90  r4.82
+     *
+     * i.e. the sun rises IN FRONT of the shipped cameras and sets BEHIND them. At
+     * dawn it is inside the frame and the shafts are unmistakable; by dusk it is
+     * 115-160 degrees behind the lens, where a crepuscular shaft radiating from the
+     * sun's screen position is not a stylisation, it is a different scene.
+     *
+     * What is actually in frame at dusk is the ANTISOLAR point — measured at 0.92
+     * frame radii (inside the frame) for hero and 1.45 for canopy — and the real
+     * sky phenomenon there is ANTI-CREPUSCULAR rays: the same cloud and canopy
+     * shadows, converging instead of radiating. So when the key goes behind the
+     * camera the radial origin flips to -uSunDir and the shafts converge on it.
+     * The mask still only seeds where there is genuinely bright sky, so this can
+     * never invent light: it redirects an effect that already had a source.
      */
     function updateSunScreen(night) {
       const cam = ctx.camera;
       cam.updateMatrixWorld();
       cam.matrixWorldInverse.copy(cam.matrixWorld).invert();
       cam.getWorldDirection(fwd);
-      const facing = fwd.dot(sunDir);
+      const sunFacing = fwd.dot(sunDir);
 
-      // Screen position from the ANGLE, not from a perspective divide. A sun a few
-      // degrees off the frustum plane divides by a near-zero w and lands hundreds of
-      // NDC units away, which is why a projection-based gate deletes the shafts in
-      // every preset. Angle / half-diagonal-FOV is well behaved everywhere: 0 at the
-      // view axis, 1.0 exactly at the frame corner, and it grows linearly past that.
-      tmpV.copy(sunDir).transformDirection(cam.matrixWorldInverse);   // view space
+      // Flip to the antisolar point once the key is far enough behind the lens that
+      // a forward-radiating shaft would be nonsense. Smooth in `rayAnti` so the
+      // crossover is a fade, never a pop, and note both sides of the crossover are
+      // weak there (the sun is ~90 degrees off axis), so nothing visibly swaps.
+      rayAnti = THREE.MathUtils.smoothstep(-sunFacing, 0.02, 0.22);
+      rayDirV.copy(sunDir).multiplyScalar(rayAnti > 0.5 ? -1 : 1);
+      const facing = rayAnti > 0.5 ? -sunFacing : sunFacing;
+
+      // Screen position from the ANGLE, not from a perspective divide. A source a
+      // few degrees off the frustum plane divides by a near-zero w and lands
+      // hundreds of NDC units away, which is why a projection-based gate deletes
+      // the shafts in every preset. Angle / half-diagonal-FOV is well behaved
+      // everywhere: 0 at the view axis, 1.0 exactly at the frame corner, and it
+      // grows linearly past that.
+      tmpV.copy(rayDirV).transformDirection(cam.matrixWorldInverse);   // view space
       const fovR = THREE.MathUtils.degToRad(cam.fov) * 0.5;
       const halfDiag = Math.atan(Math.tan(fovR) * Math.hypot(cam.aspect, 1));
       const rrRaw = Math.acos(THREE.MathUtils.clamp(facing, -1, 1)) / Math.max(halfDiag, 1e-4);
@@ -775,18 +834,23 @@ export default {
       // How far outside the frame the source is, in frame-corner radii.
       sunOutside = Math.max(0, rrRaw - 1);
       const offFrame = 1 - THREE.MathUtils.smoothstep(rrRaw, 1.0, 3.4);
-      // fully behind the camera still kills them, but a raking side key does not
+      // fully behind the ORIGIN still kills them, but a raking side key does not
       const behind = THREE.MathUtils.smoothstep(facing, -0.30, 0.12);
       const lowSun = THREE.MathUtils.smoothstep(-sunDir.y, -0.62, -0.03);   // 1 near the horizon
       lastLowSun = lowSun;
       const nightFade = 1 - 0.78 * night;
       let s = params.rays.strength * behind * offFrame * nightFade
             * (0.55 + params.rays.duskBoost * lowSun);
+      // Converging shafts are a subtler phenomenon than radiating ones and their
+      // source is the dim half of the sky, so they get their own scale rather than
+      // borrowing the sun-side number.
+      s *= 1 + (params.rays.antiScale - 1) * rayAnti;
       if (night > 0.62) s *= 0.42;
-      // the bloom sun-disc boost still needs the sun genuinely on screen, otherwise
-      // it hazes a patch of sky that does not contain the sun at all
-      const inFrame = 1 - THREE.MathUtils.smoothstep(rrRaw, 0.85, 1.35);
-      bloomSunVisible = behind * inFrame * (1 - 0.85 * night);
+      // The bloom sun-disc boost needs the REAL sun genuinely on screen — it hazes
+      // the sky around the source, and the antisolar point contains no source.
+      const sunRR = Math.acos(THREE.MathUtils.clamp(sunFacing, -1, 1)) / Math.max(halfDiag, 1e-4);
+      const inFrame = 1 - THREE.MathUtils.smoothstep(sunRR, 0.85, 1.35);
+      bloomSunVisible = THREE.MathUtils.smoothstep(sunFacing, -0.30, 0.12) * inFrame * (1 - 0.85 * night);
       return Math.max(0, s);
     }
 
@@ -826,6 +890,13 @@ export default {
 
     /* ---------------- the loop ---------------- */
     let enabled = true;
+    /**
+     * debug only — a frozen copy of the buffer GRADE_SHADER consumed. The
+     * ping-pong buffer itself is clobbered by SMAA later in the same frame, so
+     * the tone curve's true input has to be snapshotted while it is still live.
+     */
+    let gradeInRT = null;
+    let dbgCapture = false;
     const prevCam = { pos: new THREE.Vector3(1e9, 0, 0), quat: new THREE.Quaternion(), fov: -1 };
     const shadowV = V3(0.6, 0.62, 0.78);
     const stats = { passes: 0, sceneCalls: 0, tier: q.tier, ao: useAO, rays: useRays, dof: useDOF, taa: taaLevel, bloomMips: bloomPass.levels };
@@ -889,7 +960,8 @@ export default {
       // Shafts are tinted to the key. At dusk that is #FF9E5E; the published
       // uSunColor already carries the phase, so we only push it further toward the
       // warm end as the sun drops, so the shafts never read as a neutral wash.
-      rayColor.copy(sunColor).lerp(duskKey, 0.45 * lastLowSun).multiplyScalar(rayStrength);
+      rayColor.copy(sunColor).lerp(duskKey, 0.45 * lastLowSun * (1 - 0.55 * rayAnti))
+        .multiplyScalar(rayStrength);
 
       taaPass.uniforms.uBlend.value = (!useTAA || !historyValid) ? 1.0 : params.taaBlend;
       taaPass.uniforms.tHistory.value = histA.texture;
@@ -944,6 +1016,9 @@ export default {
       gu.uNightContrast.value = params.grade.nightContrast;
       gu.uToe.value = params.grade.toe;
       gu.uSaturation.value = Math.max(params.grade.saturation, 1.0);
+      gu.uVibrance.value.copy(params.grade.vibrance);
+      gu.uSceneCurve.value.copy(params.grade.sceneCurve);
+      gu.uSceneCurveNight.value.copy(params.grade.sceneCurveNight);
       gu.uShoulder.value = params.grade.shoulder;
       gu.uSplitLo.value.copy(params.grade.splitLo);
       gu.uSplitHi.value.copy(params.grade.splitHi);
@@ -981,6 +1056,18 @@ export default {
 
       for (const p of passes) {
         if (p.enabled === false) continue;
+        // debug only: remember which buffer the tone curve actually consumed, so
+        // histogram('grade') measures the true input distribution of the curve
+        // rather than the raw scene target several passes upstream.
+        if (p === gradePass && dbgCapture) {
+          if (!gradeInRT) gradeInRT = new THREE.WebGLRenderTarget(W, H, HDR);
+          if (gradeInRT.width !== W || gradeInRT.height !== H) gradeInRT.setSize(W, H);
+          taaCopy.uniforms.tDiffuse.value = read.texture;
+          taaCopy.target = gradeInRT;
+          taaCopy.renderToScreen = false;
+          taaCopy.render(renderer, gradeInRT, read);
+          dbgCapture = false;
+        }
         p.renderToScreen = (p === last);
         p.render(renderer, write, read, dt, false);
 
@@ -1036,7 +1123,8 @@ export default {
        * `uThreshold` has to sit below.
        */
       sample(which, u, v) {
-        const rt = { scene: sceneRT, rays: raysRT, mask: occlRT, ao: aoRT, dof: dofRT }[which] ?? sceneRT;
+        const rt = { scene: sceneRT, rays: raysRT, mask: occlRT, ao: aoRT, dof: dofRT,
+          grade: gradeInRT ?? sceneRT }[which] ?? sceneRT;
         const x = Math.max(0, Math.min(rt.width - 1, Math.round(u * rt.width)));
         const y = Math.max(0, Math.min(rt.height - 1, Math.round(v * rt.height)));
         const buf = new Uint16Array(4);
@@ -1046,6 +1134,56 @@ export default {
           const r = f(0), g = f(1), b = f(2);
           return { r, g, b, luma: 0.2126 * r + 0.7152 * g + 0.0722 * b };
         } catch (e) { return { error: String(e).slice(0, 80) }; }
+      },
+      /**
+       * Debug only. Luminance percentiles of a whole intermediate HDR buffer.
+       * `sample()` answers "what is this pixel"; this answers "what is the
+       * DISTRIBUTION the tone curve has to work with", which is the only way to
+       * design a toe/shoulder that lands on a target p1 instead of guessing at it.
+       */
+      /** Debug only. Snapshot the tone curve's input on the NEXT rendered frame. */
+      captureGradeInput() { dbgCapture = true; },
+      histogram(which = 'scene', stride = 3) {
+        const rt = { scene: sceneRT, rays: raysRT, mask: occlRT, ao: aoRT, dof: dofRT,
+          grade: gradeInRT ?? sceneRT }[which] ?? sceneRT;
+        const w = rt.width, h = rt.height;
+        const buf = new Uint16Array(w * h * 4);
+        try { renderer.readRenderTargetPixels(rt, 0, 0, w, h, buf); }
+        catch (e) { return { error: String(e).slice(0, 120) }; }
+        const F = THREE.DataUtils.fromHalfFloat;
+        const vals = [];
+        for (let y = 0; y < h; y += stride) {
+          for (let x = 0; x < w; x += stride) {
+            const i = (y * w + x) * 4;
+            const l = 0.2126 * F(buf[i]) + 0.7152 * F(buf[i + 1]) + 0.0722 * F(buf[i + 2]);
+            vals.push(Number.isFinite(l) ? Math.max(l, 0) : 0);
+          }
+        }
+        vals.sort((a, b) => a - b);
+        const q = (p) => vals[Math.min(vals.length - 1, Math.max(0, Math.floor(p * vals.length)))];
+        // 201 evenly spaced quantiles: enough to simulate the whole tone chain
+        // offline and predict p1 / p50 / p99 / blown before touching a shader.
+        const quant = [];
+        for (let i = 0; i <= 200; i++) quant.push(+q(i / 200).toFixed(5));
+        return {
+          n: vals.length, w, h,
+          min: q(0), p001: q(0.001), p01: q(0.01), p05: q(0.05), p10: q(0.10),
+          p25: q(0.25), p50: q(0.50), p75: q(0.75), p90: q(0.90), p99: q(0.99), max: q(1),
+          quant,
+        };
+      },
+      /** Debug only. Raw linear luma at a coarse grid, for band/region measurements. */
+      grid(which = 'scene', nx = 24, ny = 14) {
+        const out = [];
+        for (let j = 0; j < ny; j++) {
+          const row = [];
+          for (let i = 0; i < nx; i++) {
+            const s = this.sample(which, (i + 0.5) / nx, (j + 0.5) / ny);
+            row.push(+(s.luma ?? -1).toFixed(4));
+          }
+          out.push(row);
+        }
+        return out;
       },
       /** Debug only (never called per frame): the resolved state of the chain. */
       probe() {
@@ -1062,6 +1200,7 @@ export default {
           focusTarget: focusTargetDistance(),
           sunUV: { x: sunUV.x, y: sunUV.y },
           sunOutside,
+          rayAnti,
           bloomSunVisible,
           bloomWeightSum: bloomPass.weightSum(),
           bloomStrength: bloomPass.strength / bloomPass.weightSum(),
@@ -1089,7 +1228,16 @@ export default {
         params.grade.contrast = 1.0; params.grade.toe = 0; params.grade.saturation = 1.0;
         params.grade.split.set(0, 0); params.grade.black = 0;
         params.grade.floor = 0; params.grade.lift.set(0, 0, 0);
+        params.grade.sceneCurve.set(1, 0.34); params.grade.sceneCurveNight.set(1, 0.035);
+        params.grade.vibrance.set(0, 2.2);
       };
+      // just the tone curve removed — isolates "did the S-curve neutralise the
+      // rig's cool-shadow / warm-highlight split?" from every other grade term.
+      window.__game.scenarios['postfx-no-curve'] = () => {
+        params.grade.sceneCurve.set(1, 0.34); params.grade.sceneCurveNight.set(1, 0.035);
+        params.grade.black = 0;
+      };
+      window.__game.scenarios['postfx-no-vibrance'] = () => { params.grade.vibrance.set(0, 2.2); };
       // debug: single-stage bisects — each one removes exactly one contribution so
       // its effect on the frame can be measured rather than argued about.
       window.__game.scenarios['postfx-no-bloom'] = () => { params.bloom.strength = 0; };
@@ -1109,6 +1257,23 @@ export default {
       window.__game.scenarios['postfx-view-bloom'] = view(() => bloomPass.mips[0].texture);
       // debug: put the sun just above the view centre — the only reliable way to
       // judge the shafts regardless of the current time of day.
+      // Composite debug scenarios — the harness only takes ONE --scenario, and
+      // every god-ray / DOF claim below needs two switches thrown at once
+      // (a time of day AND a bisect), so the pairs are registered here.
+      const chain = (...names) => () => { for (const n of names) window.__game.scenarios[n]?.(); };
+      window.__game.scenarios['postfx-dawn-test'] = chain('stage5', 'dawn');
+      window.__game.scenarios['postfx-dawn-test-off'] = chain('stage5', 'dawn', 'postfx-no-rays');
+      window.__game.scenarios['postfx-dawn-view'] = chain('stage5', 'dawn', 'postfx-view-rays');
+      window.__game.scenarios['postfx-rays-test'] = chain('stage5', 'dusk');
+      window.__game.scenarios['postfx-rays-test-off'] = chain('stage5', 'dusk', 'postfx-no-rays');
+      window.__game.scenarios['postfx-rays-view'] = chain('stage5', 'dusk', 'postfx-view-rays');
+      window.__game.scenarios['postfx-dusk-no-grain'] = chain('dusk', 'postfx-no-grain');
+      window.__game.scenarios['postfx-no-dof-no-grain'] = chain('postfx-no-dof', 'postfx-no-grain');
+      window.__game.scenarios['postfx-no-smaa-no-grain'] = chain('postfx-no-smaa', 'postfx-no-grain');
+      window.__game.scenarios['postfx-stage5'] = chain('stage5');
+      window.__game.scenarios['postfx-stage5-no-dof'] = chain('stage5', 'postfx-no-dof');
+      window.__game.scenarios['postfx-stage5-no-grain'] = chain('stage5', 'postfx-no-grain');
+      window.__game.scenarios['postfx-stage5-no-dof-no-grain'] = chain('stage5', 'postfx-no-dof', 'postfx-no-grain');
       window.__game.scenarios['postfx-sun-in-view'] = () => { sunOverride = true; };
       window.__game.scenarios['postfx-sun-rays'] = () => { sunOverride = true; finalPass.input = () => raysRT.texture; };
     }
@@ -1133,6 +1298,7 @@ export default {
         ctx.pipeline = null;
         renderer.toneMapping = THREE.ACESFilmicToneMapping;
         for (const t of ownedTargets) t.dispose();
+        gradeInRT?.dispose();
         depthTex.dispose();
         for (const p of passes) p.dispose?.();
         taaCopy.dispose();
@@ -1144,70 +1310,110 @@ export default {
 /* ====================================================================== *
  * MEASURED BEHAVIOUR — what each stage actually does to the frame.
  *
- * Every number below was read off a rendered PNG with film grain disabled
+ * Numbers marked (ng) were read off renders with film grain disabled
  * (`postfx-no-grain`; grain alone puts a ~0.06 sobel floor on every region and
- * hides anything smaller), hero preset, 1920x1080, ultra tier, golden hour
- * unless stated. "edge energy" = mean Sobel gradient magnitude over the region.
- * Reproduce any row with the matching `postfx-no-*` scenario.
+ * hides anything smaller). Hero preset, 1920x1080, ultra tier, default (day)
+ * phase unless stated. "edge energy" = mean Sobel gradient magnitude over a
+ * named box; the boxes and the diffing live in .tmp-postfx/regions.mjs.
  *
- * DEPTH OF FIELD  (edge energy vs `postfx-no-dof`)
- *                          far hills   ground @40m   trunk    canopy
- *   old (band 2.20, 9 px)    -34%        -76%        -14%      -6%
- *   this (band 5.50, 5 px)   -26/-22%     -1%         +0%      -4%
- *   The tree is now indistinguishable from the no-DOF render while the distant
- *   hills lose a quarter of their edge energy: §4.5's "gentle".
- *   Autofocus resolves per preset: hero 25.2 m, canopy 14.8, bark 4.7,
- *   wide 54.7, pond 9.5, lantern 6.0.  At the MEDIUM tier the canopy stops
- *   writing depth and the raw probe returned 158.9 m — the whole frame blurred.
- *   `dof.subjectBand` bounds the probe to 0.55-1.70x the subject distance,
- *   which brings medium back to 41.4 m and behaving like ultra (trunk +0.3%).
+ * NOTE ON REPEATABILITY: two runs of the SAME scenario differ by up to 210/255
+ * on individual pixels — the blossom cards and petal positions are not
+ * bit-repeatable between processes. Region MEANS over 10^5 pixels are stable to
+ * a few tenths of a percent, so every claim below is a region mean, and any
+ * per-region delta under ~2% is reported as "unchanged" rather than as signal.
+ *
+ * TONE CURVE  (`postfx-flat` bypasses the whole grade, `postfx-no-curve` only
+ *              the scene-linear curve + black point)
+ *   hero, whole frame:        p1      p50     p99     satMean  detail  flat16
+ *     grade off (flat)       0.2551  0.6174  0.9151   0.184    0.163   0.148
+ *     shipped                0.0805  0.5594  0.9148   0.310    0.255   0.051
+ *   crushed = 0 and blown = 0 in both. The frame it started from had 1.9 stops
+ *   between its darkest 1% and its median (measured: grade input p1 0.108,
+ *   p50 0.400 linear), which is why no post-ACES curve could open it up — the
+ *   contrast now runs in SCENE-LINEAR space before ACES, and ACES's own shoulder
+ *   is what stops the sky clipping while p1 drops by a factor of 3.
+ *   The curve was not guessed: pipeline.histogram('grade') returns 201 quantiles
+ *   of the tone curve's real input and .tmp-postfx/curve.mjs replays the shader's
+ *   luma path over them, so (contrast 2.10, pivot 0.34, black 0.018) was chosen
+ *   by solving for p1 in 0.05-0.10 with blown = 0, then confirmed on the PNG.
+ *
+ * DOES THE GRADE PRESERVE THE RIG'S SPLIT TONE?  (stats.mjs groundSplitTone —
+ *   lit surfaces only, negative = cool shadows + warm highlights)
+ *     grade off (flat)      shadowHue  94.8   highlightHue 92.2   split   -2.6
+ *     curve off (no-curve)  shadowHue  98.8   highlightHue 90.8   split   -8.0
+ *     shipped               shadowHue 228.7   highlightHue 90.3   split -138.4
+ *   i.e. the ungraded frame has NO split at all (both quartiles the same green);
+ *   the tone curve is what separates the shadow family far enough down the range
+ *   for the rig's cool ambient to read. The grade creates the split, it does not
+ *   neutralise it. Per-band saturation over the hills rose 0.05-0.18 -> 0.13-0.46.
+ *
+ * MID-GROUND VALUE SEPARATION  (vertical luminance profile, x 0.03-0.33,
+ *   .tmp-postfx/profile.mjs — "are the three hill bands distinguishable?")
+ *     far ridge  mid ridge trough  near treeline
+ *     flat      0.747      0.551          0.673      peak-to-trough 0.196
+ *     shipped   0.803      0.394          0.654      peak-to-trough 0.409
+ *   The grade DOUBLES the separation. What is left of the milky band (y 0.55-0.63,
+ *   rgb 127,145,139, sat 0.13-0.18) is not a post-processing artefact: measured
+ *   contribution to that band is bloom +1.0% luminance, DOF -0.3% luminance.
+ *   It is the aerial-perspective fog colour (uFogColor, owned by 08-lighting /
+ *   15-sky) reading near-neutral where ART_BIBLE §3 asks for #BCD3EA.
+ *
+ * DEPTH OF FIELD  (ng, edge energy vs `postfx-no-dof-no-grain`)
+ *                     far hills  hills mid  ground @40m  trunk   trunk edge  fg grass
+ *   old (2.20, 9 px)    -34%        -        -76%        -14%       -         -
+ *   shipped (5.50/5px)  -22.8%    -8.9%      -0.3%      +2.4%    +2.6%     -35.6%
+ *   The far hill band loses 22.8% of its edge energy while the trunk silhouette
+ *   comes out of the DOF pass as sharp as the no-DOF render (+2.4/+2.6%, i.e.
+ *   inside run noise) and the readable mid-ground at 40 m is untouched: §4.5's
+ *   "gentle", and §5's out-of-focus near field is doing real work (-35.6%).
+ *   Against `--q low` (which disables DOF via ctx.quality) the same far-hill box
+ *   reads 0.0386 (ultra, DOF on) vs 0.0500 (no DOF) — same conclusion, but that
+ *   comparison also changes grass density and shadow-map size, so the scenario
+ *   bisect above is the one to trust.
+ *   Autofocus resolves per preset: hero 25.2 m, canopy 15.7, bark 4.7, wide 54.7.
  *
  * BLOOM  (display luminance added vs `postfx-no-bloom`, 255 units)
- *                          sky   hills   canopy   canopy edge
- *   old (strength 1.55)    22.1   14.6    23.6      21.5
- *   this (strength 0.55)    5.7    3.5     7.1       6.8
- *   The old veil was 2.8x ART_BIBLE §4.4 and was most of why the mid-distance
- *   had no value separation left; `strength` is normalised by the pyramid weight
- *   sum, so 0.55 here means the same thing 0.55 means in UnrealBloomPass.
+ *                          sky   far hills   canopy   haze band   trunk
+ *   old (strength 1.55)   22.1     14.6       23.6        -         -
+ *   shipped (0.55)         6.4      5.0        5.0       1.4       0.5
+ *   `strength` is divided by the pyramid's WEIGHT SUM (11.41 at 1080p with
+ *   mipFalloff 1.16 over 7 mips), not by the mip count — probe() reports
+ *   bloomWeightSum 11.414 and bloomStrength 0.0482 = 0.55/11.414, which is the
+ *   correct normalisation for a progressive tent upsample where mip 0 ends up
+ *   holding SUM(falloff^i * blur_i). So 0.55 means what 0.55 means in
+ *   UnrealBloomPass, matching ART_BIBLE §4.4, and the veil is a 5-6/255 wash on
+ *   the bright half of the frame with 0.5/255 in the shadows — hazy, not a halo.
  *
- * GOD RAYS  (display luminance added vs `postfx-no-rays`, 255 units, by quadrant)
- *   dusk / hero:      15 / 13 near the sun -> 0-2 on the far side, 0 below the horizon
- *   golden / hero:     3      (high sun, correctly weak)
- *   noon, night:       0      (sun outside the gate / moon)
- *   The shipped gate is angular: full strength while the sun is inside the frame
- *   corner radius, fading to zero by 3.4 radii and separately by facing < -0.3,
- *   so it fires in compositions where the sun is off-frame (all of them) and
- *   dies smoothly when it goes behind the camera. `postfx-view-rays` shows the
- *   shaft buffer itself: sobel 0.065-0.096, 2-3x the sky's own, i.e. real
- *   radiating streaks. In the composite those streaks read as an occlusion-shaped
- *   directional glow rather than fingers, because with the shipped camera presets
- *   and sun path the sun's screen position is 1.5-1.8 frame-radii off to the
- *   side and the canopy never sits between a pixel and the source.
- *
- * COLOUR GRADE  (`postfx-flat` bypasses it; `postfx-off` bypasses the pipeline)
- *   hero:  pipeline off  min 0.171  p1 0.351  p50 0.722  sat 0.267
- *          graded        min 0.121  p1 0.308  p50 0.697  sat 0.297
- *   bark:  grade off     min 0.129  p1 0.222      graded  min 0.069  p1 0.139
- *   So the grade deepens the low end (bark p1 35/255, darkest pixel 18/255, both
- *   well under the 66/255 the review asked for) without crushing anything
- *   (`crushed` = 0 in every preset) and adds saturation rather than removing it.
- *   The hero frame's p1 cannot reach 0.05-0.09: with the whole pipeline switched
- *   off it is already 0.351, i.e. the missing low end is upstream (fog density
- *   plus near-white petal coverage), not in the grade.
- *   Contrast and toe were moved into the LUMA domain — see GRADE_SHADER. The old
- *   per-channel power law was multiplying shadow chroma, turning the rig's
- *   (40,47,72) grass shadow into (14,30,72).
+ * GOD RAYS  (display luminance added vs `postfx-no-rays`, 255 units)
+ *   Sun geometry per phase, measured (fwd . uSunDir / angle in frame radii):
+ *              hero          canopy        gameplay
+ *     dawn    +0.94 r1.00   +0.74 r1.00   +0.91 r1.00
+ *     day     -0.07 r2.80   +0.46 r1.39   -0.14 r3.07
+ *     golden  -0.49 r3.57   +0.08 r1.90   -0.56 r3.88
+ *     dusk    -0.86 r4.44   -0.42 r2.57   -0.90 r4.82
+ *   The sun RISES in front of the shipped cameras and SETS behind them, so the
+ *   old facing > -0.30 gate produced rayColor exactly (0,0,0) at dusk in every
+ *   preset and the shaft buffer rendered pure black. Fixed by flipping the radial
+ *   origin to the ANTISOLAR point once the key goes behind the lens (measured at
+ *   0.92 frame radii for hero — inside the frame — and 1.45 for canopy), which is
+ *   the real anti-crepuscular geometry rather than a fudge.
+ *     dawn  / canopy (stage 5):  sky top +14.6,  anti-sun side +11.6,  lower +6.2
+ *     dawn  / hero:              sky +15.0
+ *     dusk  / hero  (antisolar): sky  +8.3,  trunk +3.0,  field +1.4
+ *     dusk  / canopy (antisolar):sky top +5.2,  anti-sun +3.9,  lower +2.4
+ *     night:                     ~0 (moon key, 0.42x, and the gate closes)
+ *   Ray buffer peaks 0.05 with rayColor 0.586 -> peak linear add 0.030 pre-ACES.
  *
  * NIGHT  (`--scenario night`)
- *   grade off  min 0.016  p1 0.056  p50 0.149  sat 0.408
- *   graded     min 0.034  p1 0.056  p50 0.137  sat 0.624   detail 0.094
- *   lantern    min 0.033  p1 0.051  p50 0.162  sat 0.558
- *   Not a flat card: the grade lifts the floor off zero, leaves the median alone
- *   and adds chroma. The night pivot/contrast/black-point relaxation is what
- *   stops the daylight S-curve from flattening it.
+ *   shipped  p1 0.038  p50 0.105  p99 0.903  satMean ~0.55  crushed 0.00024
+ *   The night frame is allowed to be dark; the relaxations that make that safe are
+ *   the night scene curve (1.20 @ pivot 0.035 instead of 2.10 @ 0.34), the 0.2x
+ *   black point, the 0.2x toe, the 0.25x shadow lift and a 0.55x vibrance — at
+ *   full daylight vibrance the moonlit grass measured satMean 0.677 and read
+ *   emerald rather than moonlit.
  *
- * SMAA  (edge energy with `postfx-no-smaa`, i.e. how much aliasing it removes)
- *   ultra: grass +17.4%, near grass +5.5%, canopy +4.7%, hills +5.2%
- *   low:   grass  +9.4%, trunk +14%, canopy edge +13%
- *   It is doing real work at both ends of the tier range.
+ * SMAA  (ng, edge energy with `postfx-no-smaa-no-grain`)
+ *   ultra: trunk edge +11.3%, grass +8.9%, trunk +7.8%, canopy +6.0%, hills +1.8%
+ *   Removing it puts >10% more edge energy on every silhouette in frame, i.e. it
+ *   is resolving real aliasing rather than just softening the image.
  * ====================================================================== */

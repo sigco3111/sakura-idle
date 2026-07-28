@@ -160,6 +160,18 @@ void main(){
 
   vec3 albedo = ( grassC * wLush + dryC * wDry + earthC * wEar + mossC * wMos ) / sum;
 
+  // Mid-scale meadow patchwork, computed IN THE SHADER so it survives every
+  // quality tier. The baked macro map is 384..768 px over 244 m, so past ~40 m
+  // it mips down to a single value and the far meadow collapses to one flat
+  // lime — which is exactly what the low tier was showing. Two shader octaves keep
+  // meadow-patch structure at any distance and at any macro resolution.
+  float pA = snoise( vec3( wxz * 0.047, 11.3 ) );
+  float pB = snoise( vec3( wxz * 0.163, 27.9 ) );
+  float mead = pA * 0.64 + pB * 0.36;
+  albedo *= 1.0 + mead * 0.22;
+  albedo = mix( albedo, albedo * vec3( 1.12, 0.99, 0.79 ), clamp(  mead, 0.0, 1.0 ) * 0.45 );
+  albedo = mix( albedo, albedo * vec3( 0.86, 1.00, 0.95 ), clamp( -mead, 0.0, 1.0 ) * 0.42 );
+
   // large-scale value + temperature drift: the ground must never be one colour
   float lv = M2.a * 2.0 - 1.0;
   albedo *= 1.0 + lv * 0.25;
@@ -217,6 +229,8 @@ varying float vJit;
 
 uniform vec3  uCamPos;
 uniform vec3  uFade;    // (fadeNear, fadeFar, farDensity)
+uniform vec3  uNear;    // (nearFadeStart, nearFadeEnd, strength) metres
+uniform float uWidthComp; // density compensation: fewer blades => wider blades
 uniform float uBend;
 uniform float uGrow;    // global 0..1 spawn-in, lets quality changes not pop
 
@@ -235,7 +249,19 @@ void main(){
   float live = 1.0 - smoothstep( dens - 0.14, dens + 0.01, aVar.x );
   // distant survivors get taller so they still cover a pixel or two
   float H = aPar.x * live * uGrow * ( 1.0 + 0.55 * smoothstep( uFade.x, uFade.y, dcam ) );
-  float W = aPar.y * ( 1.0 + 0.35 * smoothstep( uFade.x, uFade.y, dcam ) );
+  float W = aPar.y * ( 1.0 + 0.35 * smoothstep( uFade.x, uFade.y, dcam ) ) * uWidthComp;
+
+  // ---- near-camera fade ----------------------------------------------
+  // A blade 40 cm from the lens is 130 px wide and hides the whole shot; the
+  // 'canopy' preset puts the eye at 1.2 m, i.e. INSIDE the sward. Shrink (never
+  // hard-clip) blades that are both close AND tall enough to rise into the eye,
+  // so a high camera like 'hero' keeps every blade of its foreground framing.
+  float dNear = length( uCamPos - ( aOff.xyz + vec3( 0.0, H * 0.5, 0.0 ) ) );
+  float nearK = smoothstep( uNear.x, uNear.y, dNear );
+  float eyeK  = smoothstep( -0.55, 0.20, aOff.y + H - uCamPos.y ) * uNear.z;
+  float nearF = mix( 1.0, nearK, eyeK );
+  H *= nearF;
+  W *= mix( 1.0, nearK, eyeK * 0.85 );
 
   float c = cos( aOff.w ), s = sin( aOff.w );
   // position.z carries the static droop as a FRACTION OF HEIGHT
@@ -281,14 +307,18 @@ uniform vec3 uBaseCol;   // #3E6134 cool, at the root
 uniform vec3 uMidCol;
 uniform vec3 uTipCol;    // #8FB463 warm, sun-bleached
 uniform vec3 uDryCol;
+uniform float uTipBias;  // LOD: 0 at authored density, 1 when blades are scarce
 
 ${GLSL_NOISE}
 ${FRAG_SHADOW_PARS}
 ${GLSL_NPR}
 
 void main(){
-  // lighter AND yellower toward the tip — the single biggest grass tell
-  float t = clamp( vT, 0.0, 1.0 );
+  // lighter AND yellower toward the tip — the single biggest grass tell.
+  // At a low tier one blade stands in for several, so it has to be shaded like
+  // the AGGREGATE it represents (tip-dominated) rather than like a single blade;
+  // otherwise the sward turns into scattered dark needles on a bright plane.
+  float t = clamp( vT * ( 1.0 + uTipBias * 0.85 ) + uTipBias * 0.22, 0.0, 1.0 );
   vec3 albedo = mix( uBaseCol, uMidCol, smoothstep( 0.0, 0.55, t ) );
   albedo = mix( albedo, uTipCol, smoothstep( 0.42, 1.0, t ) );
   albedo = mix( albedo, uDryCol, vDry * ( 0.30 + 0.70 * t ) );

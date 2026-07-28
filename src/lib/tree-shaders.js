@@ -31,10 +31,15 @@ import { makeRng } from './rng.js';
  * ===================================================================== */
 
 /* ART_BIBLE §3: bark #6A5344 ridge -> #3F3029 crack, lichen #9AA88C. */
-const BARK_RIDGE = [0x7C, 0x5A, 0x32];
-const BARK_CRACK = [0x3E, 0x2C, 0x1C];
-const BARK_WARM = [0x7E, 0x57, 0x30];
-const BARK_GREY = [0x57, 0x40, 0x26];
+/* Measured on the hero frame, r3: the old palette bottomed out at rgb(14,19,55)
+ * on the shaded trunk — i.e. the bark had gone so dark that all that survived
+ * was the grade's own #2A2438 shadow lift, which reads as a NAVY trunk
+ * (ART_BIBLE §8 tell 4). These values sit on the bible's #6A5344 -> #3F3029
+ * instead of the old, much darker and much more orange set. */
+const BARK_RIDGE = [0x8C, 0x73, 0x60];
+const BARK_CRACK = [0x3F, 0x30, 0x29];
+const BARK_WARM = [0x7C, 0x63, 0x50];
+const BARK_GREY = [0x67, 0x53, 0x45];
 const LICHEN = [0x8E, 0x9B, 0x80];
 const LICHEN_DK = [0x62, 0x6E, 0x58];
 
@@ -359,6 +364,71 @@ export const ATLAS_SPARSE_FIRST = 13;
 export const ATLAS_SPARSE_COUNT = 3;
 
 /**
+ * Alpha-weighted colour dilation ("alpha bleed").
+ *
+ * THE reason the crown was peppered with hard black specks. A canvas cleared to
+ * transparent stores rgb = 0 in every uncovered texel, and WebGL builds mipmaps
+ * by averaging the UN-premultiplied texels — so at the hero distance (mip 2-3,
+ * a 4-8 texel box) every blossom-edge texel is averaged with pure black and its
+ * rgb is dragged toward zero while its alpha can still clear the alpha test. The
+ * result is an opaque black fragment shaped like the blossom's own silhouette.
+ *
+ * Fix: flood the cluster's own colour outward into the transparent texels,
+ * leaving alpha untouched. BFS from the covered texels so the total work is one
+ * pass over the image rather than `rings` passes.
+ *
+ * (src/lib/terrain-shaders.js solves the same problem for its single-shape
+ * sprites by painting edge-to-edge; a 16-cluster atlas cannot, so it dilates.)
+ */
+function bleedAlpha(g, S, rings = 20) {
+  const img = g.getImageData(0, 0, S, S);
+  const d = img.data;
+  const N = S * S;
+  const known = new Uint8Array(N);
+  let frontier = [];
+  for (let i = 0; i < N; i++) {
+    if (d[i * 4 + 3] > 0) { known[i] = 1; frontier.push(i); }
+  }
+  for (let ring = 0; ring < rings && frontier.length; ring++) {
+    const next = [];
+    for (let k = 0; k < frontier.length; k++) {
+      const i = frontier[k];
+      const x = i % S, y = (i - x) / S;
+      for (let dy = -1; dy <= 1; dy++) {
+        const yy = y + dy;
+        if (yy < 0 || yy >= S) continue;
+        for (let dx = -1; dx <= 1; dx++) {
+          const xx = x + dx;
+          if (xx < 0 || xx >= S || (dx === 0 && dy === 0)) continue;
+          const j = yy * S + xx;
+          if (known[j]) continue;
+          // average every already-known neighbour of j, weighted by nothing —
+          // these are hue samples, not coverage samples.
+          let r = 0, gg = 0, b = 0, n = 0;
+          for (let ey = -1; ey <= 1; ey++) {
+            const vy = yy + ey;
+            if (vy < 0 || vy >= S) continue;
+            for (let ex = -1; ex <= 1; ex++) {
+              const vx = xx + ex;
+              if (vx < 0 || vx >= S) continue;
+              const m = vy * S + vx;
+              if (!known[m]) continue;
+              r += d[m * 4]; gg += d[m * 4 + 1]; b += d[m * 4 + 2]; n++;
+            }
+          }
+          if (!n) continue;
+          d[j * 4] = r / n; d[j * 4 + 1] = gg / n; d[j * 4 + 2] = b / n;
+          known[j] = 1;
+          next.push(j);
+        }
+      }
+    }
+    frontier = next;
+  }
+  g.putImageData(img, 0, 0);
+}
+
+/**
  * 4x4 atlas of blossom clusters. Each tile keeps a transparent margin so mip
  * levels never bleed one cluster into its neighbour.
  * @returns {THREE.CanvasTexture}
@@ -422,6 +492,10 @@ export function buildBlossomAtlas({ size = 2048, seed = 90211 } = {}) {
     }
   }
 
+  // must run BEFORE the texture is uploaded: mipmaps are generated from these
+  // texels and the uncovered ones would otherwise be black (see bleedAlpha).
+  bleedAlpha(g, S, Math.max(8, Math.round(S / 96)));
+
   const tex = new THREE.CanvasTexture(cv);
   tex.colorSpace = THREE.SRGBColorSpace;
   tex.wrapS = tex.wrapT = THREE.ClampToEdgeWrapping;
@@ -462,6 +536,7 @@ attribute vec3 aTangent;
 attribute float aStiff;
 attribute float aPhase;
 attribute float aCav;
+attribute float aRad;
 
 varying vec3 vWorldPos;
 varying vec3 vWorldNormal;
@@ -469,6 +544,7 @@ varying vec3 vWorldTangent;
 varying vec2 vUv;
 varying float vCav;
 varying float vStiff;
+varying float vRad;
 
 #include <common>
 #include <shadowmap_pars_vertex>
@@ -480,6 +556,7 @@ void main(){
   vUv = uv;
   vCav = aCav;
   vStiff = aStiff;
+  vRad = aRad;
 
   vec4 wp = modelMatrix * vec4(position, 1.0);
   wp.xyz += treeSway(wp.xyz, aStiff, aPhase);
@@ -524,16 +601,19 @@ varying vec3 vWorldTangent;
 varying vec2 vUv;
 varying float vCav;
 varying float vStiff;
+varying float vRad;
 
 uniform sampler2D uBark;
 uniform sampler2D uBarkN;
 uniform vec3  uMossCol;
 uniform vec3  uGoldCol;
 uniform vec3  uWetCol;
+uniform vec3  uTwigCol;
 uniform float uMossAmt;
 uniform float uGold;
 uniform float uBare;
 uniform float uDetailScale;
+uniform float uPxScale;
 uniform vec3  uMossDir;
 
 #include <common>
@@ -544,8 +624,8 @@ uniform bool receiveShadow;
 // ART_BIBLE §3: a shadowed trunk is a COOL BROWN, not a violet slab. Rotate the
 // hue only part of the way onto uShadowTint (the library default 0.84 is tuned
 // for grass, which really does go all the way to #6E76A8).
-#define NPR_SHADOW_HUE 0.52
-#define NPR_SHADOW_CHROMA 0.85
+#define NPR_SHADOW_HUE 0.16
+#define NPR_SHADOW_CHROMA 0.34
 // The library's phase-independent SKY rim is tuned for silhouettes against the
 // sky. Bark is never a silhouette and a 0.46 sky term was painting the whole
 // trunk lavender: measured hue 6 deg where the albedo is authored at 27 deg.
@@ -561,13 +641,29 @@ void main(){
   float cav = ba.a;
   float mossMask = bn.a;
 
+  // ---- how thin is this piece of wood? -------------------------------
+  // vRad is the true wood radius in metres, and it is the only honest way to
+  // tell trunk from twig on one merged mesh. Two overlapping ramps, because the
+  // near-black slivers peppering the crown came from BOTH the 2 cm twigs and
+  // the 8-15 cm secondaries behind the blossom:
+  //   twig  r < 2 cm   light wraps right through it, no crack network, 1-2 px
+  //   limb  r < 30 cm  a branch in a canopy: lichened, sky-lit, never a black bar
+  // The trunk itself (r 0.5-1.34) gets neither and keeps its full bark look.
+  float twig = smoothstep(0.075, 0.020, vRad);
+  float limb = smoothstep(0.34, 0.075, vRad);
+
   vec3 N0 = normalize(vWorldNormal);
+  if (!gl_FrontFacing) N0 = -N0;   // DoubleSide: the far wall of a 1-px tube
   vec3 T  = normalize(vWorldTangent - N0 * dot(N0, vWorldTangent));
   vec3 B  = cross(N0, T);
 
   // ---- mid-frequency tangent-space normal map -----------------------
   vec3 tn = bn.rgb * 2.0 - 1.0;
-  vec3 N = normalize(T * tn.x + B * tn.y + N0 * max(tn.z, 0.12));
+  // Softened for the same reason as the derivative bump below: the baked bark
+  // normal is authored at STRENGTH 1.55, which tilts fragments up to ~83 deg and
+  // sprays them across the ramp's terminator. Full strength = orange/navy comb.
+  tn.xy *= 0.42;
+  vec3 N = normalize(T * tn.x + B * tn.y + N0 * max(tn.z, 0.40));
 
   // ---- crisp high-frequency crack network, world space so it never seams
   //      and stays sharp at any zoom (the 'bark' preset lives here) -----
@@ -591,17 +687,33 @@ void main(){
   float det = dot(dpdx, r1);
   if (abs(det) > 1e-12) {
     vec3 grad = sign(det) * (dhdx * r1 + dhdy * r2);
-    N = normalize(abs(det) * N - 0.34 * bumpFade * grad);
+    // Kept deliberately LOW. A ramp-shaded NPR terminator is a 2-3 band step, so
+    // a strong high-frequency bump at a grazing light angle flips neighbouring
+    // micro-facets across that step and the trunk renders as an orange/navy comb
+    // (measured on the 'bark' preset). Genshin-style bark carries its furrows in
+    // ALBEDO and keeps normals soft; so do we.
+    N = normalize(abs(det) * N - 0.11 * bumpFade * grad);
   }
 
   // ---- crack darkening + cavity AO ----------------------------------
-  float crack = smoothstep(0.62, 0.16, h);            // 1 deep in a crack
-  float ao = clamp(mix(0.52, 1.0, smoothstep(0.05, 0.70, cav)) * (1.0 - crack * 0.42), 0.18, 1.0);
-  albedo *= mix(1.0, 0.60, crack * 0.85);
+  float crack = smoothstep(0.62, 0.16, h) * (1.0 - twig * 0.80);   // twigs are smooth
+  // AO floor matters far more than it used to: the library now scales its whole
+  // shadow fill by ao (NPR_SHADOW_AO = 0.16), so an ao of 0.18 in a crack put the
+  // crack floor onto the grade's violet shadow pedestal and the trunk rendered as
+  // a navy comb (measured rgb(12,18,55) on the hero trunk). A bark crack is a
+  // 5 mm groove that still sees most of the sky — not an enclosed pocket.
+  float ao = clamp(mix(0.76, 1.0, smoothstep(0.05, 0.70, cav)) * (1.0 - crack * 0.24), 0.56, 1.0);
+  albedo *= mix(1.0, 0.56, crack * 0.85);   // furrows live HERE, not in the normal
   albedo *= mix(0.80, 1.06, smoothstep(0.02, 0.55, cav));
 
+  // Twig wood: warm red-grey, well above trunk-bark value. Thin wood also has
+  // nothing above it to occlude it, so its AO opens right up.
+  float wood = clamp(twig * 0.62 + limb * 0.34, 0.0, 0.92);
+  albedo = mix(albedo, uTwigCol * (0.82 + 0.36 * cav), wood);
+  ao = mix(ao, clamp(ao * 1.30 + 0.24, 0.0, 1.0), max(twig, limb * 0.70));
+
   // root flare and the lower trunk sit in their own ambient shadow
-  ao *= mix(0.72, 1.0, smoothstep(-0.4, 2.2, vWorldPos.y));
+  ao *= mix(0.88, 1.0, smoothstep(-0.4, 2.2, vWorldPos.y));
 
   // ---- moss on the shadow (north) face, collecting in the cracks -----
   float northness = dot(N0, normalize(uMossDir));
@@ -623,16 +735,49 @@ void main(){
   vec3 V = toCam / max(dist, 1e-4);
 
   float sm = getShadowMask();
+  // A 2 cm twig is far below the shadow map's texel footprint, so whatever the
+  // map says about it is noise. Lift it toward lit and let the ramp do the work.
+  sm = mix(sm, max(sm, 0.58), twig * 0.85 + limb * 0.25);
   nprSetWorldPos(vWorldPos);
   vec3 Ng = nprGeoNormal(vWorldPos, N4);
-  vec3 col = nprShadeN(albedo, N4, Ng, V, sm, 0.0, 0.0, 0.28, 0.42, ao);
+  // Thin wood: light wraps through it (translucency) and its whole surface is
+  // grazing, so it carries a stronger rim. Trunk values are unchanged.
+  vec3 col = nprShadeN(albedo, N4, Ng, V, sm,
+                       twig * 0.55, twig * 0.70,
+                       0.28, 0.42 + twig * 0.46 + limb * 0.22, ao);
+
+  // ---- meadow bounce -------------------------------------------------
+  // This trunk stands in a sunlit green field. The library's hemisphere ambient
+  // is generic; a specific warm-green fill on the lower and downward-facing
+  // wood is what stops a backlit trunk resolving to the grade's flat violet
+  // shadow pedestal, and it is the single reason a real backlit trunk still
+  // reads BROWN. Strongest at the root flare, gone by the first limbs.
+  {
+    float dn = 1.0 - clamp(N4.y * 0.5 + 0.5, 0.0, 1.0);
+    float near = 1.0 - smoothstep(0.2, 6.5, vWorldPos.y);
+    col += albedo * uGroundColor * ((0.35 + 0.75 * dn) * near * 1.25) * ao;
+    // ...plus a small warm fill so bark keeps its own hue wherever the key
+    // cannot reach it. Without it the furrow floors resolve to the sky ambient
+    // alone, which is blue, and the trunk reads navy.
+    col += albedo * uSunColor * (0.085 * ao);
+  }
 
   // gold veining: light living IN the cracks, so it survives shadow
   float veinRun = ridged(vec3(vWorldPos.x * 1.9, vWorldPos.y * 0.30, vWorldPos.z * 1.9), 2);
   float vein = crack * smoothstep(0.34, 0.78, veinRun);
   col += uGoldCol * vein * uGold * (0.55 + 0.50 * rimTerm(N4, V, 2.0));
 
-  col = applyAerial(col, dist, vWorldPos.y, V);
+  // ---- sub-pixel twig dissolve ---------------------------------------
+  // An opaque 1-px-wide dark line cannot be antialiased away by anything
+  // downstream, so it lands as a hard black dash — "dirt on the lens". In the
+  // real world a feature that thin only covers a fraction of the pixel and the
+  // sky/blossom behind it shows through. We cannot sample the background, but
+  // aerial perspective IS the colour of "not enough of this object in the
+  // pixel", so pushing a thin twig further into the haze reproduces exactly the
+  // right value and hue with the scene's own coherent fog.
+  float px = 2.0 * vRad * uPxScale / max(dist, 1e-3);
+  float thin = (1.0 - smoothstep(1.2, 5.0, px)) * max(twig, limb * 0.75);
+  col = applyAerial(col, dist * (1.0 + 1.7 * thin), vWorldPos.y, V);
 
   gl_FragColor = vec4(col, 1.0);
   #include <tonemapping_fragment>
@@ -683,10 +828,46 @@ uniform vec3  uCanopyCentre;
 uniform float uCanopyR;       // crown radius, for the vertical AO gradient
 uniform float uAtlasCols;
 uniform float uFlutter;
+uniform vec3  uEyePos;        // the BEAUTY camera, in both passes (see cardFrame)
 
 /** growth: each card opens when the coverage front passes its order value */
 float cardGrow(float order){
   return smoothstep(order - 0.20, order + 0.03, uCoverage);
+}
+
+/**
+ * Card frame with a partial billboard.
+ *
+ * A blossom card seen within ~25 degrees of edge-on collapses to a sliver, and
+ * because the alpha test has to be raised for those fragments the only texels
+ * that survive are the DENSEST ones — which in a sakura cluster are the deep
+ * #C25F86 petal cores. The result was several hundred hard near-black dashes
+ * peppering the crown in every frame. Culling them instead would throw away a
+ * third of the canopy, so the card rotates toward the viewer *only* in the
+ * regime where it was about to vanish, and keeps its authored orientation
+ * everywhere else. Below ~0.62 facing the blend ramps in; at 0.12 it is fully
+ * camera-facing.
+ *
+ * Both the beauty pass and the shadow pass call this with the SAME uEyePos, so
+ * the depth map describes exactly the geometry the beauty pass drew.
+ */
+void cardFrame(out vec3 centre, out vec3 nx, out vec3 ny, out vec3 nz){
+  mat3 IM = mat3(modelMatrix) * mat3(instanceMatrix);
+  vec3 ay = IM * vec3(0.0, 1.0, 0.0);
+  vec3 az = IM * vec3(0.0, 0.0, 1.0);
+  ay = normalize(ay);
+  az = normalize(az);
+  centre = (modelMatrix * instanceMatrix * vec4(0.0, 0.0, 0.0, 1.0)).xyz;
+  vec3 toEye = uEyePos - centre;
+  toEye = normalize(toEye + vec3(0.0, 1e-5, 0.0));
+  float facing = dot(az, toEye);
+  az *= facing < 0.0 ? -1.0 : 1.0;             // always show the card's front
+  float bb = 1.0 - smoothstep(0.12, 0.62, abs(facing));
+  nz = normalize(mix(az, toEye, bb));
+  nx = cross(ay, nz);
+  float l = length(nx);
+  nx = l > 1e-4 ? nx / l : normalize(cross(vec3(0.0, 1.0, 0.0), nz + vec3(1e-3, 0.0, 0.0)));
+  ny = normalize(cross(nz, nx));
 }
 `;
 
@@ -728,9 +909,11 @@ void main(){
   // buds are small and tight; open clusters are full size
   float sizeMul = aInst2.z * mix(1.0, 0.46, isBud) * grow;
 
+  vec3 centre, nx, ny, nz;
+  cardFrame(centre, nx, ny, nz);
   vec3 local = position * sizeMul;
-  vec4 wp = modelMatrix * instanceMatrix * vec4(local, 1.0);
-  vec3 nrm = normalize(mat3(modelMatrix) * (mat3(instanceMatrix) * normal));
+  vec4 wp = vec4(centre + nx * local.x + ny * local.y + nz * local.z, 1.0);
+  vec3 nrm = normalize(nx * normal.x + ny * normal.y + nz * normal.z);
 
   // ---- wind: cards ride their host twig, then flutter individually ----
   wp.xyz += treeSway(wp.xyz, aInst.y, aInst.x);
@@ -793,8 +976,12 @@ varying vec3 vCardN;
 varying float vAo;
 varying float vBud;
 varying float vGrow;
+varying float vCrownT;   // 0 at the bottom of the crown, 1 at the top
+varying float vShell;    // 0 = deep interior, 1 = outer shell (radial)
 
 uniform sampler2D uAtlas;
+uniform float uInterior;   // master strength of the crown-volume shading
+uniform vec3  uDeepTint;   // multiplier that carries albedo toward #C25F86
 uniform float uTranslucency;
 uniform float uThickness;
 uniform float uAlphaTest;
@@ -812,8 +999,8 @@ uniform bool receiveShadow;
 #include <shadowmask_pars_fragment>
 // A sakura petal in shadow is #EE8CAF — still unmistakably pink. Barely rotate
 // the hue; the level drop does the work.
-#define NPR_SHADOW_HUE 0.30
-#define NPR_SHADOW_CHROMA 1.00
+#define NPR_SHADOW_HUE 0.26
+#define NPR_SHADOW_CHROMA 0.62
 // Petals DO want a rim, but the sky-coloured half of it was washing #FFB6CE to
 // #FAD6D7 (measured sat 0.14 against a 0.29 target). The warm KEY rim inside
 // nprKeyG is untouched, so backlit edges still glow.
@@ -828,15 +1015,31 @@ void main(){
   float dist = length(toCam);
   vec3 V = toCam / max(dist, 1e-4);
 
+  // With the partial billboard in CANOPY_VERT no card is ever within 25 deg of
+  // edge-on, so this only has to cover the mild grazing case now. A hard boost
+  // here is actively harmful: raising the threshold keeps only the DENSEST
+  // texels, and in a sakura cluster those are the deep #C25F86 petal cores.
   float face = abs(dot(normalize(vCardN), V));
-  if (tx.a < uAlphaTest * mix(1.70, 1.0, smoothstep(0.08, 0.42, face))) discard;
+  if (tx.a < uAlphaTest * mix(1.22, 1.0, smoothstep(0.10, 0.50, face))) discard;
 
   vec3 albedo = tx.rgb * vTint;
+
+  // ---- the crown as a VOLUME, not a shell ----------------------------
+  // Two independent occluders, both read from where the card sits inside the
+  // crown rather than from how it happens to face:
+  //   occR  radial  — a card near the centre has a metre of blossom outside it
+  //   occY  vertical— a card under the crown is lit only by ground bounce
+  // Together they give the self-shadowed inner layers ART_BIBLE §2 asks for.
+  float occR = 1.0 - smoothstep(0.28, 0.94, vShell);
+  float occY = 1.0 - smoothstep(0.16, 0.78, vCrownT);
+  float occ = clamp((occR * 0.70 + occY * 0.55) * uInterior, 0.0, 1.0);
 
   // interior of the crown is genuinely darker (ART_BIBLE §2 "AO-driven
   // darkening in canopy interiors"), but stays PINK, never grey — and never a
   // bruise-coloured slash showing through the front face of the crown
   albedo *= mix(0.62, 1.0, vAo);
+  // deeper INTO the palette, not just darker: #FFB6CE -> #EE8CAF -> #C25F86
+  albedo = mix(albedo, albedo * uDeepTint, occ * 0.86);
 
   vec3 N = normalize(vWorldNormal);
   if (!gl_FrontFacing) N = -N;
@@ -845,10 +1048,20 @@ void main(){
   // deep interior cards should not be re-lit by a shadow map that cannot
   // resolve them; fold the interior AO into the occlusion too
   sm = min(sm, mix(0.50, 1.0, vAo));
+  sm *= 1.0 - occ * 0.55;
 
   nprSetWorldPos(vWorldPos);
-  float transl = uTranslucency * mix(0.55, 1.0, vAo) * mix(0.55, 1.0, 1.0 - vBud);
-  vec3 col = nprShadeN(albedo, N, N, V, sm, transl, uThickness, 0.18, 0.85, vAo);
+  // Light bleeds through the OUTER shell (that is the backlit glow); an
+  // interior card has a metre of blossom in the way and must not glow at all,
+  // or the whole crown flattens back into one pale mass.
+  float transl = uTranslucency * mix(0.55, 1.0, vAo) * mix(0.55, 1.0, 1.0 - vBud)
+               * (1.0 - occ * 0.80);
+  // floored: below ~0.3 the library's ao-scaled fill vanishes and the card
+  // lands on the grade's violet pedestal, which measured as a grey-mauve
+  // crown (sat 0.19). A shaded blossom must stay unmistakably pink.
+  float aoC = clamp(vAo * (1.0 - occ * 0.50), 0.30, 1.0);
+  vec3 col = nprShadeN(albedo, N, N, V, sm, transl, uThickness,
+                       0.18, mix(0.85, 1.25, vShell), aoC);
 
   // ---- light coming THROUGH the petal, explicitly warm pink. The library's
   // transmission keeps the key light's own (near-white) level; this adds the
@@ -858,7 +1071,8 @@ void main(){
     float bk = pow(clamp(dot(-Ls, V), 0.0, 1.0), 1.6);
     float wr = clamp(dot(N, -Ls) * 0.5 + 0.5, 0.0, 1.0);
     col += uGlowCol * uThroughGlow * (bk * 0.80 + wr * wr * 0.44)
-         * tx.a * mix(0.42, 1.0, vAo) * (1.0 - uNightMix);
+         * tx.a * mix(0.42, 1.0, vAo) * (1.0 - uNightMix)
+         * mix(0.22, 1.18, vShell);      // the SHELL glows; the interior does not
   }
 
   // stage 4 "Radiant": the petals themselves carry a little light
@@ -892,8 +1106,11 @@ void main(){
   vUv = (vec2(tx, ty) + uv) / uAtlasCols;
 
   float sizeMul = aInst2.z * mix(1.0, 0.46, isBud) * grow;
-  vec4 wp = modelMatrix * instanceMatrix * vec4(position * sizeMul, 1.0);
-  vec3 nrm = normalize(mat3(modelMatrix) * (mat3(instanceMatrix) * normal));
+  vec3 centre, nx, ny, nz;
+  cardFrame(centre, nx, ny, nz);
+  vec3 lp = position * sizeMul;
+  vec4 wp = vec4(centre + nx * lp.x + ny * lp.y + nz * lp.z, 1.0);
+  vec3 nrm = normalize(nx * normal.x + ny * normal.y + nz * normal.z);
   wp.xyz += treeSway(wp.xyz, aInst.y, aInst.x);
   float f = sin(uWindTime * 2.35 + aInst.x * 24.0) * 0.5
           + sin(uWindTime * 3.71 + aInst.x * 51.0) * 0.5;

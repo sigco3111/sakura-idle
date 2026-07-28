@@ -139,6 +139,9 @@ function buildSkeleton() {
     };
   }
 
+  /** Minimum tip radius per level (metres). Index by branch level. */
+  const MIN_R = { 1: 0.075, 2: 0.042, 3: 0.026, 4: 0.0165 };
+
   const LEVELS = [
     // level 1 — primary limbs
     { kids: 3, lenF: [0.62, 0.80], tilt: [0.60, 0.98], droop: 0.028, gnarl: 0.135, segs: 14, rF: [0.56, 0.70] },
@@ -174,10 +177,14 @@ function buildSkeleton() {
       d.y += rng.range(0.18, 0.56) * (level <= 2 ? 1 : 0.62);
       d.normalize();
       const len = parentLen * rng.range(L.lenF[0], L.lenF[1]);
-      const r0 = at.r * rng.range(L.rF[0], L.rF[1]);
+      // MIN_R: a twig thinner than ~26 mm rasterises as a 1-px dashed line of
+      // near-black bark and reads as dirt on the lens at the hero distance.
+      // Real sakura twigs are 4-8 mm, but they are also 25 m away here; the
+      // honest fix is width, not a thinner line.
+      const r0 = Math.max(MIN_R[level] * 1.35, at.r * rng.range(L.rF[0], L.rF[1]));
       const child = grow({
         start: at.p, dir: d, len, r0,
-        r1: Math.max(0.008, r0 * rng.range(0.24, 0.40) * (level >= 4 ? 0.45 : 1)),
+        r1: Math.max(MIN_R[level], r0 * rng.range(0.30, 0.46) * (level >= 4 ? 0.62 : 1)),
         level, segs: L.segs, droop: L.droop, gnarl: L.gnarl, dist0: at.dist,
       });
       child.junction = true;
@@ -222,7 +229,7 @@ function buildSkeleton() {
 const SIDES = { '-1': 7, 0: 22, 1: 14, 2: 10, 3: 8, 4: 6 };
 
 function buildWoodGeometry(skel, detail) {
-  const pos = [], nor = [], uvs = [], tan = [], sti = [], pha = [], cav = [];
+  const pos = [], nor = [], uvs = [], tan = [], sti = [], pha = [], cav = [], rad = [];
   const idx = [];
   const flareRng = makeRng(SEED ^ 0x5b1);
   // root buttresses: a handful of angular lobes on the lowest 1.9 units
@@ -305,6 +312,7 @@ function buildWoodGeometry(skel, detail) {
         sti.push(stiff);
         pha.push(br.phase);
         cav.push(jc);
+        rad.push(a.r);              // true wood radius: drives the thin-twig shading
       }
     }
 
@@ -328,6 +336,7 @@ function buildWoodGeometry(skel, detail) {
   g.setAttribute('aStiff', new THREE.Float32BufferAttribute(sti, 1));
   g.setAttribute('aPhase', new THREE.Float32BufferAttribute(pha, 1));
   g.setAttribute('aCav', new THREE.Float32BufferAttribute(cav, 1));
+  g.setAttribute('aRad', new THREE.Float32BufferAttribute(rad, 1));
   g.setIndex(idx);
   g.computeBoundingSphere();
   g.boundingSphere.radius *= 1.08;      // wind sway headroom
@@ -386,11 +395,15 @@ export default {
     const q = ctx.quality ?? {};
     const tier = q.tier ?? 'high';
 
-    const DETAIL = { ultra: 1.0, high: 1.0, medium: 0.78, low: 0.58 }[tier] ?? 0.85;
-    const CARDS = { ultra: 4300, high: 3100, medium: 1500, low: 560 }[tier] ?? 2600;
+    const DETAIL = { ultra: 1.0, high: 1.0, medium: 0.78, low: 0.62 }[tier] ?? 0.85;
+    const CARDS = { ultra: 4300, high: 3100, medium: 2000, low: 1350 }[tier] ?? 2600;
     const BARK_SIZE = { ultra: 1024, high: 768, medium: 512, low: 384 }[tier] ?? 768;
     const ATLAS_SIZE = { ultra: 2048, high: 2048, medium: 1024, low: 1024 }[tier] ?? 2048;
     const CARD_RES = tier === 'low' || tier === 'medium' ? 2 : 3;
+    // A lower tier is the SAME TREE with fewer, bigger blossom clusters — never
+    // a bare skeleton. Card area scales as 1/count so canopy COVERAGE is a
+    // tier-invariant, which is what the eye actually reads.
+    const CARD_SCALE = THREE.MathUtils.clamp(Math.sqrt(3100 / CARDS), 1.0, 1.62);
 
     /* ---- textures ------------------------------------------------- */
     const bark = buildBarkTextures({ size: BARK_SIZE, seed: SEED });
@@ -418,6 +431,13 @@ export default {
       uDetailScale: { value: 4.3 },
       uMossDir: { value: new THREE.Vector3(-0.32, 0.14, -1.0).normalize() },
       uWindAmp: { value: 0.92 },
+      // Young sakura twig wood: warm red-grey, far lighter than trunk bark, and
+      // thin enough that light wraps right around it.
+      uTwigCol: { value: col(0x8B6A58) },
+      // pixels per world unit at 1 m — lets the fragment shader know when a twig
+      // has collapsed to a 1-px line and must dissolve into the haze instead of
+      // rasterising as a hard near-black dash.
+      uPxScale: { value: 1600 },
     };
 
     // A ShaderMaterial with lights:true MUST carry the whole UniformsLib.lights
@@ -431,7 +451,12 @@ export default {
       vertexShader: TRUNK_VERT,
       fragmentShader: TRUNK_FRAG,
       lights: true,
-      side: THREE.FrontSide,
+      // DoubleSide, deliberately: an outer twig is a 4-6 sided tube barely one
+      // pixel across, and with backface culling the rasteriser drops half its
+      // fragments, so the branch arrives as a broken dashed line. Drawing the
+      // far wall too (and flipping N for it) makes twigs continuous. The trunk
+      // is a small part of the frame so the extra fill is free.
+      side: THREE.DoubleSide,
     });
     trunkMat.userData.noNpr = true;
 
@@ -494,8 +519,20 @@ export default {
     const aInst2 = new Float32Array(COUNT * 4);
     const aTint = new Float32Array(COUNT * 3);
 
-    // three sakura tints; the deep one only appears in the crown interior
-    const TINTS = [col(0xFFE6EF), col(0xFFD9E6), col(0xFFB6CE), col(0xEE8CAF), col(0xC25F86)];
+    // ART_BIBLE §3 — all FIVE sakura values, edge to deep interior. A canopy
+    // painted from two of them reads as one pale mass; the mid and deep values
+    // are what give the crown a readable inside.
+    const TINTS = [col(0xFFF2F6), col(0xFFD9E6), col(0xFFB6CE), col(0xEE8CAF), col(0xC25F86)];
+    /** cumulative pick weights per layer, outer -> inner */
+    const TINT_CDF = {
+      outer: [0.13, 0.45, 0.79, 0.95, 1.00],
+      mid: [0.04, 0.22, 0.55, 0.86, 1.00],
+      inner: [0.00, 0.05, 0.24, 0.61, 1.00],
+    };
+    // a small per-cluster temperature swing: real blossom varies warm (young,
+    // yellow-pink) to cool (older, blue-pink) across one tree.
+    const WARM = new THREE.Vector3(1.035, 0.982, 0.955);
+    const COOL = new THREE.Vector3(0.962, 0.986, 1.048);
 
     const mat4 = new THREE.Matrix4();
     const qt = new THREE.Quaternion(), qRoll = new THREE.Quaternion();
@@ -529,9 +566,13 @@ export default {
           .addScaledVector(jit, Ly.jitter);
         pp.lerp(cCentre, rng.range(Ly.lerpIn[0], Ly.lerpIn[1]));
 
-        // a few strays live outside the shell so the silhouette is never smooth
-        const stray = rng.next() < 0.045;
-        if (stray) pp.addScaledVector(out, rng.range(0.5, 1.5));
+        // Strays live outside the shell so the silhouette is never a smooth
+        // dome. ART_BIBLE §5: "every silhouette edge should have something
+        // breaking it up." Only the outer/mid layers throw them — an interior
+        // card flung outward would leave a hole in the middle of the crown.
+        const stray = Ly.key !== 'inner' && rng.next() < 0.105;
+        if (stray) pp.addScaledVector(out, rng.range(0.45, 2.15))
+          .addScaledVector(jit.set(rng.gauss(0, 0.55), rng.gauss(0, 0.75), rng.gauss(0, 0.55)), 1);
 
         // face outward, tilted by the host twig, plus a healthy random wobble
         nrm.copy(out).multiplyScalar(0.68)
@@ -545,7 +586,8 @@ export default {
         // NOTE: the instance matrix stays unit-scaled. The card's size lives in
         // aInst2.z and is applied in the vertex shader, because the bloom-stage
         // growth animation has to scale it per frame without rewriting matrices.
-        const size = rng.range(Ly.size[0], Ly.size[1]) * (stray ? 0.78 : 1);
+        const size = rng.range(Ly.size[0], Ly.size[1]) * (stray ? rng.range(0.46, 0.86) : 1)
+          * CARD_SCALE;
         scl.set(1, 1, 1);
         mat4.compose(pp, qt, scl);
         inst.setMatrixAt(w, mat4);
@@ -562,8 +604,10 @@ export default {
         aInst[w * 4 + 2] = order;
         aInst[w * 4 + 3] = rng.next();
 
-        // tile: mostly full clusters, sparser ones on the silhouette edge
-        const tile = (stray || rng.next() < 0.18)
+        // tile: mostly full clusters, sparser ones on the silhouette edge. A
+        // low tier has fewer cards, so it can afford fewer holey ones.
+        const sparseP = 0.20 / CARD_SCALE;
+        const tile = (stray || rng.next() < sparseP)
           ? ATLAS_SPARSE_FIRST + Math.floor(rng.next() * ATLAS_SPARSE_COUNT)
           : Math.floor(rng.next() * ATLAS_BLOSSOM_COUNT);
         aInst2[w * 4 + 0] = tile;
@@ -572,14 +616,17 @@ export default {
         aInst2[w * 4 + 3] = rng.next();
 
         // tint: bright on the outside, deep in the interior, always coherent
-        const ti = Ly.key === 'inner'
-          ? 2 + Math.floor(rng.next() * 2)
-          : (rng.next() < 0.10 ? 0 : (rng.next() < 0.50 ? 1 : (rng.next() < 0.88 ? 2 : 3)));
+        const cdf = TINT_CDF[Ly.key] ?? TINT_CDF.mid;
+        const u = rng.next();
+        let ti = 0; while (ti < 4 && u > cdf[ti]) ti++;
         const c = TINTS[ti];
-        const j2 = rng.range(0.93, 1.06);
-        aTint[w * 3 + 0] = c.r * j2;
-        aTint[w * 3 + 1] = c.g * j2;
-        aTint[w * 3 + 2] = c.b * j2;
+        const j2 = rng.range(0.86, 1.09);
+        const tw = rng.range(-1, 1);                       // -1 cool .. +1 warm
+        const hx = tw > 0 ? WARM : COOL;
+        const k = Math.abs(tw);
+        aTint[w * 3 + 0] = c.r * j2 * (1 + (hx.x - 1) * k);
+        aTint[w * 3 + 1] = c.g * j2 * (1 + (hx.y - 1) * k);
+        aTint[w * 3 + 2] = c.b * j2 * (1 + (hx.z - 1) * k);
       }
     }
     inst.count = w;
@@ -601,8 +648,25 @@ export default {
       uCoverage: { value: 1 },
       uBudMix: { value: STAGE.budMix[3] },
       uCanopyCentre: { value: cCentre.clone() },
+      // BUG FIX: CANOPY_COMMON has always declared uCanopyR and nobody supplied
+      // it, so vCrownT/vShell were computed against a zero radius (div by ~0)
+      // and the crown had no usable volume coordinates at all.
+      uCanopyR: { value: cRadius },
+      // The BEAUTY camera position, shared by reference with the depth material
+      // so the shadow pass billboards the cards exactly as the beauty pass does.
+      // (`cameraPosition` would be the light's position during the shadow pass.)
+      uEyePos: { value: new THREE.Vector3(0, 8, 24) },
       uAtlasCols: { value: ATLAS_COLS },
-      uNormalBlend: { value: 0.58 },
+      // less blend toward the crown's own sphere normal => individual clusters
+      // keep more of their own facing, which is where cluster-to-cluster
+      // value variation comes from.
+      uNormalBlend: { value: 0.44 },
+      uInterior: { value: 1.0 },
+      // Measured r3: the shadow-side crown came out rgb(150,103,120), HSL sat
+      // 0.18 — grey mauve, the muddy midtone ART_BIBLE §8 tell 9 forbids. Cutting
+      // green harder than red/blue walks the albedo down the palette's own
+      // #FFB6CE -> #EE8CAF -> #C25F86 line instead of desaturating it.
+      uDeepTint: { value: new THREE.Vector3(0.83, 0.43, 0.57) },
       uFlutter: { value: 0.035 },
       uWindAmp: { value: 1.05 },
     };
@@ -624,6 +688,8 @@ export default {
         uCoverage: canopyUniforms.uCoverage,
         uBudMix: canopyUniforms.uBudMix,
         uCanopyCentre: canopyUniforms.uCanopyCentre,
+        uCanopyR: canopyUniforms.uCanopyR,
+        uEyePos: canopyUniforms.uEyePos,
         uAtlasCols: canopyUniforms.uAtlasCols,
         uFlutter: canopyUniforms.uFlutter,
         uWindAmp: canopyUniforms.uWindAmp,
@@ -702,13 +768,27 @@ export default {
     }
     writeStage(stageT);
 
-    ctx.bus.on('bloom:stage', (p) => {
-      const s = THREE.MathUtils.clamp(Math.round(p?.stage ?? 0), 0, 5);
+    /**
+     * The game module drives this. Be liberal in what we accept: a bare number,
+     * `{stage}`, `{value}`, or a string — anything that is not a finite 0..5
+     * leaves the current stage alone rather than snapping the tree to winter.
+     */
+    function requestStage(p) {
+      const raw = (p && typeof p === 'object')
+        ? (p.stage ?? p.value ?? p.index ?? p.n)
+        : p;
+      const n = Number(raw);
+      if (!Number.isFinite(n)) return;
+      const s = THREE.MathUtils.clamp(Math.round(n), 0, 5);
       stage = s; stageTarget = s;
-    });
+    }
+    ctx.bus.on('bloom:stage', requestStage);
 
-    if (typeof window !== 'undefined' && window.__game) {
-      const sc = window.__game.scenarios;
+    /** Debug scenarios. window.__game exists before boot(), but register again
+     *  on game:ready so we survive any future re-ordering of main.js. */
+    function registerScenarios() {
+      const sc = (typeof window !== 'undefined' && window.__game?.scenarios) || null;
+      if (!sc) return;
       for (let s = 0; s <= 5; s++) {
         sc[`stage${s}`] = () => { stage = s; stageTarget = s; stageT = s; writeStage(s); };
       }
@@ -719,6 +799,8 @@ export default {
       // lazily — they register after this module boots).
       sc['tree-clean'] = () => { sc['petals-off']?.(); sc['postfx-no-dof']?.(); };
     }
+    registerScenarios();
+    ctx.bus.on('game:ready', registerScenarios);
 
     /* ---- clicks: keep it minimal, gameplay lives in 60-game.js ---- */
     ctx.bus.on('world:click', (e) => {
@@ -736,6 +818,15 @@ export default {
     return {
       object3D: group,
       update(dt) {
+        // pixels per world unit at 1 m: height / (2 tan(fovY/2)). Recomputed
+        // every frame because the camera rig animates the FOV.
+        const cam = ctx.camera;
+        if (cam) canopyUniforms.uEyePos.value.setFromMatrixPosition(cam.matrixWorld);
+        if (cam?.isPerspectiveCamera) {
+          const hPx = Math.max(1, (ctx.size?.h ?? 1080) * (ctx.size?.dpr ?? 1));
+          const t = Math.tan(THREE.MathUtils.degToRad(cam.fov) * 0.5);
+          trunkUniforms.uPxScale.value = hPx / (2 * Math.max(t, 1e-4));
+        }
         if (stageT !== stageTarget) {
           const k = 1 - Math.exp(-dt * 2.2);
           stageT += (stageTarget - stageT) * k;

@@ -472,17 +472,25 @@ export default {
         [0x2E2E2E, {}], [0x7F7F7F, {}], [0xF2F2F2, { specScale: 1.4 }],
         [0xEE4C86, {}], [0x6A5344, {}],
       ];
+      // WHERE these sit is the whole measurement. Requirements:
+      //   - in the hero frame and in FOCUS (a DOF-blurred ball is not a number),
+      //   - completely OUTSIDE the tree's cast shadow, so each ball carries a
+      //     clean lit / terminator / form-shadow sweep of its own. z = -14 is
+      //     14 m BEHIND the trunk, so the golden-hour key (azimuth ~+7,
+      //     elevation ~34) leaves the tree entirely before it could occlude
+      //     them; at z = +3 four of the five balls sat under a branch and read
+      //     brighter on their shadow flank than on their lit one.
       chart.forEach(([color, o], i) => {
         const m = new THREE.Mesh(ballGeo, createNprMaterial({ lightUniforms: L, color, ...o }));
-        m.position.set(-5.4 + i * 2.7, 4.1, 14);
+        m.position.set(-2.0 + i * 2.05, 3.4, -14.0);
         m.castShadow = m.receiveShadow = true;
         calib.add(m);
       });
       const slab = new THREE.Mesh(
-        new THREE.BoxGeometry(15.5, 0.4, 4.2),
+        new THREE.BoxGeometry(13.5, 0.4, 3.6),
         createNprMaterial({ lightUniforms: L, color: 0xBFB8AA, specScale: 0.3, rimScale: 0.35 }),
       );
-      slab.position.set(0.0, 2.9, 14);
+      slab.position.set(2.1, 2.2, -14.0);
       slab.receiveShadow = true;          // a flat receiver must not self-cast
       calib.add(slab);
       calib.userData.dispose = () => {

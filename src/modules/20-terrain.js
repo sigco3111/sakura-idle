@@ -132,12 +132,20 @@ function distToPath(x, z) {
 /* ------------------------------------------------------------------ *
  * Quality budgets
  * ------------------------------------------------------------------ */
+/**
+ * A lower tier must be the SAME SCENE with fewer instances — never a different
+ * one. So `grassR`, the material layers and the scatter families stay; only the
+ * counts move, and the grass shader widens each surviving blade
+ * (`uWidthComp`) so the sward still covers the ground at 18 k blades.
+ */
 const TIER = {
   ultra: { grid: 257, macro: 768, detail: 512, grassR: 70, chunks: 7, scatter: 1.0 },
   high: { grid: 225, macro: 640, detail: 512, grassR: 58, chunks: 7, scatter: 0.85 },
-  medium: { grid: 161, macro: 512, detail: 256, grassR: 42, chunks: 5, scatter: 0.6 },
-  low: { grid: 113, macro: 384, detail: 256, grassR: 20, chunks: 4, scatter: 0.38 },
+  medium: { grid: 161, macro: 512, detail: 256, grassR: 46, chunks: 5, scatter: 0.62 },
+  low: { grid: 129, macro: 448, detail: 256, grassR: 38, chunks: 5, scatter: 0.52 },
 };
+/** blades per m^2 the look was authored at (high: 140 000 over r = 58). */
+const REF_BLADE_DENSITY = 140000 / (Math.PI * 58 * 58);
 
 /* ------------------------------------------------------------------ *
  * Geometry builders
@@ -354,6 +362,12 @@ export default {
     /* ---------------- instanced grass ---------------- */
     const grassBlades = Math.max(2000, (ctx.quality?.grass ?? 60000) | 0);
     const grassR = tier.grassR;
+    // Fewer blades over the same ground => each surviving blade has to cover
+    // more of it, or `--q low` reads as a bald lime plane with spikes on it.
+    const widthComp = THREE.MathUtils.clamp(
+      Math.sqrt(REF_BLADE_DENSITY / (grassBlades / (Math.PI * grassR * grassR))), 1.0, 1.9);
+    // ...and shade it like the several blades it stands in for (see GRASS_FRAG).
+    const tipBias = THREE.MathUtils.clamp((widthComp - 1.0) / 0.9, 0, 1);
     const rng = makeRng(90210);
     const CLUMP = 7;
     const clumpCount = Math.ceil(grassBlades / CLUMP);
@@ -400,9 +414,11 @@ export default {
       if (rng.next() < bare * 0.85) continue;
 
       // clump archetype: mown sward / tall seed-head tuft / short sparse
+      // At a low blade budget the tall-wispy archetype is what reads as
+      // "scattered dark needles", so it gives way to the ordinary sward.
       const kind = rng.next();
       let clumpH, spread, nWant, widthLo, widthHi;
-      if (kind < 0.20) {                       // tall wispy tuft
+      if (kind < 0.20 * (1 - tipBias * 0.75)) { // tall wispy tuft
         clumpH = 0.52 + 0.34 * lush; spread = 0.06 + rng.next() * 0.09;
         nWant = 3 + Math.floor(rng.next() * 5); widthLo = 0.014; widthHi = 0.024;
       } else if (kind < 0.34) {                // short, cropped
@@ -444,12 +460,18 @@ export default {
         ...THREE.UniformsUtils.merge([THREE.UniformsLib.lights]),
         uCamPos,
         uFade: { value: new THREE.Vector3(20, 76, 0.58) },
+        // (nearFadeStart, nearFadeEnd, strength) — see GRASS_VERT. Without this
+        // the 'canopy' preset (eye at y = 1.2, i.e. inside the sward) is 60 %
+        // occluded by blades 60-140 px wide.
+        uNear: { value: new THREE.Vector3(0.95, 3.6, 1.0) },
+        uWidthComp: { value: widthComp },
         uBend: { value: 0.85 },
         uGrow: { value: 1 },
         uBaseCol: { value: C(0x3A5C31) },
         uMidCol: { value: C(0x5C8340) },
         uTipCol: { value: C(0x9CBE68) },
         uDryCol: { value: C(0xC2B478) },
+        uTipBias: { value: tipBias },
         ...L,
         ...WU,
       },

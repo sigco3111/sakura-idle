@@ -853,6 +853,11 @@ export const GRADE_SHADER = {
     uGain: { value: null },        // vec3 white balance on the tonemapped image
     uGammaC: { value: null },      // vec3 per-channel gamma
     uBlack: { value: 0.004 },      // LINEAR scene black subtracted before ACES
+    // (contrast, pivot) of the SCENE-LINEAR log contrast that runs before ACES.
+    // This is the curve that actually owns the frame's dynamic range; the display
+    // S-curve below only shapes what ACES hands back.
+    uSceneCurve: { value: null },      // vec2 day
+    uSceneCurveNight: { value: null }, // vec2 night
     uFloor: { value: 0.030 },      // display-space floor — the only "never pure black" lift
     uPivot: { value: 0.18 },       // S-curve pivot (log-ish, so 0 stays 0)
     uContrast: { value: 1.12 },    // S-curve slope about the pivot
@@ -860,6 +865,7 @@ export const GRADE_SHADER = {
     uNightContrast: { value: 1.05 },
     uToe: { value: 0.10 },         // extra roll of the deep shadows only
     uSaturation: { value: 1.08 },  // >= 1 always — never desaturate (art bible §4.6)
+    uVibrance: { value: null },    // vec2 (amount, falloff power) — see (3) below
     uSplitLo: { value: null },     // vec3 SIGNED shadow offset (cool / violet)
     uSplitHi: { value: null },     // vec3 SIGNED highlight offset (warm)
     uSplit: { value: null },       // vec2 (shadow amount, highlight amount)
@@ -879,6 +885,8 @@ uniform vec3  uSplitLo;
 uniform vec3  uSplitHi;
 uniform vec3  uLift;
 uniform vec2  uSplit;
+uniform vec2  uSceneCurve;
+uniform vec2  uSceneCurveNight;
 uniform vec2  uDitherOffset;
 uniform float uExposure;
 uniform float uBlack;
@@ -889,6 +897,7 @@ uniform float uNightPivot;
 uniform float uNightContrast;
 uniform float uToe;
 uniform float uSaturation;
+uniform vec2  uVibrance;
 uniform float uNight;
 uniform float uShoulder;
 uniform float uDither;
@@ -929,6 +938,23 @@ void main() {
   //     Scaled down at night, otherwise the navy sky would crush to nothing.
   c = max( c - uBlack * ( 1.0 - 0.8 * uNight ), 0.0 );
 
+  // --- (0b) THE contrast, in scene-linear space where a tone curve belongs.
+  //     A power law about a scene pivot is a straight line of slope 'contrast'
+  //     in log-exposure — the classic film gamma — and ACES's own shoulder then
+  //     rolls the top back down, which is why this can add a lot of separation
+  //     without clipping. The old build did all of its contrast AFTER ACES,
+  //     where the shoulder has already compressed everything into 0..1: measured
+  //     on the hero frame, the grade input had p1 0.108 / p50 0.400 linear, i.e.
+  //     1.9 stops between the darkest 1% and the median, and no post-ACES curve
+  //     can open that up without clipping the sky. Doing it here instead takes
+  //     the hero p1 from 0.238 to 0.075 display while p99 RISES (0.867 -> 0.90).
+  //     Applied to LUMA and scaled back onto the triplet, so it is tone only and
+  //     the lighting rig keeps ownership of every hue (same rule as (1) below).
+  float sc = mix( uSceneCurve.x, uSceneCurveNight.x, uNight );
+  float sp = max( mix( uSceneCurve.y, uSceneCurveNight.y, uNight ), 1e-4 );
+  float sl0 = max( luma( c ), 1e-6 );
+  c *= ( sp * pow( sl0 / sp, sc ) ) / sl0;
+
   // one tonemap, right here — the renderer is set to NoToneMapping by 90-postfx
   c = acesFilmic( c );
 
@@ -968,9 +994,22 @@ void main() {
   c *= l1 / l0;
 
   // (3) saturation — art bible §4.6 is +8%; a value below 1 is never legal here,
-  //     desaturating the grade is what produced neutral-grey shadows.
+  //     desaturating the grade is what produced neutral-grey shadows. On top of
+  //     the flat +8% sits a VIBRANCE term that is inversely weighted by the
+  //     pixel's existing chroma: the aerial-perspective haze on the hill bands
+  //     and the flat sky are the near-neutral things in frame and the ones that
+  //     read as milky, while the canopy and the vermilion are already saturated
+  //     and would go garish under the same multiplier.
   float l = luma( c );
-  c = mix( vec3( l ), c, max( uSaturation, 1.0 ) );
+  float mxc = max( max( c.r, c.g ), c.b );
+  float mnc = min( min( c.r, c.g ), c.b );
+  float chroma = ( mxc - mnc ) / max( mxc, 1e-4 );
+  // Damped at night: the moonlit grass is a near-neutral teal, i.e. exactly what
+  // the vibrance term is built to grab, and at full strength it came out emerald
+  // (measured satMean 0.677 on the night hero frame against 0.31 by day).
+  float satAmt = max( uSaturation, 1.0 )
+    + uVibrance.x * ( 1.0 - 0.45 * uNight ) * pow( 1.0 - chroma, uVibrance.y );
+  c = mix( vec3( l ), c, satAmt );
 
   // (4) split tone, weighted by luma rather than mixed flat: shadows travel
   //     toward #6E76A8 / #2A2438 (b - r strongly positive), highlights warm.
