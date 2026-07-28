@@ -116,7 +116,7 @@ const vec3 NPR_TRANSMIT_TINT = vec3(1.000, 0.768, 0.838);
   // the albedo-luminance compensation in nprShadowLevel(). Calibrated against
   // the 0.50-grey ball in 50-smoke.js measured in the COMPOSITED, GRADED png:
   // ART_BIBLE §2 wants the shadow side at ~0.55 of the lit side's luminance.
-  #define NPR_SHADOW_LEVEL 0.99
+  #define NPR_SHADOW_LEVEL 0.55
 #endif
 #ifndef NPR_SHADOW_CHROMA
   // How far the shadowed albedo's SATURATION is pulled toward the tint's. Not a
@@ -676,23 +676,23 @@ const KEYS = [
   { t: 0.135, sun: 0xFFDCC2, sunInt: 1.90, sky: 0x6E7FB8, skyInt: 0.80, ground: 0x3E3440, groundInt: 0.60,
     shadow: 0x5E6A9E, fog: 0xD9C3D2, fogD: 0.0058, zenith: 0x3E6BB0, horizon: 0xF3C4D0,
     fill: 0x8FA6D8, fillInt: 0.42, rim: 0xFFD2B4, rimInt: 0.85, hemi: 0.85,
-    elev: 5, azim: 25, night: 0.10, exp: 1.06, env: 0.85 },
+    elev: 8, azim: 25, night: 0.10, exp: 1.06, env: 0.85 },
   { t: 0.240, sun: 0xFFF0DC, sunInt: 3.00, sky: 0x7EA0D8, skyInt: 0.95, ground: 0x4E5240, groundInt: 0.70,
     shadow: 0x6E76A8, fog: 0xBCD3EA, fogD: 0.0038, zenith: 0x4E86D4, horizon: 0xCFE0F2,
     fill: 0x9FBCE8, fillInt: 0.50, rim: 0xFFF0D8, rimInt: 0.60, hemi: 1.00,
-    elev: 22, azim: 70, night: 0.00, exp: 1.00, env: 1.00 },
+    elev: 34, azim: 70, night: 0.00, exp: 1.00, env: 1.00 },
   { t: 0.500, sun: 0xFFF8EE, sunInt: 3.30, sky: 0x8FB0E2, skyInt: 1.00, ground: 0x585C46, groundInt: 0.75,
     shadow: 0x7A82AE, fog: 0xC6DAEE, fogD: 0.0030, zenith: 0x4E86D4, horizon: 0xD8E6F5,
     fill: 0xA8C4EE, fillInt: 0.50, rim: 0xFFF6E8, rimInt: 0.50, hemi: 1.05,
-    elev: 38, azim: 115, night: 0.00, exp: 0.98, env: 1.05 },
+    elev: 58, azim: 115, night: 0.00, exp: 0.98, env: 1.05 },
   { t: 0.665, sun: 0xFFE6CE, sunInt: 2.95, sky: 0x7C96CE, skyInt: 0.82, ground: 0x5A4A3C, groundInt: 0.75,
     shadow: 0x6470A8, fog: 0xDCBFA6, fogD: 0.0048, zenith: 0x4574B8, horizon: 0xF2CBA0,
     fill: 0x92A8DE, fillInt: 0.42, rim: 0xFFD9A8, rimInt: 1.00, hemi: 0.92,
-    elev: 26, azim: 152, night: 0.00, exp: 1.02, env: 0.95 },
+    elev: 46, azim: 152, night: 0.00, exp: 1.02, env: 0.95 },
   { t: 0.765, sun: 0xFFB683, sunInt: 2.05, sky: 0x64709E, skyInt: 0.70, ground: 0x54382E, groundInt: 0.70,
     shadow: 0x5A4A78, fog: 0xE8A57E, fogD: 0.0062, zenith: 0x3A4E86, horizon: 0xF5A86E,
     fill: 0x7A88C0, fillInt: 0.38, rim: 0xFFB070, rimInt: 1.05, hemi: 0.85,
-    elev: 4.0, azim: 182, night: 0.16, exp: 1.06, env: 0.80 },
+    elev: 8.0, azim: 182, night: 0.16, exp: 1.06, env: 0.80 },
   { t: 0.840, sun: 0xD5A3B4, sunInt: 1.00, sky: 0x424E80, skyInt: 0.55, ground: 0x2E2836, groundInt: 0.60,
     shadow: 0x35375E, fog: 0x6B5A78, fogD: 0.0070, zenith: 0x22305C, horizon: 0x8A6A82,
     fill: 0x5E6A98, fillInt: 0.30, rim: 0xD8A0C0, rimInt: 0.70, hemi: 0.70,

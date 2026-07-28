@@ -185,7 +185,7 @@ void main(){
   float spec = ( 0.14 * wLush + 0.16 * wDry + 0.34 * wEar + 0.20 * wMos ) / sum
              + pet * 0.20;
 
-  float sm = getShadowMask();
+  float sm = nprShadowMaskSoft( vWorldPos );
   nprSetWorldPos( vWorldPos );
   vec3 Ng = nprGeoNormal( vWorldPos, N0 );
   vec3 col = nprShadeN( albedo, N, Ng, V, sm,
@@ -301,7 +301,7 @@ void main(){
   float dist = length( toCam );
   vec3 V = toCam / max( dist, 1e-4 );
 
-  float sm = getShadowMask();
+  float sm = nprShadowMaskSoft( vWorldPos );
   nprSetWorldPos( vWorldPos );
   float ao = clamp( vAO * ( 0.52 + 0.48 * t ), 0.0, 1.0 );
   // thin at the tip => more light bleeds THROUGH => backlit blades glow
@@ -385,7 +385,7 @@ void main(){
   vec3 N = normalize( N0 + vec3( ( n2 - 0.5 ) * 0.7, 0.0, ( n1 - 0.5 ) * 0.7 )
                           * ( 1.0 - smoothstep( 6.0, 30.0, dist ) ) * 0.45 );
 
-  float sm = getShadowMask();
+  float sm = nprShadowMaskSoft( vWorldPos );
   nprSetWorldPos( vWorldPos );
   float ao = 1.0 - crev * 0.35;
   vec3 col = nprShadeN( albedo, N, nprGeoNormal( vWorldPos, N0 ), V, sm,

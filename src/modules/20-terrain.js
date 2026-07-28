@@ -338,6 +338,7 @@ export default {
       vertexShader: GROUND_VERT,
       fragmentShader: GROUND_FRAG,
       lights: true,
+      defines: { NPR_HAS_SHADOWMAP: '' },
       fog: false,
     });
     const groundGeo = buildGroundGeometry(tier.grid, R_TERRAIN);
@@ -455,6 +456,7 @@ export default {
       vertexShader: GRASS_VERT,
       fragmentShader: GRASS_FRAG,
       lights: true,
+      defines: { NPR_HAS_SHADOWMAP: '' },
       fog: false,
       side: THREE.DoubleSide,
     });
@@ -523,6 +525,7 @@ export default {
         vertexShader: STONE_VERT,
         fragmentShader: STONE_FRAG,
         lights: true,
+      defines: { NPR_HAS_SHADOWMAP: '' },
         fog: false,
       });
       disposables.push(m);

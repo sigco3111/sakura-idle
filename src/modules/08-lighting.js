@@ -124,6 +124,7 @@ export default {
     const UPV = new THREE.Vector3(0, 1, 0);
     const _right = new THREE.Vector3(), _up = new THREE.Vector3(), _fwd = new THREE.Vector3();
     const _snap = new THREE.Vector3(), _tmpSphere = new THREE.Sphere();
+    const _land = new THREE.Vector3(), _mid = new THREE.Vector3();
     const casterCentre = new THREE.Vector3(0, 6, 0);
     let casterRadius = 12;
     let shadowTexel = (SHADOW_HALF_MIN * 2) / mapSize;
@@ -157,7 +158,20 @@ export default {
     }
 
     function fitShadow(keyDir) {
-      const half = THREE.MathUtils.clamp(casterRadius + SHADOW_PAD, SHADOW_HALF_MIN, SHADOW_HALF_MAX);
+      // The frustum must cover not only the CASTERS but the ground their shadow
+      // LANDS on. Fitted to the tree alone, a 14-unit canopy at a 26 deg sun threw
+      // its shadow to x=+18.8 — outside a +/-16 box, so the receiving ground was
+      // never in the shadow map and silently rendered fully lit. Extend the box
+      // along the shadow direction and recentre on the caster/landing midpoint.
+      const drop = Math.max(casterCentre.y, 0.001);
+      // keyDir points from the scene TOWARD the key light, so the shadow runs -keyDir.
+      const tHit = drop / Math.max(keyDir.y, 0.12);
+      _land.copy(casterCentre).addScaledVector(keyDir, -tHit);
+      _land.y = 0;
+      const throwLen = casterCentre.distanceTo(_land);
+
+      const half = THREE.MathUtils.clamp(
+        casterRadius + throwLen * 0.5 + SHADOW_PAD, SHADOW_HALF_MIN, SHADOW_HALF_MAX);
       const texel = (half * 2) / mapSize;
       shadowTexel = texel;
 
@@ -166,9 +180,11 @@ export default {
       if (_right.lengthSq() < 1e-8) _right.set(1, 0, 0); else _right.normalize();
       _up.crossVectors(_fwd, _right).normalize();
 
+      // centre between the casters and where their shadow falls
+      _mid.copy(casterCentre).add(_land).multiplyScalar(0.5);
       // snap the frustum centre onto the texel grid in the light's own lateral basis
-      const cx = casterCentre.dot(_right), cy = casterCentre.dot(_up);
-      _snap.copy(casterCentre)
+      const cx = _mid.dot(_right), cy = _mid.dot(_up);
+      _snap.copy(_mid)
         .addScaledVector(_right, Math.round(cx / texel) * texel - cx)
         .addScaledVector(_up, Math.round(cy / texel) * texel - cy);
 
