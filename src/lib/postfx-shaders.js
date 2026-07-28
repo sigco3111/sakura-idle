@@ -241,6 +241,7 @@ export const RAY_MASK_SHADER = {
     uFar: { value: 900.0 },
     uTexelFull: { value: null },
     uThreshold: { value: 0.5 },
+    uFloor: { value: 0.3 },
     uSunUV: { value: null },
     uSunReach: { value: null },  // vec2 (full-strength radius, zero radius)
     uAspect: { value: 1.0 },
@@ -254,6 +255,7 @@ uniform vec2  uTexelFull;
 uniform vec2  uSunUV;
 uniform vec2  uSunReach;
 uniform float uThreshold;
+uniform float uFloor;
 uniform float uAspect;
 
 void main() {
@@ -270,21 +272,26 @@ void main() {
   sky *= 0.25;
   col *= 0.25;
 
-  // Any *visible sky* near the sun seeds a shaft — a hard luminance threshold
-  // makes the effect vanish whenever the sky is not blindingly bright, which is
-  // most of the day. Brightness modulates, it does not gate.
-  // Brightness must DOMINATE, not merely modulate: a large flat floor over every
-  // sky pixel radial-blurs into a uniform veil over the whole upper frame, which
-  // is a fog bug wearing a god-ray costume. The floor is only there so a shaft
-  // still has a visible root in dimmer sky right next to the sun.
+  // Any *visible sky* seeds a shaft, weighted by how bright it is. Brightness
+  // must DOMINATE, not merely modulate: a large flat floor over every sky pixel
+  // radial-blurs into a uniform veil over the whole upper frame, which is a fog
+  // bug wearing a god-ray costume. The floor is only there so a shaft still has
+  // a visible root in dimmer sky right next to the sun.
   float l = luma( col );
-  float m = sky * ( 0.10 + 0.90 * smoothstep( uThreshold, uThreshold * 2.0 + 0.35, l ) )
-          + ( 1.0 - sky ) * 0.22 * smoothstep( 1.2, 3.4, l );
+  float m = sky * ( uFloor + ( 1.0 - uFloor ) * smoothstep( uThreshold, uThreshold * 2.6, l ) )
+          + ( 1.0 - sky ) * 0.16 * smoothstep( 1.2, 3.4, l );
 
-  // Only sky *near the sun* seeds a shaft. Without this a uniformly bright sky
-  // radial-blurs into a flat global glow instead of readable light shafts.
+  // Only sky *near the sun* seeds a shaft, and "near" has to be genuinely tight.
+  // The radial blur of a field that is roughly constant over the whole frame is
+  // that same constant — which is exactly what the old reach of (2.10, 4.20)
+  // produced: measured, the ray buffer came out at 0.09 +/- 0.015 everywhere,
+  // i.e. a flat wash with no shaft structure anywhere in it. A seed that is a
+  // BLOB around the source and ~0 elsewhere is what makes the march produce
+  // streaks that radiate, with occluders carving the gaps between them.
+  // Squared falloff so the blob has a bright core and a long faint skirt.
   float dSun = length( ( vUv - uSunUV ) * vec2( uAspect, 1.0 ) );
-  m *= 1.0 - smoothstep( uSunReach.x, uSunReach.y, dSun );
+  float reach = 1.0 - smoothstep( uSunReach.x, uSunReach.y, dSun );
+  m *= reach * reach;
 
   gl_FragColor = vec4( m, m, m, 1.0 );
 }`,
@@ -300,6 +307,7 @@ export const RAY_BLUR_SHADER = {
     uDensity: { value: 0.85 },
     uDecay: { value: 0.955 },
     uJitter: { value: 0.0 },
+    uShape: { value: 1.0 },
   },
   vertexShader: FS_VERT,
   fragmentShader: /* glsl */`
@@ -309,6 +317,7 @@ uniform vec2  uSunUV;
 uniform float uDensity;
 uniform float uDecay;
 uniform float uJitter;
+uniform float uShape;
 
 void main() {
   vec2 delta = ( uSunUV - vUv ) * uDensity / float( RAY_TAPS );
@@ -329,6 +338,12 @@ void main() {
   // sits. Normalise by the weight that actually landed inside, floored at 30% of
   // the total so a single surviving tap can never spike.
   float r = acc / max( wsum, 0.30 * wtot );
+  // Shaft contrast. The march is an AVERAGE along the ray, so a ray that is half
+  // blocked reads at half strength and the gaps never go properly dark — the
+  // effect then looks like haze rather than like light through a canopy. A gamma
+  // above 1 pushes the partially-occluded rays down and leaves the clear ones
+  // alone, which is what separates a shaft from its neighbour.
+  r = pow( max( r, 0.0 ), uShape );
   gl_FragColor = vec4( r, r, r, 1.0 );
 }`,
 };
@@ -616,6 +631,7 @@ export const FOCUS_SHADER = {
     uRate: { value: 0.07 },
     uFallback: { value: 24.0 },
     uTarget: { value: 0.0 },
+    uClamp: { value: null },   // vec2 (min, max) legal focus distance for the probe
   },
   vertexShader: FS_VERT,
   fragmentShader: /* glsl */`
@@ -623,30 +639,63 @@ ${CHUNK_COMMON}
 ${CHUNK_DEPTH}
 uniform sampler2D tPrev;
 uniform vec2  uCenter;
+uniform vec2  uClamp;
 uniform float uRate;
 uniform float uFallback;
 uniform float uTarget;
 
+vec2 focusOffset( int i ) {
+  if ( i == 1 ) return vec2(  0.030,  0.000 );
+  if ( i == 2 ) return vec2( -0.030,  0.000 );
+  if ( i == 3 ) return vec2(  0.000,  0.040 );
+  if ( i == 4 ) return vec2(  0.000, -0.040 );
+  if ( i == 5 ) return vec2(  0.022,  0.030 );
+  if ( i == 6 ) return vec2( -0.022,  0.030 );
+  if ( i == 7 ) return vec2(  0.022, -0.030 );
+  if ( i == 8 ) return vec2( -0.022, -0.030 );
+  return vec2( 0.0 );
+}
+
 void main() {
-  // nearest hit in a small cross at the frame centre — the hero subject
+  // Pass 1: mean and nearest hit over a small cross at the frame centre.
   float near = 1e9;
   float acc = 0.0, n = 0.0;
   for ( int i = 0; i < 9; i ++ ) {
-    vec2 o = vec2( 0.0 );
-    if ( i == 1 ) o = vec2(  0.030,  0.000 );
-    if ( i == 2 ) o = vec2( -0.030,  0.000 );
-    if ( i == 3 ) o = vec2(  0.000,  0.040 );
-    if ( i == 4 ) o = vec2(  0.000, -0.040 );
-    if ( i == 5 ) o = vec2(  0.022,  0.030 );
-    if ( i == 6 ) o = vec2( -0.022,  0.030 );
-    if ( i == 7 ) o = vec2(  0.022, -0.030 );
-    if ( i == 8 ) o = vec2( -0.022, -0.030 );
-    float d = rawDepth( uCenter + o );
+    float d = rawDepth( uCenter + focusOffset( i ) );
     if ( d < SKY_DEPTH ) { float z = -viewZ( d ); near = min( near, z ); acc += z; n += 1.0; }
   }
-  // 70% toward the nearest hit, 30% the mean: locks onto the subject but does not
-  // snap to a single stray twig pixel.
-  float probe = n > 0.0 ? mix( acc / n, near, 0.7 ) : uFallback;
+  float mean = n > 0.0 ? acc / n : uFallback;
+
+  // Pass 2: reject FOREGROUND CLUTTER. A "nearest hit wins" probe is the wrong
+  // rule for this composition — measured in the canopy preset, a blade of
+  // instanced grass 2 m from the lens sat on the frame centre and dragged focus
+  // from the tree (8-15 m) down to 2.1 m, which put the entire subject outside
+  // the far edge of the band. Anything closer than 40% of the mean hit distance
+  // is treated as something the camera is looking THROUGH, not AT.
+  float cut = 0.40 * mean;
+  float acc2 = 0.0, n2 = 0.0, near2 = 1e9;
+  for ( int i = 0; i < 9; i ++ ) {
+    float d = rawDepth( uCenter + focusOffset( i ) );
+    if ( d < SKY_DEPTH ) {
+      float z = -viewZ( d );
+      if ( z > cut ) { acc2 += z; n2 += 1.0; near2 = min( near2, z ); }
+    }
+  }
+  float mean2 = n2 > 0.0 ? acc2 / n2 : mean;
+  float near3 = n2 > 0.0 ? near2 : near;
+
+  // 45% toward the nearest surviving hit, 55% their mean: locks onto the subject
+  // without snapping to one stray twig pixel.
+  float probe = n > 0.0 ? mix( mean2, near3, 0.45 ) : uFallback;
+  // Bound the probe to the composition. A depth probe is only as good as the depth
+  // buffer it reads, and it cannot tell "there is nothing at the frame centre"
+  // from "the thing at the frame centre did not write depth". Measured at the
+  // MEDIUM tier, where the canopy stops writing depth: the probe resolved to
+  // 158.9 m (the distant hills) instead of 25.2 m, which put the whole frame in
+  // the near field and blurred the entire image. uClamp is derived on the CPU
+  // from the camera and CONTRACT's world convention (trunk base at the origin),
+  // so a bad depth read can now only shift focus, never lose the subject.
+  probe = clamp( probe, uClamp.x, uClamp.y );
   float target = uTarget > 0.0 ? uTarget : probe;
   float prev = texture2D( tPrev, vec2( 0.5 ) ).r;
   float f = prev > 0.01 ? mix( prev, target, uRate ) : target;
@@ -888,22 +937,35 @@ void main() {
   c = pow( c, 1.0 / uGammaC );
 
   // --- the grade proper, in this exact order -------------------------------
-  // (1) S-curve contrast about a pivot below mid grey. A POWER law, not a line:
-  //     the old affine form ( c - p ) * k + p clamped everything below
-  //     p - p/k to zero, which flattened the whole night frame into one value
-  //     and stripped every shadow of its chroma. This form fixes 0 -> 0 and
-  //     the pivot -> the pivot, and only ever changes local slope.
+  // (1) S-curve contrast about a pivot below mid grey, applied to LUMINANCE and
+  //     then scaled back onto the triplet. A POWER law, not a line: it fixes
+  //     0 -> 0 and pivot -> pivot and only ever changes local slope.
+  //
+  //     Why on luma and not per channel: a per-channel power law with an exponent
+  //     above 1 does not only add contrast, it multiplies CHROMA in the shadows —
+  //     the small channel is crushed far harder than the large one. Measured on
+  //     the hero frame, a shadowed patch of grass the rig delivered as
+  //     (40,47,72) came out of the old per-channel curve as (14,30,72): the red
+  //     channel had lost 65% of its value, i.e. the grade had turned a cool green
+  //     shadow into electric navy. Scaling the triplet by luma_out/luma_in leaves
+  //     every hue and every chroma ratio exactly as the lighting rig authored it
+  //     (ART_BIBLE §2 owns shadow colour; the grade only owns tone), and leaves
+  //     saturation to the one dial that is supposed to control it, uSaturation.
+  //
   // At night every value in frame sits far BELOW a daylight pivot, where a power
   // law is a pure multiplicative crush — it takes range out of the one phase that
   // has the least to spare. The pivot and slope therefore travel with uNightMix.
   float pv = mix( uPivot, uNightPivot, uNight );
   float ct = mix( uContrast, uNightContrast, uNight );
-  c = pv * pow( max( c, 1e-5 ) / pv, vec3( ct ) );
+  float l0 = max( luma( c ), 1e-5 );
+  float l1 = pv * pow( l0 / pv, ct );
 
   // (2) toe: an extra, gentle roll of the DEEP shadows only, so the low end has
   //     somewhere to go. Relaxed at night for the same reason as the black point.
-  float lo = smoothstep( pv, 0.0, luma( c ) );
-  c *= 1.0 - uToe * ( 1.0 - 0.8 * uNight ) * lo * 0.42;
+  float lo = smoothstep( pv, 0.0, l1 );
+  l1 *= 1.0 - uToe * ( 1.0 - 0.8 * uNight ) * lo * 0.42;
+
+  c *= l1 / l0;
 
   // (3) saturation — art bible §4.6 is +8%; a value below 1 is never legal here,
   //     desaturating the grade is what produced neutral-grey shadows.

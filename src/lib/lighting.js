@@ -26,6 +26,22 @@
  *
  * Or simply:
  *   const m = createNprMaterial({ lightUniforms: L, color: 0xffb6ce, translucency: 1 });
+ *
+ * SHADOWS. createNprMaterial() and applyNprToStandard() automatically use
+ * nprShadowMaskSoft() — a 16-tap Vogel filter whose radius grows with the
+ * receiver-to-blocker distance, so a cast shadow has a real penumbra that is
+ * tight at the contact point and wide out under the canopy. If you write your
+ * own ShaderMaterial and include three's <shadowmap_pars_fragment> +
+ * <shadowmask_pars_fragment>, add `defines: { NPR_HAS_SHADOWMAP: '' }` and call
+ * `nprShadowMaskSoft(worldPos)` instead of `getShadowMask()` to get the same
+ * penumbra. Plain getShadowMask() still works and still composites correctly —
+ * it is just a narrower filter.
+ *
+ * DEBUG. `window.__game.scenarios.calib` (and `calib-raw` / `calib-dawn` / …)
+ * shows the lighting rig's own grey/white/pink/bark calibration balls on a
+ * shadow-catcher slab in front of the tree. Use it to MEASURE the model rather
+ * than eyeball it; ART_BIBLE §2 wants the shadow side of the 0.50 grey ball at
+ * ~0.55 of the lit side's luminance in the FINAL graded frame.
  */
 import * as THREE from 'three';
 import { GLSL_NOISE } from './noise.js';
@@ -53,6 +69,13 @@ uniform float uExposure;      // scene exposure multiplier
 //   .z  = dapple amplitude (0 = off)
 //   .w  = global gust multiplier on the key, ~0.94..1.06  (0 => treated as 1)
 uniform vec4  uDapple;
+// Soft-shadow / penumbra control, written by 08-lighting.js every frame.
+//   .xyz = world-space centre of the shadow-CASTING set (the tree, props, …)
+//   .w   = shadow-map UV units per world unit  (1 / ortho box extent)
+// A receiver's distance to .xyz measured ALONG the key is a cheap stand-in for
+// "how far is the blocker", which is what sets penumbra width. See
+// nprShadowMaskSoft().
+uniform vec4  uShadowSoft;
 #endif
 `;
 
@@ -74,37 +97,70 @@ const vec3 NPR_TRANSMIT_TINT = vec3(1.000, 0.768, 0.838);
         extra uniform just to get the house look. Override with defines:
           defines: { NPR_SHADOW_HUE: '0.30' }                                */
 #ifndef NPR_SHADOW_HUE
-  // how far the shadowed albedo's HUE is dragged onto uShadowTint.
-  // 0.84 puts a green grass shadow at ~232 deg (cool violet-blue) as ART_BIBLE
-  // §2 demands. Petals want less (they must stay pink), stone wants more.
-  #define NPR_SHADOW_HUE 0.84
+  // How much of the ALLOWED hue rotation toward uShadowTint is taken (0..1).
+  // The rotation itself is hard-capped at NPR_SHADOW_HUE_MAX degrees, so this
+  // dial can sit near 1 without a shadow ever losing its own hue identity.
+  #define NPR_SHADOW_HUE 0.95
+#endif
+#ifndef NPR_SHADOW_HUE_MAX
+  // Hard cap, in DEGREES, on how far a shadowed albedo's hue may rotate toward
+  // uShadowTint. This is the fix for the old model: it rotated the hue all the
+  // way onto the tint, so shadowed grass became navy and shadowed bark became
+  // navy — ART_BIBLE §2 requires the surface to stay recognisably its own
+  // colour while shifting cool. A near-NEUTRAL albedo is exempt (it has no hue
+  // of its own to protect) and takes the tint's hue outright.
+  #define NPR_SHADOW_HUE_MAX 22.0
 #endif
 #ifndef NPR_SHADOW_LEVEL
   // Linear HDR level of the shadow diffuse as a fraction of albedo*key, before
-  // the albedo-luminance compensation in nprShadowLevel(). Tuned by measuring
-  // the composited PNG: it lands the grass cast shadow at 0.55x the lit grass
-  // HSL-L, which is the ratio ART_BIBLE §2 asks for.
-  // Raised from 0.260 after measuring the composited frame again: the grade in
-  // front of this had moved and a grass cast shadow was landing at
-  // (6,21,73) — a 0.19 luminance ratio with an all-but-extinguished red
-  // channel, i.e. ART_BIBLE §8.4. The model has to deliver a shadow that
-  // survives a contrasty grade, not one that only works under a specific one.
-  #define NPR_SHADOW_LEVEL 0.395
+  // the albedo-luminance compensation in nprShadowLevel(). Calibrated against
+  // the 0.50-grey ball in 50-smoke.js measured in the COMPOSITED, GRADED png:
+  // ART_BIBLE §2 wants the shadow side at ~0.55 of the lit side's luminance.
+  #define NPR_SHADOW_LEVEL 0.99
 #endif
 #ifndef NPR_SHADOW_CHROMA
-  // saturation gain on the shadow tint's chroma. mix(1, chroma, k) is exactly
-  // luminance-preserving (chroma has unit luma by construction), so this is a
-  // pure saturation dial. > 1 because the post grade measurably desaturates
-  // shadows and the frame the critic scores is the graded one.
-  // 0.88, not 1.05: #6E76A8 is a DESATURATED blue-violet (R:B = 0.65) and an
-  // over-driven chroma plus ACES was collapsing the shadow's red channel to
-  // single digits — an electric navy, not a hue-shifted grass shadow.
-  #define NPR_SHADOW_CHROMA 0.74
+  // How far the shadowed albedo's SATURATION is pulled toward the tint's. Not a
+  // gain: a vivid albedo desaturates slightly, a neutral one picks up the
+  // tint's chroma, and nothing is pushed past the tint's own (fairly modest)
+  // saturation. Over-driving this is what collapsed the red channel of every
+  // shadow into an electric navy under ACES.
+  #define NPR_SHADOW_CHROMA 0.62
 #endif
 #ifndef NPR_AMBIENT_SHADOW
-  // an occluded point sees less sky. Without this the ambient term alone lifts
-  // cast shadows back above the 0.55 target and washes their hue back to albedo.
-  #define NPR_AMBIENT_SHADOW 0.40
+  // an occluded point sees less sky. Below ~0.45 the cast shadow stops reading
+  // as shadowed GROUND and starts reading as a painted-on dark decal.
+  #define NPR_AMBIENT_SHADOW 0.38
+#endif
+#ifndef NPR_SHADOW_CORE
+  // Depth of the 4th "deep interior" plateau in the very core of a FORM shadow,
+  // as a multiplier on the shadow level. Cast shadows never get it — that is
+  // what turned the tree's ground shadow into an opaque lozenge.
+  #define NPR_SHADOW_CORE 0.86
+#endif
+#ifndef NPR_PENUMBRA_SLOPE
+  // World metres of penumbra per metre of blocker distance — i.e. the key's
+  // apparent angular size. The real sun is 0.0093; a stylised soft key reads
+  // better and hides shadow-map resolution.
+  #define NPR_PENUMBRA_SLOPE 0.0065
+#endif
+#ifndef NPR_PENUMBRA_MIN
+  #define NPR_PENUMBRA_MIN 0.040
+#endif
+#ifndef NPR_PENUMBRA_MAX
+  // 94 mm. This is a HARD budget, not a taste dial: nprShadowMaskSoft converts
+  // it to shadow-map texels, and on the fitted 24 m box at 2048 that is 8 texels
+  // — the widest a 16-tap Vogel disk can span before the taps stop overlapping
+  // and the penumbra dissolves the shadow instead of softening it. The old 0.34
+  // (29 texels, clamped to the 26 ceiling) is exactly why no cast shadow landed
+  // on the terrain: the disk was averaging lit ground back into every sample.
+  #define NPR_PENUMBRA_MAX 0.094
+#endif
+#ifndef NPR_AERIAL_VALUE
+  // How much of a surface's own relative luminance survives full aerial
+  // perspective. 0 = every distant surface converges on one flat fog colour
+  // (the milky white-out); 1 = no value compression at all. ART_BIBLE §5 needs
+  // the three distant hill bands to stay separable by value.
+  #define NPR_AERIAL_VALUE 0.45
 #endif
 #ifndef NPR_RIM_SKY
   // Amplitude of the PHASE-INDEPENDENT Fresnel rim. ART_BIBLE §2 lists "rim light
@@ -112,7 +168,7 @@ const vec3 NPR_TRANSMIT_TINT = vec3(1.000, 0.768, 0.838);
   // exists when the key happens to sit behind the subject is not "every
   // silhouette" — at a high sun the whole canopy loses its edge against the sky.
   // This term is the sky itself grazing off the silhouette, so it fires at noon.
-  #define NPR_RIM_SKY 0.46
+  #define NPR_RIM_SKY 0.26
 #endif
 #ifndef NPR_DAPPLE_FREQ
   // world metres -> dapple-noise units. MUST match DAPPLE_FREQ on the JS side.
@@ -175,18 +231,60 @@ float nprRamp(float d){
   return smoothstep(0.40, 0.44, d) * 0.5 + smoothstep(0.50, 0.54, d) * 0.5;
 }
 
-/* --- level-preserving hue shift of albedo onto the shadow tint.
-       uShadowTint/luma(uShadowTint) is the tint's CHROMA at unit luminance, so
-       mixing albedo toward luma(albedo)*chroma rotates the hue without changing
-       the value. Multiplying by the tint (the obvious approach) cannot do this:
-       a green albedo times a violet tint is still green, which is exactly why
-       the grass shadow used to read olive instead of violet.                */
+/* --- HSV helpers (Sam Hocevar / iq's branchless pair). Used only by the shadow
+       tint, so the cost is one conversion per fragment.                     */
+vec3 nprRgb2Hsv(vec3 c){
+  vec4 K = vec4(0.0, -1.0 / 3.0, 2.0 / 3.0, -1.0);
+  vec4 p = mix(vec4(c.bg, K.wz), vec4(c.gb, K.xy), step(c.b, c.g));
+  vec4 q = mix(vec4(p.xyw, c.r), vec4(c.r, p.yzx), step(p.x, c.r));
+  float d = q.x - min(q.w, q.y);
+  return vec3(abs(q.z + (q.w - q.y) / (6.0 * d + 1.0e-10)), d / (q.x + 1.0e-10), q.x);
+}
+vec3 nprHsv2Rgb(vec3 c){
+  vec4 K = vec4(1.0, 2.0 / 3.0, 1.0 / 3.0, 3.0);
+  vec3 p = abs(fract(c.xxx + K.xyz) * 6.0 - K.www);
+  return c.z * mix(K.xxx, clamp(p - K.xxx, 0.0, 1.0), c.y);
+}
+
+/* --- level-preserving, HUE-LIMITED shift of albedo toward the shadow tint.
+       ART_BIBLE §2: shadowed albedo is "pushed toward cool violet-blue", not
+       repainted with it. So: rotate the albedo's hue toward the tint's hue but
+       never by more than NPR_SHADOW_HUE_MAX degrees, blend its saturation
+       partway to the tint's, and restore the original luminance so this stays a
+       pure chromatic operation (nprShadowLevel owns the value).
+
+       The previous implementation mixed albedo toward luma(albedo)*chroma at
+       0.84, which is a FULL hue replacement: green grass landed on 232 deg and
+       brown bark on 232 deg too. Both then read as navy paint. */
 vec3 nprShadowHue(vec3 albedo){
   float al = max(nprLuma(albedo), 1e-4);
-  float lt = max(nprLuma(uShadowTint), 1e-4);
-  vec3 chroma = mix(vec3(1.0), uShadowTint / lt, NPR_SHADOW_CHROMA);
-  chroma = clamp(chroma, vec3(0.0), vec3(4.0));
-  return mix(albedo, vec3(al) * chroma, NPR_SHADOW_HUE);
+  vec3 a = nprRgb2Hsv(max(albedo, vec3(0.0)));
+  vec3 t = nprRgb2Hsv(max(uShadowTint, vec3(0.0)));
+
+  float dh = t.x - a.x;
+  dh -= floor(dh + 0.5);                             // shortest way round, -0.5..0.5
+
+  // The further an albedo's hue already is from the tint, the LESS it may
+  // rotate. Without this, a warm brown takes the short arc toward violet, which
+  // runs through red and magenta: the placeholder trunk came out plum. A warm
+  // surface in cool shade should mostly just cool and desaturate.
+  float away   = clamp(abs(dh) * 2.0, 0.0, 1.0);     // 0 = same hue, 1 = opposite
+  float maxRot = NPR_SHADOW_HUE_MAX * (1.0 / 360.0) * mix(1.0, 0.35, away);
+
+  // A near-neutral albedo has no hue to protect (and rgb2hsv reports 0 = red
+  // for it), so let it take the tint's hue outright.
+  float neutral = 1.0 - smoothstep(0.03, 0.20, a.y);
+  a.x = fract(a.x + mix(clamp(dh, -maxRot, maxRot), dh, neutral) * NPR_SHADOW_HUE);
+
+  // Saturation moves toward the tint's, but a surface that is ALREADY more
+  // saturated than the tint must not gain chroma in shadow — that is how the
+  // old model produced electric navy grass and plum bark. Only a near-neutral
+  // albedo is allowed to pick the tint's chroma up.
+  float satTarget = mix(min(a.y, t.y), t.y, neutral);
+  a.y = clamp(mix(a.y, satTarget, NPR_SHADOW_CHROMA), 0.0, 1.0);
+
+  vec3 sh = nprHsv2Rgb(a);
+  return sh * (al / max(nprLuma(sh), 1e-4));         // luminance-preserving
 }
 
 /* --- shadowed albedo: hue-shifted toward uShadowTint at a fixed fraction of
@@ -196,13 +294,27 @@ vec3 nprShadowHue(vec3 albedo){
    slab while grass still reads. This keeps the ON-SCREEN light:shadow ratio
    roughly constant across the palette. */
 float nprShadowLevel(float al){
-  return NPR_SHADOW_LEVEL * mix(1.69, 0.415, smoothstep(0.03, 0.22, al));
+  // The transition is over albedo luma 0.01..0.10, NOT 0.03..0.24. Measured on
+  // the calibration chart: with the wider window a bark-dark albedo (luma 0.10)
+  // sat halfway up the boost curve and its shadow came out at 0.91 of its lit
+  // side while the 0.50 grey next to it sat at 0.55. Only genuinely near-black
+  // albedos need the lift (ACES + sRGB crush the bottom of the range); anything
+  // from bark upward wants the same flat fraction.
+  return NPR_SHADOW_LEVEL * mix(2.20, 0.66, smoothstep(0.010, 0.100, al));
 }
 
+/* The "never black" floor. It keeps the tint's LEVEL but takes 45% of its HUE
+   from the shadowed surface: a pure blue-violet pedestal under a dark warm
+   albedo is what tipped bark's deepest shadow into purple. */
+vec3 nprShadowFloor(vec3 shHue){
+  float lt = nprLuma(uShadowTint);
+  return mix(uShadowTint, shHue * (lt / max(nprLuma(shHue), 1e-4)), 0.45);
+}
 vec3 nprShadowAlbedo(vec3 albedo, vec3 kcol){
   float kl = clamp(nprLuma(kcol), 0.05, 1.15);
-  vec3 sh = nprShadowHue(albedo) * (nprShadowLevel(nprLuma(albedo)) * kl);
-  sh += uShadowTint * (0.028 * kl);                    // floor, in the tint hue
+  vec3 shHue = nprShadowHue(albedo);
+  vec3 sh = shHue * (nprShadowLevel(nprLuma(albedo)) * kl);
+  sh += nprShadowFloor(shHue) * (0.040 * kl);
   return max(sh, vec3(0.006));                         // never pure black
 }
 vec3 nprShadowAlbedo(vec3 albedo){ return nprShadowAlbedo(albedo, uSunColor); }
@@ -238,16 +350,83 @@ float nprShadowFade(float ndl, float shadowMask){
   return mix(1.0, clamp(shadowMask, 0.0, 1.0), smoothstep(0.0, 0.38, ndl));
 }
 
-/* --- how "lit" a point is: the ramp with the shadow map folded in ----
-       shadowMask: 1 = fully lit, 0 = fully occluded. Occlusion pushes the
-       half-Lambert value below the terminator so cast shadows inherit the
-       exact same banded edge as the form shadow, and land in the deeper
-       core-shadow band. */
+/* --- the cast-shadow factor.
+       This is the single most important line for making a cast shadow read as
+       shadowed GROUND rather than a dark decal stuck to it. The old model did
+       min(halfLambert, mix(0.205, 1.0, sm)), which squeezed the whole
+       penumbra into shadowMask 0.245..0.42 — a 0.175-wide window out of 1.0 —
+       so every shadow edge in the frame was effectively a binary step with a
+       hard geometric outline. Using the FULL range of the mask instead turns
+       the filter's own falloff into a real, soft, anti-aliased penumbra. */
+float nprCast(float sm){
+  return smoothstep(0.015, 0.985, clamp(sm, 0.0, 1.0));
+}
+
+/* --- wide, distance-aware soft shadow lookup.
+       Opt in with a #define NPR_HAS_SHADOWMAP in a material that also includes
+       <shadowmap_pars_fragment> (createNprMaterial and applyNprToStandard both
+       do). Anything else keeps using three's 5-tap getShadowMask() and simply
+       gets a slightly tighter penumbra — the shading maths is identical.
+
+       Penumbra width grows with the receiver-to-blocker distance, which is what
+       ART_BIBLE §2's "soft shadow" actually means physically: hard at the
+       contact point under the trunk, wide out under the canopy. A
+       sampler2DShadow cannot report blocker depth, so the rig publishes the
+       shadow-casting set's bounding centre in uShadowSoft.xyz and we use the
+       distance to it ALONG the key as the proxy. The tap radius is additionally
+       capped in TEXELS so the disk never has to span more map than it can
+       resolve. */
+#if defined( NPR_HAS_SHADOWMAP ) && defined( USE_SHADOWMAP ) && defined( SHADOWMAP_TYPE_PCF ) && NUM_DIR_LIGHT_SHADOWS > 0
+  #define NPR_SOFT_SHADOW
+#endif
+
+/* Only declared when the material opted in — a shader that includes GLSL_NPR
+   without three's shadow chunks must not see a reference to getShadowMask(). */
+#ifdef NPR_HAS_SHADOWMAP
+#ifdef NPR_SOFT_SHADOW
+float nprShadowMaskSoft(vec3 worldPos){
+  if ( ! receiveShadow ) return 1.0;
+  DirectionalLightShadow dls = directionalLightShadows[ 0 ];
+  vec4 sc = vDirectionalShadowCoord[ 0 ];
+  sc.xyz /= sc.w;
+  sc.z += dls.shadowBias;
+  if ( sc.x < 0.0 || sc.x > 1.0 || sc.y < 0.0 || sc.y > 1.0 || sc.z > 1.0 ) return 1.0;
+
+  vec3 L = normalize( mix( uSunDir, uMoonDir, step( 0.5, uNightMix ) ) );
+  float h = max( dot( uShadowSoft.xyz - worldPos, L ), 0.0 );
+  float wWorld = clamp( h * NPR_PENUMBRA_SLOPE, NPR_PENUMBRA_MIN, NPR_PENUMBRA_MAX );
+  // 8.5-texel ceiling: past that the 16 taps no longer overlap and the filter
+  // averages surrounding lit ground back into the shadow (see NPR_PENUMBRA_MAX).
+  float texels = clamp( wWorld * uShadowSoft.w * dls.shadowMapSize.x, 1.0, 8.5 );
+  float radius = texels / dls.shadowMapSize.x;
+
+  float phi = interleavedGradientNoise( gl_FragCoord.xy ) * PI2;
+  float s = 0.0;
+  // two concentric Vogel rings (8 + 8 taps, hardware-PCF filtered = 64
+  // effective) weighted 0.6 / 0.4, so the kernel is centre-heavy instead of
+  // box-flat and the penumbra ramps smoothly rather than in visible steps.
+  for ( int i = 0; i < 8; i ++ ) {
+    s += texture( directionalShadowMap[ 0 ],
+                  vec3( sc.xy + vogelDiskSample( i, 8, phi ) * radius * 0.52, sc.z ) ) * 0.075;
+    s += texture( directionalShadowMap[ 0 ],
+                  vec3( sc.xy + vogelDiskSample( i, 8, phi + 0.61 ) * radius, sc.z ) ) * 0.050;
+  }
+  return mix( 1.0, clamp( s, 0.0, 1.0 ), dls.shadowIntensity );
+}
+#else
+float nprShadowMaskSoft(vec3 worldPos){ return getShadowMask(); }
+#endif
+#endif
+
+/* --- how "lit" a point is: the FORM ramp times the SOFT cast-shadow factor.
+       shadowMask: 1 = fully lit, 0 = fully occluded. The form shadow keeps its
+       banded terminator (ART_BIBLE §2); the cast shadow contributes a smooth
+       penumbra on top of it instead of snapping the band edge. */
 float nprLit(vec3 N, vec3 L, float shadowMask){
   N = normalize(N);
   float ndl = dot(N, normalize(L));
   float sm  = nprShadowFade(ndl, shadowMask);
-  float t   = nprRamp(min(clamp(ndl * 0.5 + 0.5, 0.0, 1.0), mix(0.205, 1.0, sm)));
+  float t   = nprRamp(clamp(ndl * 0.5 + 0.5, 0.0, 1.0)) * nprCast(sm);
   // same animated key breakup nprKeyG applies, so a module that only wants the
   // lit fraction still agrees with the rest of the scene frame to frame.
   float dapple = 1.0 - (1.0 - nprDappleMask())
@@ -264,8 +443,14 @@ vec3 nprKeyG(vec3 albedo, vec3 N, vec3 Ng, vec3 V, vec3 L, vec3 kcol,
   float ndl  = dot(N, L);
   float gate = min(ndl, dot(Ng, L));
   float sm   = nprShadowFade(gate, shadowMask);
-  float d    = min(clamp(ndl * 0.5 + 0.5, 0.0, 1.0), mix(0.205, 1.0, sm));
-  float t    = nprRamp(d);
+  // FORM shadow (the banded terminator) and CAST shadow (the soft penumbra) are
+  // deliberately separate factors now. Folding the shadow mask into the
+  // half-Lambert value, as this used to, made every cast shadow edge a hard
+  // step and dropped cast shadows into the deepest core-shadow plateau — the
+  // navy lozenge on the grass.
+  float d    = clamp(ndl * 0.5 + 0.5, 0.0, 1.0);
+  float castT = nprCast(sm);
+  float t    = nprRamp(d) * castT;
 
   // ---- animated breakup of the KEY only (never the ambient): canopy dapple
   // scrolling with the wind, plus a slow global gust so the whole key breathes.
@@ -282,9 +467,11 @@ vec3 nprKeyG(vec3 albedo, vec3 N, vec3 Ng, vec3 V, vec3 L, vec3 kcol,
   vec3  shHue = nprShadowHue(albedo);
   // A deeper 4th plateau in the very core of the form shadow — the palette's
   // "deep interior" value. Banded, so it stays a flat plateau too.
+  // ...and it is keyed off the FORM value d only, so a cast shadow lying on
+  // otherwise sunlit ground never drops into it.
   float core = 1.0 - smoothstep(0.150, 0.190, d);
-  vec3  shDiff = shHue * (nprShadowLevel(nprLuma(albedo)) * kl * mix(1.0, 0.72, core))
-               + uShadowTint * (0.028 * kl);
+  vec3  shDiff = shHue * (nprShadowLevel(nprLuma(albedo)) * kl * mix(1.0, NPR_SHADOW_CORE, core))
+               + nprShadowFloor(shHue) * (0.040 * kl);
 
   vec3 col = mix(shDiff, albedo * kcol, t);
 
@@ -293,9 +480,9 @@ vec3 nprKeyG(vec3 albedo, vec3 N, vec3 Ng, vec3 V, vec3 L, vec3 kcol,
   // dragging it back to the surface's own hue. Only partly, though: uSkyColor is
   // already strongly blue, and stacking a blue tint on a blue ambient overshoots
   // into an electric-blue shadow.
-  vec3 ambA = mix(mix(albedo, shHue, 0.60), albedo, t);
+  vec3 ambA = mix(mix(albedo, shHue, 0.35), albedo, t);
   col += ambA * nprAmbient(N) * clamp(ao, 0.0, 1.0)
-       * mix(NPR_AMBIENT_SHADOW, 1.0, max(t, clamp(sm, 0.0, 1.0) * 0.38));
+       * mix(NPR_AMBIENT_SHADOW, 1.0, max(t, clamp(sm, 0.0, 1.0) * 0.58));
 
   // one sharp CLIPPED specular core + a BANDED broad sheen. Neither is a PBR
   // roughness lobe, and the sheen is stepped so it does not smear a glossy
@@ -378,29 +565,47 @@ vec3 nprShade(vec3 albedo, vec3 N, vec3 V, float shadowMask){
   return nprShadeEx(albedo, N, V, shadowMask, 0.0, 0.0, 1.0, 1.0, 1.0);
 }
 
-/* --- aerial perspective: height + distance fog, hue-shifted to sky --- */
-vec3 applyAerial(vec3 color, float viewDist, float worldY){
+/* --- aerial perspective: height + distance haze, hue-shifted to sky.
+ *
+ * Two things stop this being the milky white-out it used to be:
+ *
+ *  1. the density keyframes are roughly half what they were, so the near
+ *     mid-ground stays the colour it was painted; and
+ *  2. the haze target is MODULATED BY THE SURFACE'S OWN RELATIVE LUMINANCE
+ *     (NPR_AERIAL_VALUE). A straight lerp toward one flat fog colour destroys
+ *     value separation: three receding hill bands all converge on the same
+ *     grey and the depth cue dies with them. Scaling the target by how bright
+ *     the surface was keeps a dark ridge darker than a pale one at every
+ *     distance, while still desaturating it and lifting it toward the sky.
+ */
+float nprAerialF(float viewDist, float worldY){
   float density = uFogParams.x, hf = uFogParams.y, start = uFogParams.z;
   float d = max(viewDist - start, 0.0);
   float h = exp(-max(worldY, 0.0) * hf);
-  float f = clamp(1.0 - exp(-d * density * h), 0.0, 1.0);
+  return clamp(1.0 - exp(-d * density * h), 0.0, 1.0);
+}
+vec3 nprAerialTint(float f){
   // at range the haze cools/blues toward the sky rather than staying one flat tint
   vec3 far = mix(uFogColor, uSkyColor * 1.25 + uFogColor * 0.20, 0.55);
-  vec3 fogc = mix(uFogColor, far, smoothstep(0.28, 1.0, f));
-  return mix(color, fogc, f);
+  return mix(uFogColor, far, smoothstep(0.28, 1.0, f));
+}
+vec3 nprAerialMix(vec3 color, vec3 fogc, float f){
+  float rel = clamp(nprLuma(color) / max(nprLuma(fogc), 1e-4), 0.0, 2.2);
+  return mix(color, fogc * mix(1.0, rel, NPR_AERIAL_VALUE), f);
+}
+
+vec3 applyAerial(vec3 color, float viewDist, float worldY){
+  float f = nprAerialF(viewDist, worldY);
+  return nprAerialMix(color, nprAerialTint(f), f);
 }
 
 /* 4-arg variant adds forward-scatter: haze brightens toward the sun. */
 vec3 applyAerial(vec3 color, float viewDist, float worldY, vec3 V){
-  float density = uFogParams.x, hf = uFogParams.y, start = uFogParams.z;
-  float d = max(viewDist - start, 0.0);
-  float h = exp(-max(worldY, 0.0) * hf);
-  float f = clamp(1.0 - exp(-d * density * h), 0.0, 1.0);
-  vec3 far = mix(uFogColor, uSkyColor * 1.25 + uFogColor * 0.20, 0.55);
-  vec3 fogc = mix(uFogColor, far, smoothstep(0.28, 1.0, f));
+  float f = nprAerialF(viewDist, worldY);
+  vec3 fogc = nprAerialTint(f);
   float sc = pow(clamp(dot(-normalize(V), normalize(uSunDir)), 0.0, 1.0), 5.0);
   fogc += uSunColor * sc * 0.20 * (1.0 - uNightMix);
-  return mix(color, fogc, f);
+  return nprAerialMix(color, fogc, f);
 }
 
 /* Handy for modules that need the key direction/colour without full shading. */
@@ -449,6 +654,15 @@ export function phaseOf(dayT) {
  *             back-tracks; dir = (cos(elev)cos(azim), sin(elev), cos(elev)sin(azim)).
  *             azim 166 @ golden hour puts the key ~110 deg off the hero camera:
  *             lit left edge, hue-shifted right side, long shadow to frame-right.
+ *
+ *             ELEVATION CEILING 38 deg. The day rows used to peak at 66 deg,
+ *             which is a near-top-lit key: the tree's shadow collapsed inside
+ *             its own ground footprint (nothing to compose with), the canopy's
+ *             lit top and shaded underside came within 5% of each other, and
+ *             the trunk had no readable terminator. Ground shadow length is
+ *             height/tan(elev), so 26 deg at the golden-hour anchor throws
+ *             ~2.05x the tree's height and 34 deg at the `day` anchor ~1.5x —
+ *             both long enough to cross open grass and read as a cast shadow.
  */
 const KEYS = [
   { t: 0.000, sun: 0x9FB6E8, sunInt: 0.82, sky: 0x33456F, skyInt: 0.62, ground: 0x1E2438, groundInt: 0.62,
@@ -466,15 +680,15 @@ const KEYS = [
   { t: 0.240, sun: 0xFFF0DC, sunInt: 3.00, sky: 0x7EA0D8, skyInt: 0.95, ground: 0x4E5240, groundInt: 0.70,
     shadow: 0x6E76A8, fog: 0xBCD3EA, fogD: 0.0038, zenith: 0x4E86D4, horizon: 0xCFE0F2,
     fill: 0x9FBCE8, fillInt: 0.50, rim: 0xFFF0D8, rimInt: 0.60, hemi: 1.00,
-    elev: 34, azim: 70, night: 0.00, exp: 1.00, env: 1.00 },
+    elev: 22, azim: 70, night: 0.00, exp: 1.00, env: 1.00 },
   { t: 0.500, sun: 0xFFF8EE, sunInt: 3.30, sky: 0x8FB0E2, skyInt: 1.00, ground: 0x585C46, groundInt: 0.75,
     shadow: 0x7A82AE, fog: 0xC6DAEE, fogD: 0.0030, zenith: 0x4E86D4, horizon: 0xD8E6F5,
     fill: 0xA8C4EE, fillInt: 0.50, rim: 0xFFF6E8, rimInt: 0.50, hemi: 1.05,
-    elev: 66, azim: 115, night: 0.00, exp: 0.98, env: 1.05 },
+    elev: 38, azim: 115, night: 0.00, exp: 0.98, env: 1.05 },
   { t: 0.665, sun: 0xFFE6CE, sunInt: 2.95, sky: 0x7C96CE, skyInt: 0.82, ground: 0x5A4A3C, groundInt: 0.75,
     shadow: 0x6470A8, fog: 0xDCBFA6, fogD: 0.0048, zenith: 0x4574B8, horizon: 0xF2CBA0,
     fill: 0x92A8DE, fillInt: 0.42, rim: 0xFFD9A8, rimInt: 1.00, hemi: 0.92,
-    elev: 36, azim: 152, night: 0.00, exp: 1.02, env: 0.95 },
+    elev: 26, azim: 152, night: 0.00, exp: 1.02, env: 0.95 },
   { t: 0.765, sun: 0xFFB683, sunInt: 2.05, sky: 0x64709E, skyInt: 0.70, ground: 0x54382E, groundInt: 0.70,
     shadow: 0x5A4A78, fog: 0xE8A57E, fogD: 0.0062, zenith: 0x3A4E86, horizon: 0xF5A86E,
     fill: 0x7A88C0, fillInt: 0.38, rim: 0xFFB070, rimInt: 1.05, hemi: 0.85,
@@ -518,6 +732,16 @@ export const NPR_KEY_SCALE = 0.38;
 /** Height/distance fog shaping constants (uFogParams.y/.z). */
 export const FOG_HEIGHT_FALLOFF = 0.055;
 export const FOG_START_DISTANCE = 40.0;
+
+/**
+ * Global scale on every keyframe's fog density. The authored `fogD` values are
+ * the "full atmosphere" art direction; at 1.0 they whited-out the whole
+ * mid-ground (ART_BIBLE §8.9, washed-out midtones) because the fog colour is
+ * far brighter than the sunlit grass it was mixing into. Halving the density and
+ * letting nprAerialMix() preserve relative value gives an atmosphere that is
+ * clearly present at range and invisible at 30 m, which is what §5 asks for.
+ */
+export const AERIAL_STRENGTH = 0.55;
 
 /**
  * The colour light actually takes on bouncing off a sunlit grass garden
@@ -579,6 +803,8 @@ export function createLightUniforms() {
     uPhaseT: { value: 0 },
     uExposure: { value: 1 },
     uDapple: { value: new THREE.Vector4(0, 0, 0, 1) },
+    // (caster centre xyz, shadow-map UV per world unit) — see nprShadowMaskSoft
+    uShadowSoft: { value: new THREE.Vector4(0, 6, 0, 1 / 24) },
   };
 }
 
@@ -609,7 +835,7 @@ export function writePhaseColors(u, p) {
   }
   u.uShadowTint.value.copy(p.shadow);
   u.uFogColor.value.copy(p.fog);
-  u.uFogParams.value.set(p.fogD, FOG_HEIGHT_FALLOFF, FOG_START_DISTANCE);
+  u.uFogParams.value.set(p.fogD * AERIAL_STRENGTH, FOG_HEIGHT_FALLOFF, FOG_START_DISTANCE);
   u.uNightMix.value = p.night;
   u.uPhaseT.value = p.phaseT;
   u.uExposure.value = p.exp;
@@ -743,7 +969,11 @@ void main(){
   float dist = length( toCam );
   vec3 V = toCam / max( dist, 1e-4 );
 
-  float sm = getShadowMask();
+  #ifdef NPR_SOFT_SHADOW
+    float sm = nprShadowMaskSoft( vWorldPos );
+  #else
+    float sm = getShadowMask();
+  #endif
   nprSetWorldPos( vWorldPos );            // opt in to the spatial canopy dapple
   vec3 Ng = nprGeoNormal( vWorldPos, N );
   vec3 col = nprShadeN( albedo, N, Ng, V, sm, uTranslucency, uThickness, uSpecScale, uRimScale, 1.0 );
@@ -755,14 +985,16 @@ void main(){
 }
 `;
 
-/** Turn the three tuning knobs into #define strings (only when overridden). */
+/** Turn the tuning knobs into #define strings (only when overridden). */
 function nprTuningDefines({ shadowHue = null, shadowLevel = null, shadowChroma = null,
-  ambientShadow = null } = {}) {
+  ambientShadow = null, shadowHueMax = null, aerialValue = null } = {}) {
   const d = {};
   if (shadowHue != null) d.NPR_SHADOW_HUE = Number(shadowHue).toFixed(4);
+  if (shadowHueMax != null) d.NPR_SHADOW_HUE_MAX = Number(shadowHueMax).toFixed(3);
   if (shadowLevel != null) d.NPR_SHADOW_LEVEL = Number(shadowLevel).toFixed(4);
   if (shadowChroma != null) d.NPR_SHADOW_CHROMA = Number(shadowChroma).toFixed(4);
   if (ambientShadow != null) d.NPR_AMBIENT_SHADOW = Number(ambientShadow).toFixed(4);
+  if (aerialValue != null) d.NPR_AERIAL_VALUE = Number(aerialValue).toFixed(4);
   return d;
 }
 
@@ -829,6 +1061,7 @@ uniform float uTranslucency;
 uniform float uThickness;
 uniform float uSpecScale;
 uniform float uRimScale;
+#define NPR_HAS_SHADOWMAP
 ${tuneSrc}
 ${GLSL_NPR}`,
     );
@@ -847,7 +1080,12 @@ ${GLSL_NPR}`,
   vec3 nprNg = nprGeoNormal( nprWpos, nprN );
   vec3 nprV  = -nprWdir;
   nprSetWorldPos( nprWpos );                          // spatial canopy dapple
-  outgoingLight = nprShadeN( diffuseColor.rgb, nprN, nprNg, nprV, getShadowMask(),
+  #ifdef NPR_SOFT_SHADOW
+    float nprSm = nprShadowMaskSoft( nprWpos );
+  #else
+    float nprSm = getShadowMask();
+  #endif
+  outgoingLight = nprShadeN( diffuseColor.rgb, nprN, nprNg, nprV, nprSm,
                              uTranslucency, uThickness, uSpecScale, uRimScale, 1.0 );
 ${aerial ? '  outgoingLight = applyAerial( outgoingLight, nprDist, nprWpos.y, nprV );' : ''}
 }
@@ -890,10 +1128,12 @@ export function createNprMaterial(o = {}) {
     vertexColors = false,
     extraUniforms = {},
     defines = {},
-    shadowHue = null,          // 0..1 — how far the shadow hue rotates onto uShadowTint
+    shadowHue = null,          // 0..1 — how much of the allowed hue rotation is taken
+    shadowHueMax = null,       // DEGREES — hard cap on that rotation (default 30)
     shadowLevel = null,        // linear shadow level as a fraction of albedo*key
-    shadowChroma = null,       // saturation gain on the shadow tint's chroma
+    shadowChroma = null,       // how far shadow saturation moves toward the tint's
     ambientShadow = null,      // ambient reaching an occluded point
+    aerialValue = null,        // 0..1 — value separation kept under full aerial haze
   } = o;
 
   const u = THREE.UniformsUtils.merge([THREE.UniformsLib.lights]);
@@ -913,7 +1153,11 @@ export function createNprMaterial(o = {}) {
   if (lightUniforms) Object.assign(u, lightUniforms);
   Object.assign(u, extraUniforms);
 
-  const d = { ...defines, ...nprTuningDefines({ shadowHue, shadowLevel, shadowChroma, ambientShadow }) };
+  const d = {
+    NPR_HAS_SHADOWMAP: '',          // NPR_FRAG includes three's shadow chunks
+    ...defines,
+    ...nprTuningDefines({ shadowHue, shadowHueMax, shadowLevel, shadowChroma, ambientShadow, aerialValue }),
+  };
   if (map) d.NPR_USE_MAP = '';
   if (alphaTest > 0) d.NPR_ALPHATEST = alphaTest.toFixed(4);
   if (side === THREE.DoubleSide) d.NPR_DOUBLE_SIDED = '';

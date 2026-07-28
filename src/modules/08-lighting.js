@@ -23,6 +23,16 @@ import {
  *                             material.userData.noNpr = true)
  *   ctx.assets.lighting       { createNprMaterial, applyNPR, setDayT, setPhase, palette, skyUniforms }
  *
+ * The shared bag also carries `uShadowSoft` = (caster-set centre xyz, shadow-map
+ * UV per world unit). nprShadowMaskSoft() in src/lib/lighting.js uses it to grow
+ * the penumbra with the receiver-to-blocker distance; spread the bag as usual and
+ * you get it for free.
+ *
+ * Debug scenarios registered here: dawn / day / dusk / night / golden / noon,
+ * `raw-*` and `nopost` (bypass the post pipeline), and `calib` / `calib-raw` /
+ * `calib-<phase>` which reveal this module's own calibration balls + shadow slab
+ * so the shading model can be MEASURED instead of eyeballed.
+ *
  * Emits `time:phase` { phase, t } whenever the named phase changes.
  */
 
@@ -81,7 +91,14 @@ export default {
     /* ---------------------------------------------------------------- *
      * Key light — tight, correctly fitted shadow camera
      * ---------------------------------------------------------------- */
-    const mapSize = Math.max(512, ctx.quality.shadowMap | 0);
+    // Capped at 2048 ON PURPOSE even when ctx.quality allows 4096. The single
+    // biggest shadow receiver in frame is the terrain, and its shader uses
+    // three's own 5-tap getShadowMask() rather than nprShadowMaskSoft(); with a
+    // 4096 map one texel is 6 mm, so five taps cannot span a penumbra wide
+    // enough to stop the contact edge reading as a hard geometric outline.
+    // 2048 over a ~26 m box is 12.7 mm/texel — still finer than any silhouette
+    // detail we have, and it buys a genuinely soft edge for every shader.
+    const mapSize = Math.min(Math.max(512, ctx.quality.shadowMap | 0), 2048);
     const sun = new THREE.DirectionalLight(0xffffff, 3);
     sun.castShadow = true;
     sun.shadow.mapSize.set(mapSize, mapSize);
@@ -170,16 +187,35 @@ export default {
 
       // texel footprint -> bias budget, both derived from world units per texel
       // so they track the fitted box instead of being magic numbers.
-      sun.shadow.normalBias = THREE.MathUtils.clamp(texel * 3.0, 0.02, 0.12);
+      //
+      // normalBias is a FIXED 12 mm, deliberately NOT scaled off the texel.
+      // texel*3 came out at 35 mm on the fitted box, which is the same order as
+      // the width of a canopy gap's shadow on the grass: every dapple pool was
+      // pushed off its own footprint (peter-panning) and the ground read as
+      // unshadowed. 12 mm is one texel of slope allowance and still kills acne
+      // because nprShadowFade() fades the map out at the terminator anyway.
+      sun.shadow.normalBias = 0.012;
       // shadow.bias is added to shadowCoord.z, i.e. it is in NORMALISED ortho
       // depth, not metres. Author the offset in metres (a bit over one texel of
       // slope allowance) and convert, otherwise the same constant peter-pans by
       // 100 mm on a long frustum and does nothing at all on a short one.
       const depthRange = Math.max(sc.far - sc.near, 1);
       sun.shadow.bias = -Math.max(0.018, texel * 1.5) / depthRange;
-      // penumbra: aim for ~0.18 world units, capped in TEXELS so the 5-tap
-      // Vogel disk never has to span more ground than it can resolve.
-      sun.shadow.radius = THREE.MathUtils.clamp(0.18 / texel, 1.0, 8.0);
+      // Penumbra for anything still going through three's own 5-tap
+      // getShadowMask(). HARD-CAPPED AT 4 TEXELS: three's PCF is five taps, so a
+      // 20-texel radius spreads five samples over 234 mm of ground and every
+      // one of them lands somewhere different — the filter stops being a
+      // penumbra and becomes a 5-level dither that averages the shadow away
+      // entirely. Four texels (~47 mm) is the widest a 5-tap kernel can carry
+      // without holes. NPR materials use nprShadowMaskSoft() (16 taps) instead
+      // and get a real, blocker-distance-driven penumbra on top of this.
+      sun.shadow.radius = THREE.MathUtils.clamp(0.26 / texel, 1.5, 4.0);
+
+      // Publish what nprShadowMaskSoft() needs: the caster set's centre (its
+      // distance along the key is the blocker-distance proxy that sets penumbra
+      // width) and shadow-map UV units per world unit.
+      const ss = L.uShadowSoft?.value;
+      if (ss) ss.set(casterCentre.x, casterCentre.y, casterCentre.z, 1 / (ext * 2));
     }
 
     /* Cool fill opposite the sun + a low warm back/rim graze.
@@ -393,8 +429,66 @@ export default {
       dayLength: DAY_LENGTH,
     };
 
+    /* ---------------------------------------------------------------- *
+     * Calibration chart — HIDDEN unless the `calib` debug scenario runs.
+     *
+     * A VFX lighter shoots grey/chrome balls on set for a reason: you cannot
+     * tune a shading model by looking at art. 50-smoke.js used to carry this
+     * chart; it has been deleted now that the real tree has landed, so the
+     * lighting rig carries its own. Every ball is a real createNprMaterial()
+     * going through exactly the code path the scene uses.
+     *
+     *   0.18 grey  read the ramp bands and terminator width
+     *   0.50 grey  read the SHADOW LUMINANCE RATIO (ART_BIBLE 2: ~0.55 of lit)
+     *   near white read specular shape and highlight clipping
+     *   pink       read hue behaviour of a saturated albedo through the ramp
+     *   bark brown read that a shadowed warm albedo stays warm, not plum
+     *
+     * Floated clear of the grass on a slab so contact/cast shadow colour is
+     * legible, and positioned in front of the tree for the hero camera.
+     * ---------------------------------------------------------------- */
+    const calib = new THREE.Group();
+    calib.name = 'lighting-calibration-chart';
+    calib.visible = false;
+    {
+      const ballGeo = new THREE.SphereGeometry(1.0, 48, 32);
+      const chart = [
+        [0x2E2E2E, {}], [0x7F7F7F, {}], [0xF2F2F2, { specScale: 1.4 }],
+        [0xEE4C86, {}], [0x6A5344, {}],
+      ];
+      chart.forEach(([color, o], i) => {
+        const m = new THREE.Mesh(ballGeo, createNprMaterial({ lightUniforms: L, color, ...o }));
+        m.position.set(-5.4 + i * 2.7, 4.1, 14);
+        m.castShadow = m.receiveShadow = true;
+        calib.add(m);
+      });
+      const slab = new THREE.Mesh(
+        new THREE.BoxGeometry(15.5, 0.4, 4.2),
+        createNprMaterial({ lightUniforms: L, color: 0xBFB8AA, specScale: 0.3, rimScale: 0.35 }),
+      );
+      slab.position.set(0.0, 2.9, 14);
+      slab.receiveShadow = true;          // a flat receiver must not self-cast
+      calib.add(slab);
+      calib.userData.dispose = () => {
+        ballGeo.dispose();
+        calib.traverse((o) => { o.material?.dispose?.(); if (o !== calib) o.geometry?.dispose?.(); });
+      };
+    }
+    group.add(calib);
+
     const sc_ = (window.__game && window.__game.scenarios) || null;
     if (sc_) {
+      sc_['calib'] = () => { calib.visible = true; measureCasters(); apply(false); };
+      // ...and without the post pipeline, so the shading model can be measured
+      // before bloom/DOF/grade rather than through them.
+      sc_['calib-raw'] = () => {
+        ctx.pipeline = null; calib.visible = true; measureCasters(); apply(false);
+      };
+      for (const name of ['dawn', 'day', 'dusk', 'night']) {
+        sc_[`calib-${name}`] = () => {
+          calib.visible = true; setDayT(PHASE_ANCHORS[name]); measureCasters(); apply(false);
+        };
+      }
       // `raw-*` bypasses the post pipeline so the lighting rig can be judged
       // (and regression-shot) without bloom/DOF/grade on top of it.
       const noPost = () => { ctx.pipeline = null; };
@@ -426,25 +520,28 @@ export default {
     ctx.assets.applyNPR = applyNPR;
 
     /** Per-surface tuning guesses for materials nobody told us about.
-        The shadowHue split is ART_BIBLE §3: a petal's shadow is #EE8CAF (still
-        pink), bark's is a cool brown, but a grass shadow really does go all the
-        way to #6E76A8. One global value cannot serve all three. */
+        The knob that varies is how many DEGREES of hue rotation toward
+        uShadowTint each family may take (ART_BIBLE §3): a petal's shadow is
+        #EE8CAF and must stay unmistakably pink, bark goes to a cool brown, grass
+        may swing furthest. None of them may land ON the tint's own hue. */
     function autoOpts(mesh, mat) {
       const c = mat.color;
       // pink-ish + translucent => foliage/petals; keep them PINK in shadow
       if (c && c.r > c.b && c.b > c.g * 0.9 && c.r > 0.25) {
         return {
           translucency: 1.0, thickness: 0.85, rimScale: 1.15, specScale: 0.22,
-          shadowHue: 0.34, shadowChroma: 1.0,
+          shadowHueMax: 16, shadowChroma: 0.45,
         };
       }
       const geo = mesh.geometry;
       if (geo && !geo.boundingSphere) geo.computeBoundingSphere();
       const r = geo?.boundingSphere?.radius ?? 1;
       // a huge ground plane grazes over half the frame — the rim must be almost off
-      if (r > 20) return { translucency: 0, thickness: 0.3, specScale: 0.16, rimScale: 0.06 };
+      if (r > 20) {
+        return { translucency: 0, thickness: 0.3, specScale: 0.16, rimScale: 0.06, shadowHueMax: 34 };
+      }
       // bark / stone / small props: cool the shadow without repainting it blue
-      return { specScale: 0.10, rimScale: 0.75, shadowHue: 0.56, shadowChroma: 0.90 };
+      return { specScale: 0.10, rimScale: 0.75, shadowHueMax: 26, shadowChroma: 0.55 };
     }
 
     let sweepChildren = -1;
@@ -540,6 +637,7 @@ export default {
         if (envAccum > 1.0) { envAccum = 0; buildEnv(false); }
       },
       dispose() {
+        calib.userData.dispose?.();
         pmrem.dispose();
         envRT?.dispose();
         envSphereGeo.dispose(); envSkyMat.dispose();
