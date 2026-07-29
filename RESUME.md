@@ -1,4 +1,57 @@
-# Resume notes — paused 2026-07-28 morning
+# Resume notes
+
+## 2026-07-29 ~01:45 — Phase 4 done, subagent window exhausted (resets 03:30 Europe/Bucharest)
+
+Critic went **2.9 → 4.2** across two rounds. Round-2 refiners and the round-3 critic died on the
+session limit; the code on disk is the state that measured **4.2**, committed.
+
+Landed this phase: the pond (real sky reflection — currently the best-looking element in the
+build), torii + stone lanterns + mossy wall + basin, first-run bloom stage 1, and the round-1
+fixes. Verified working by probe: `shake()` double-fire is FIXED (one gain event, netPetals ==
+displayed value), fresh save is `{stage:1, stageFloor:1}`, save/load round-trips at version 3,
+economy tables match `GAME_DESIGN.md` exactly. Favicon 404 fixed (inline data: URI in index.html).
+
+### The top remaining defect: violet/magenta canopy
+
+The crown shows saturated violet patches instead of sakura pink. This is the single most damaging
+visual defect. **Already ruled out by measurement — do not re-test these:**
+- NOT post-processing: `--scenario postfx-off` still shows the violet (`shots/dbg-nopost/hero.png`).
+- NOT the blue sky ambient: zeroing `uSkyColor` at runtime changed the canopy region mean by
+  literally 0 (185,144,174 both before and after).
+- NOT the albedo constants: `30-tree.js` authors the correct ART_BIBLE five (`#FFF2F6 #FFD9E6
+  #FFB6CE #EE8CAF #C25F86`).
+
+So it is inside the tree's own fragment shader. Canopy interior mean measures **(185,144,174)** —
+blue almost equal to red with green ~40 lower, i.e. mauve. ART_BIBLE's deep interior `#C25F86` is
+(194,95,134), where blue sits well BELOW red. Prime suspects in `src/lib/tree-shaders.js` around
+lines 1310-1400: `uDeepTint` = (0.90, 0.69, 0.77) crushes green fastest and is applied
+multiplicatively via `occ`, then compounded by `uDeepClamp` and the luminance-preserving re-hue at
+~1394. Something in that chain lifts blue relative to red. Fix so the deep interior lands on rose,
+not lavender, and verify by sampling the region mean: want R clearly > B.
+
+### Other visible defects (from `shots/state-p4/` and `shots/dbg-nopost/`)
+
+- **Bare grey limbs.** Several major branches carry no blossoms at all and read as dead wood. At
+  stage 1 low coverage should thin blossoms EVENLY across the whole crown, not leave whole limbs
+  naked. Clearly visible on the right-hand limbs in the hero shot.  [30-tree.js]
+- **Lanterns blow out.** With postfx off their emission is a flat yellow blob. Strong halo is right
+  at night; in day/dusk it needs to be far subtler.  [35-props.js]
+- **Aerial fog still too strong** in the mid-ground — the field-to-hills transition washes to a
+  milky band and the hills lose value separation.  [08-lighting.js]
+- **Torii kasagi has dark blotches** that read as damage rather than weathering.  [35-props.js]
+- Round-1 blockers not yet re-verified after refine: god rays not rendering at ultra, stage 5
+  Everblossom being the worst-looking stage, night sky missing moon + stars while the FULL MOON
+  banner claims the moon is up.
+
+### Pacing note
+
+A live 12-minute sim reached the first Tender at 3 s vs the ~20 s target and stage 2 at 692 s vs
+the ~8 min target. The double-fire fix will have shifted both; re-measure before retuning, and
+retune the CURVE rather than the click value.
+
+---
+
+# Original resume notes — paused 2026-07-28 morning
 
 Paused mid-Phase-3 at Dan's request to free up subscription tokens. Everything below is
 committed; nothing is lost. Continuing tonight.
