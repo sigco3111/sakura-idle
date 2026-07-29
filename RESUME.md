@@ -1,5 +1,42 @@
 # Resume notes
 
+## 2026-07-29 ~09:15 — Phase 5 fix stage landed, PAUSED for Dan's work day
+
+All 7 agents wrote their files; the critic loop was stopped before it ran, so **this work is
+unreviewed**. Build verified running (exit 0, 61 draw calls, 11.6 ms/frame at ultra).
+Latest frame: `shots/pause2/hero.png`.
+
+### Fixed and measured
+- **Violet canopy solved.** Interior mean went (185,144,174) → (192,142,160); blue/red ratio
+  **0.94 → 0.83** (target 0.69 = `#C25F86`). Visually the crown now reads pink, not mauve.
+  Still short of target — worth one more pass, but no longer the dominant defect.
+- Purchase buttons exist (a `TEND ×1` control on each Tender row) — the blocking "clicker with no
+  clickable button" is gone.
+- Torii kasagi blotches cleared; weathering now follows form.
+- Lanterns no longer blow out in daylight.
+- Blossoms distributed across more limbs (the dead-wood read is much reduced, not fully gone —
+  the mid-limbs are still sparser than the crown).
+
+### Not yet verified (agents claimed, critic never checked)
+God rays, night moon + stars, stage 5 Everblossom, the fog reduction, and the re-tuned pacing.
+Note `clickValue` is now 0.7 (was 1.0), so the pacing curve was retuned — re-measure the 60-minute
+sim against `GAME_DESIGN.md` before trusting it.
+
+### Pick up here
+1. Run the Phase 5 critic loop — nothing has scored this state. Prior scores: 2.9 → 3.2 → 2.9 → 4.2.
+2. Canopy B/R still 0.83 vs 0.69 target; and the crown is somewhat wispy/sparse rather than lush.
+3. Distance still reads a little hazy in the hero frame — check whether the fog reduction fully landed.
+4. Still unbuilt from the original plan: nothing major, but stage 5's set-piece features and the
+   Constellation/Codex screens have never been visually reviewed.
+
+Resume the workflow in the SAME session only via:
+```
+Workflow({ scriptPath: "/Users/dan/.claude/projects/-Users-dan-Projects-claude-experiments-sakura-idle/0e6c86cd-66a5-4dfe-b844-22b3c3337013/workflows/scripts/sakura-phase5-canopy-and-blockers-wf_04406f07-cbc.js",
+           resumeFromRunId: "wf_04406f07-cbc" })
+```
+In a fresh session, author a new workflow with just the critique + refine stages (the builder
+prompts in that script file are reusable as reference).
+
 ## 2026-07-29 ~01:45 — Phase 4 done, subagent window exhausted (resets 03:30 Europe/Bucharest)
 
 Critic went **2.9 → 4.2** across two rounds. Round-2 refiners and the round-3 critic died on the
