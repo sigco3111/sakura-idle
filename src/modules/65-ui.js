@@ -18,6 +18,7 @@ import {
   TENDER_DEFS, MILESTONES, STAGE_DEFS, EVENT_DEFS, CODEX_DEFS,
   UPGRADE_FAMILIES, CONSTEL_BRANCHES,
   makeTicker, panel, bar, stars, corners, goldBtn,
+  buyBtn, segmented, stageCapsule, rarityOf, groupRule, sealedRow,
 } from '../lib/ui-widgets.js';
 
 const SVGNS = 'http://www.w3.org/2000/svg';
@@ -134,7 +135,6 @@ export default {
     const elStageK = h('div.sk-stage-k', '冬芽');
     const elStageN = h('div.sk-stage-n', 'Winter Bud');
     const elStageI = h('div.sk-stage-i', 'I / VI');
-    const stageBar = bar('sk-bar');
     const elStageA = h('span.num', '0');
     const elStageB = h('span.num', '1,000');
 
@@ -142,27 +142,40 @@ export default {
       h('i'), h('span', 'SEASON READY'));
     seasonChip.style.display = 'none';
 
+    /* Bloom capsule: the whole 0 → 常桜 run in log space, one tick per stage
+       threshold, glowing head. Built from the game's own thresholds when it
+       has published them; STAGE_DEFS is the fallback. */
+    const stageThresholds = (A.stages() ?? STAGE_DEFS)
+      .map((s) => num(s.threshold))
+      .filter((v) => v > 0);
+    if (!stageThresholds.length) stageThresholds.push(1e3, 1e5, 1e7, 1e10, 1e13);
+    const stageBar = stageCapsule(stageThresholds);
+
+    /* Everything legibility-critical lives on one parchment plate (§7): the old
+       HUD was 13 px grey text floating over a lit sky at ~2:1 contrast. */
     const hud = h('div.sk-hud',
       h('div.sk-vig.tl'), h('div.sk-vig.bt'),
-      h('div.sk-bank',
-        h('div.sk-bank-row', h('div.sk-bank-icon'), elBank, h('span.sk-bank-unit', '花びら')),
-        h('div.sk-bank-sub',
-          h('span', null, elRate, h('em', ' / sec')),
-          h('div.sep'),
-          h('span', null, elShake, h('em', ' / shake')),
-          h('div.sep'),
-          h('span', null, elCrit, h('em', ' crit')),
+      h('div.sk-plate.sk-paper', corners(true),
+        h('div.sk-bank',
+          h('div.sk-bank-row', h('div.sk-bank-icon'), elBank, h('span.sk-bank-unit', '花びら')),
+          h('div.sk-bank-sub',
+            h('span', null, elRate, h('em', '/ sec')),
+            h('div.sep'),
+            h('span', null, elShake, h('em', '/ shake')),
+            h('div.sep'),
+            h('span', null, elCrit, h('em', 'crit')),
+          ),
         ),
-      ),
-      h('div.sk-chips',
-        h('div.sk-chip.blossom', { title: 'Blossoms 桜花 — permanent, never reset' }, h('i'), elBlossom),
-        h('div.sk-chip.essence', { title: 'Sakura Essence 桜精 — earned by turning the Season' }, h('i'), elEssence),
-        seasonChip,
-      ),
-      h('div.sk-stage',
-        h('div.sk-stage-head', elStageK, elStageN, elStageI),
-        stageBar.root,
-        h('div.sk-stage-foot', h('span', null, elStageA), h('span', null, elStageB)),
+        h('div.sk-chips',
+          h('div.sk-chip.blossom', { title: 'Blossoms 桜花 — permanent, never reset' }, h('i'), elBlossom),
+          h('div.sk-chip.essence', { title: 'Sakura Essence 桜精 — earned by turning the Season' }, h('i'), elEssence),
+          seasonChip,
+        ),
+        h('div.sk-stage',
+          h('div.sk-stage-head', elStageK, elStageN, elStageI),
+          stageBar.root,
+          h('div.sk-stage-foot', h('span', null, elStageA), h('span', null, elStageB)),
+        ),
       ),
     );
     ui.append(hud);
@@ -226,40 +239,54 @@ export default {
     };
     const tenderRows = new Map();
     const tenderPanel = panel({ title: 'TENDERS', kanji: '世 話', cls: 'sk-panel' });
-    const bulkBtns = new Map();
-    let tenderTotalEl = null;
+    let bulkSeg = null, tenderTotalEl = null, teaser = null, teaserNeed = null;
+    /** One tapered rule per rarity transition, keyed by the row that follows it. */
+    const bandRules = new Map();
     {
-      A.tenderDefs().forEach((d, i) => {
+      const defs = A.tenderDefs();
+      defs.forEach((d, i) => {
+        const rarity = rarityOf(i);
+        if (i > 0 && rarity !== rarityOf(i - 1)) {
+          const rule = groupRule();
+          rule.style.display = 'none';
+          tenderPanel.body.append(rule);
+          bandRules.set(d.id, rule);
+        }
         const cnt = h('b', '0');
         const outEach = h('i', '0.00');
-        const outTotal = h('u', { style: { textDecoration: 'none' } }, '0.00');
-        const costV = h('span.v.num', '15');
-        const costL = h('span.l', 'petals');
+        const outTotal = h('u', '0.00');
         const mBar = bar('track', false);
         const mLbl = h('b', '10');
         const mPre = h('span', 'next ×2 at ');
+        const btn = buyBtn(() => buyTender(d.id), `Buy ${d.name}`);
         const row = h('div.sk-card', {
+          class: 'r' + rarity,
           onclick: () => buyTender(d.id),
           title: `${d.name} ${d.kanji}\n${d.blurb ?? ''}`,
         },
           h('div.ico', TENDER_GLYPH[d.id] ?? d.glyph ?? d.kanji?.[0] ?? '花', cnt),
-          h('div.nm', h('h3', d.name), h('em', d.kanji ?? '')),
-          h('div.cost', costV, costL),
+          h('div.nm', h('h3', d.name), h('em', d.kanji ?? ''), stars(rarity, 5, true)),
+          btn.root,
           h('span.out', outEach, ' /s each · ', outTotal, ' total'),
           h('div.sk-mini', mBar.root, h('span.lb', mPre, mLbl)),
         );
         row.style.display = 'none';
         tenderPanel.body.append(row);
-        tenderRows.set(d.id, { d, row, cnt, outEach, outTotal, costV, costL, mBar, mLbl, mPre, revealed: false, idx: i });
+        tenderRows.set(d.id, { d, row, cnt, outEach, outTotal, btn, mBar, mLbl, mPre, revealed: false, idx: i, rarity });
       });
-      const bulkWrap = h('div.sk-bulk');
-      for (const [label, val] of [['×1', 1], ['×10', 10], ['×25', 25], ['MAX', -1]]) {
-        const b = h('button', { onclick: (e) => { e.stopPropagation(); A.setBulk(val); refresh(); } }, label);
-        bulkBtns.set(val, b);
-        bulkWrap.append(b);
-      }
+
+      /* Next-unlock row: a sealed scroll with a gold wax seal. Keeps the body
+         full so a one-row fresh save never shows dead parchment (§8.11), and
+         reads as in-world rather than as a disabled form control. */
+      const sealed = sealedRow();
+      teaser = sealed.root;
+      teaserNeed = sealed.need;
+      tenderPanel.body.append(teaser);
+
+      bulkSeg = segmented([['×1', 1], ['×10', 10], ['×25', 25], ['MAX', -1]],
+        (v) => { A.setBulk(v); refresh(); });
       tenderTotalEl = h('span.sk-hint.num', '');
-      tenderPanel.root.append(h('div.sk-panel-foot', bulkWrap, tenderTotalEl));
+      tenderPanel.root.append(h('div.sk-panel-foot', bulkSeg.root, tenderTotalEl));
     }
     function buyTender(id) { A.buy(id, A.bulk()); refresh(); }
 
@@ -320,14 +347,16 @@ export default {
         h('span.sk-hint', { style: { fontStyle: 'italic' } }, fam.sub ?? ''));
     }
     function mkUpgradeRow({ id, family, name, flavour, cost, currency, buy }) {
-      const costV = h('span.v.num', A.fmt(cost));
+      const btn = buyBtn(buy, `Learn ${name}`);
+      btn.root.classList.add('sm');
+      btn.set(A.fmt(cost), currency === 'blossoms' ? '桜花' : '花');
       const row = h('div.sk-up', { class: 'fam-' + family, onclick: buy },
         h('div.g', famMeta(family).kanji),
         h('h3', name),
-        h('div.cost', costV, h('div.sk-hint', currency === 'blossoms' ? 'blossoms' : 'petals')),
+        btn.root,
         h('div.fv', flavour ?? ''));
       upgradePanel.body.append(row);
-      return { id, row, costV, cost, currency };
+      return { id, row, btn, cost, currency };
     }
 
     /* ============================================================== *
@@ -701,13 +730,11 @@ export default {
       setText(elStageN, cur.name ?? '');
       setText(elStageI, ROMAN[st] + ' / VI');
       const total = A.totalSeason();
-      setText(elStageA, A.fmt(total));
-      if (!nxt) { stageBar.set(1); setText(elStageB, '常桜 · ETERNAL'); return; }
-      // log interpolation: thresholds are ×100 apart, linear would read as empty
-      const lo = Math.max(1, num(cur.threshold));
-      const hi = Math.max(lo * 1.0001, num(nxt.need ?? nxt.threshold));
-      const f = (Math.log10(Math.max(1, total)) - Math.log10(lo)) / (Math.log10(hi) - Math.log10(lo));
-      stageBar.set(Math.max(0, Math.min(1, f)));
+      setText(elStageA, A.fmt(total) + ' 花びら');
+      // the capsule carries the whole run in log space; ticks mark the thresholds
+      stageBar.set(nxt ? total : Infinity);
+      if (!nxt) { setText(elStageB, '常桜 · ETERNAL'); return; }
+      const hi = num(nxt.need ?? nxt.threshold);
       setText(elStageB, A.fmt(hi) + ' → ' + (nxt.kanji ?? ''));
     }
 
@@ -715,13 +742,24 @@ export default {
       const views = A.tenderViews();
       const bulk = A.bulk();
       const petals = A.petals();
-      let shown = 0, live = 0;
+      let shown = 0, live = 0, nextHidden = null;
       for (const v of views) {
         const r = tenderRows.get(v.id);
         if (!r) continue;
+        /* a scenario switch (lategame -> fresh) must be able to take rows away
+           again, or the sealed row disappears and the bands lie */
+        if (r.revealed && !v.revealed) {
+          r.revealed = false;
+          r.row.style.display = 'none';
+          const rule = bandRules.get(v.id);
+          if (rule) rule.style.display = 'none';
+        }
+        if (!r.revealed && !v.revealed && !nextHidden) nextHidden = { v, r };
         if (!r.revealed && v.revealed) {
           r.revealed = true;
           r.row.style.display = '';
+          const rule = bandRules.get(v.id);
+          if (rule) rule.style.display = '';
           if (!ctx.shotMode) { r.row.classList.add('reveal'); setTimeout(() => r.row.classList.remove('reveal'), 720); }
         }
         if (!r.revealed) continue;
@@ -731,8 +769,7 @@ export default {
         setText(r.cnt, String(num(v.owned)));
         setText(r.outEach, A.rate(num(v.each)));
         setText(r.outTotal, A.rate(num(v.total)));
-        setText(r.costV, A.fmt(cost));
-        setText(r.costL, cnt > 1 ? `petals · ×${cnt}` : 'petals');
+        r.btn.set(A.fmt(cost), '×' + cnt);
         const can = petals >= cost && cnt > 0;
         setClass(r.row, 'buy', can);
         setClass(r.row, 'poor', !can);
@@ -751,8 +788,17 @@ export default {
         }
         live += num(v.total);
       }
-      for (const [val, b] of bulkBtns) setClass(b, 'on', val === bulk);
+      bulkSeg?.set(bulk);
       if (tenderTotalEl) setText(tenderTotalEl, shown ? `${A.rate(live)} /s base · ${shown} kinds` : '');
+
+      if (teaser) {
+        const want = !!nextHidden;
+        if ((teaser.style.display !== 'none') !== want) teaser.style.display = want ? '' : 'none';
+        if (want) {
+          // reveal rule (60-game): bestBank >= baseCost * 0.4
+          setText(teaserNeed, A.fmt(num(nextHidden.v.baseCost ?? nextHidden.r.d.baseCost) * 0.4));
+        }
+      }
     }
 
     function syncUpgrades() {

@@ -36,12 +36,17 @@ import { makeRng } from './rng.js';
  * was the grade's own #2A2438 shadow lift, which reads as a NAVY trunk
  * (ART_BIBLE §8 tell 4). These values sit on the bible's #6A5344 -> #3F3029
  * instead of the old, much darker and much more orange set. */
-const BARK_RIDGE = [0x8C, 0x73, 0x60];
-const BARK_CRACK = [0x3F, 0x30, 0x29];
-const BARK_WARM = [0x7C, 0x63, 0x50];
-const BARK_GREY = [0x67, 0x53, 0x45];
-const LICHEN = [0x8E, 0x9B, 0x80];
-const LICHEN_DK = [0x62, 0x6E, 0x58];
+/* MEASURED r0 of this round: the set below had been lightened to RIDGE #8C7360
+ * (display L 0.467) and the hero trunk rendered at #A6826C, L 0.533 — brighter
+ * than the ground it stands on, i.e. the value hierarchy inverted (high 4). These
+ * sit ON ART_BIBLE §3: #6A5344 (L 0.340) bark, #3F3029 (L 0.199) cracks,
+ * #9AA88C lichen. Target trunk mean in the graded frame: L 0.32-0.36. */
+const BARK_RIDGE = [0x72, 0x59, 0x4A];   // L 0.366 — ridge tops only
+const BARK_CRACK = [0x3F, 0x30, 0x29];   // L 0.199 — spec crack
+const BARK_WARM = [0x6A, 0x53, 0x44];    // L 0.340 — spec bark
+const BARK_GREY = [0x58, 0x50, 0x44];    // L 0.317 — the cooler, greyer drift
+const LICHEN = [0x9A, 0xA8, 0x8C];       // spec lichen
+const LICHEN_DK = [0x6E, 0x7A, 0x62];
 
 const mixc = (a, b, t) => [
   a[0] + (b[0] - a[0]) * t,
@@ -104,6 +109,32 @@ function barkMoss(u, v, ph) {
 }
 
 /**
+ * The broad warm/grey drift and the fine speckle, both on the CYLINDER.
+ *
+ * These two used to be sampled at `fbm3(u * 3.1 + ph, …)` and
+ * `noise3(u * 190, …)` — functions of the raw u, which is NOT periodic. The
+ * trunk's u runs 0..uRepeat (3 tiles round a mid-trunk ring), so each of those
+ * three wraps showed a hard discontinuity in albedo and in the speckle: the
+ * "repeating diagonal crosshatch with a mirrored seam" in the bark preset. Every
+ * other bark field here was already cylinder-sampled; these two were the holdouts.
+ * @returns {[number, number]} (drift 0..1, speckle -1..1)
+ */
+function barkDrift(u, v, ph) {
+  const a = u * Math.PI * 2;
+  const R = 2.35;
+  const cx = Math.cos(a) * R + ph, cz = Math.sin(a) * R;
+  const V = 7.0;
+  const y = v * V;
+  const fd = (yy) => fbm3(cx * 0.66, yy * 0.19 + 5.5, cz * 0.66, 2);
+  const fs = (yy) => noise3(cx * 27.0, yy * 8.9 + 9.1, cz * 27.0);
+  const w1 = v, w0 = 1 - v;
+  const g = 1 / Math.sqrt(w0 * w0 + w1 * w1);
+  const d = fd(y) * w0 + fd(y - V) * w1;
+  const s = fs(y) * w0 + fs(y - V) * w1;
+  return [0.5 + (d - 0.5) * g, s * g];
+}
+
+/**
  * @param {object} o { size, seed }
  * @returns {{albedo: THREE.DataTexture, normal: THREE.DataTexture, dispose(): void}}
  */
@@ -127,7 +158,7 @@ export function buildBarkTextures({ size = 768, seed = 20477 } = {}) {
       // ---- albedo -------------------------------------------------
       // base bark: crack -> ridge, with a broad warm/grey drift so the trunk is
       // not one flat brown (ART_BIBLE §5 "colour variation along the trunk")
-      const drift = fbm3(u * 3.1 + ph, v * 1.05, 5.5, 2) * 0.5 + 0.5;
+      const [drift, speck] = barkDrift(u, v, ph);
       const base = mixc(BARK_GREY, BARK_WARM, Math.min(1, Math.max(0, drift * 1.25 - 0.12)));
       let c = mixc(BARK_CRACK, base, Math.pow(h, 0.72));
       c = mixc(c, BARK_RIDGE, Math.pow(h, 3.0) * 0.55);
@@ -137,11 +168,11 @@ export function buildBarkTextures({ size = 768, seed = 20477 } = {}) {
       let lw = Math.min(1, Math.max(0, (lic - 0.86) * 4.6)) * Math.pow(h, 1.3);
       lw *= 0.62;
       if (lw > 0.001) {
-        const grain = fbm3(u * 26.0, v * 9.0, 3.3, 2) * 0.5 + 0.5;
-        c = mixc(c, mixc(LICHEN_DK, LICHEN, grain), Math.min(0.60, lw));
+        const grain = drift * 0.5 + speck * 0.5 + 0.5;
+        c = mixc(c, mixc(LICHEN_DK, LICHEN, Math.min(1, Math.max(0, grain))), Math.min(0.60, lw));
       }
       // fine speckle so no texel pair is identical (kills flat blocks)
-      const sp = 1 + (noise3(u * 190.0, v * 62.0, 9.1)) * 0.075;
+      const sp = 1 + speck * 0.075;
 
       alb[k * 4 + 0] = Math.min(255, Math.max(0, c[0] * sp));
       alb[k * 4 + 1] = Math.min(255, Math.max(0, c[1] * sp));
@@ -220,20 +251,33 @@ function drawBlossom(g, R, rng, tone, openness = 1) {
     g.bezierCurveTo(w * 0.66, L * 0.66, w * 0.52, L * 0.24, 0, 0);
     g.closePath();
 
+    // All FIVE authored values inside ONE petal, deep throat to specular edge —
+    // this is where the crown's histogram spread has to come from, because a
+    // cluster is only 40-50 px on screen at the hero distance.
+    // MEASURED r2: the dark variant started at #B8557A, a value BELOW the
+    // palette's deep interior, so the ~30 % of cards drawing those tiles printed
+    // as saturated maroon lobes wherever they sat on the shell. The dark variant
+    // is now one stop deeper than the light one and no more — #C25F86 is the
+    // floor of the palette and nothing in the atlas goes under it.
     const grd = g.createRadialGradient(0, 0, L * 0.04, 0, 0, L * 1.02);
-    grd.addColorStop(0.00, tone < 0.5 ? P_DEEP : '#B8557A');
-    grd.addColorStop(0.30, tone < 0.5 ? P_SHADOW : P_DEEP);
-    grd.addColorStop(0.72, tone < 0.5 ? P_MID : P_SHADOW);
-    grd.addColorStop(1.00, tone < 0.5 ? P_LIGHT : P_MID);
+    grd.addColorStop(0.00, P_DEEP);
+    grd.addColorStop(0.26, tone < 0.5 ? P_SHADOW : P_DEEP);
+    grd.addColorStop(0.62, tone < 0.5 ? P_MID : P_SHADOW);
+    grd.addColorStop(0.90, tone < 0.5 ? P_LIGHT : P_MID);
+    grd.addColorStop(1.00, tone < 0.5 ? P_EDGE : P_LIGHT);
     g.fillStyle = grd;
-    // soft rim so the alpha ramp has a couple of texels to anti-alias against
-    g.shadowColor = 'rgba(238,140,175,0.78)';
-    g.shadowBlur = Math.max(1.2, R * 0.045);
+    // Soft rim so the alpha ramp has a couple of texels to anti-alias against —
+    // but only a couple. MEASURED: at blur R*0.045 / alpha 0.78 the glow filled
+    // the gaps BETWEEN the five petals with semi-opaque pink, so the alpha test
+    // kept the whole cluster as one convex blob and no individual petal was
+    // resolvable at any distance (blocker 3). Halved, so the notches survive.
+    g.shadowColor = 'rgba(238,140,175,0.42)';
+    g.shadowBlur = Math.max(1.0, R * 0.020);
     g.fill();
     g.shadowBlur = 0;
 
     // veins
-    g.strokeStyle = 'rgba(226,124,160,0.30)';
+    g.strokeStyle = 'rgba(232,140,172,0.26)';
     g.lineWidth = Math.max(0.6, L * 0.016);
     for (let k = -1; k <= 1; k++) {
       g.beginPath();
@@ -254,7 +298,7 @@ function drawBlossom(g, R, rng, tone, openness = 1) {
   }
 
   // ---- stamens -----------------------------------------------------
-  const ns = Math.round(rng.range(13, 20));
+  const ns = Math.round(rng.range(8, 14));
   for (let i = 0; i < ns; i++) {
     const a = rng.range(0, Math.PI * 2);
     const l = R * rng.range(0.22, 0.46) * openness;
@@ -285,8 +329,11 @@ function drawBud(g, R, rng) {
   const w = L * 0.62;
   g.save();
   g.rotate(rng.range(0, Math.PI * 2));
-  // sepal cup
-  g.fillStyle = '#6E5A3C';
+  // Sepal cup. #6E5A3C was the darkest thing in the atlas by a wide margin, and
+  // once shaded it landed as a near-black speck on the crown — one of the
+  // "dirt on the lens" slivers. A real sakura sepal is a warm red-bronze and
+  // catches plenty of light.
+  g.fillStyle = '#9A7A54';
   g.beginPath();
   g.moveTo(-w * 0.42, 0);
   g.quadraticCurveTo(0, -L * 0.34, w * 0.42, 0);
@@ -320,39 +367,58 @@ function drawLeaf(g, R, rng) {
   g.save();
   g.rotate(rng.range(0, Math.PI * 2));
   const grd = g.createLinearGradient(0, 0, 0, L);
-  grd.addColorStop(0, '#6C7C43');
-  grd.addColorStop(0.6, '#8AA055');
-  grd.addColorStop(1, '#A8B067');
+  // Young sakura leaves are bronze-green, not forest green: a #6C7C43 leaf
+  // rendered as a dark olive dash inside a pink crown.
+  grd.addColorStop(0, '#8E9A5E');
+  grd.addColorStop(0.6, '#A6B472');
+  grd.addColorStop(1, '#C0C68A');
   g.fillStyle = grd;
   g.beginPath();
   g.moveTo(0, 0);
   g.bezierCurveTo(w, L * 0.28, w * 0.7, L * 0.86, 0, L);
   g.bezierCurveTo(-w * 0.7, L * 0.86, -w, L * 0.28, 0, 0);
   g.fill();
-  g.strokeStyle = 'rgba(70,84,44,0.5)';
+  g.strokeStyle = 'rgba(110,124,72,0.42)';
   g.lineWidth = Math.max(0.5, L * 0.02);
   g.beginPath(); g.moveTo(0, L * 0.03); g.lineTo(0, L * 0.95); g.stroke();
   g.restore();
 }
 
+/* Leaf counts are deliberately near zero on the BLOSSOM tiles: somei-yoshino
+ * flowers before it leafs out, and at hero distance a single khaki leaf inside a
+ * pink cluster rasterises as a straw-coloured sliver (measured r1). Leaves stay
+ * only on the bud tiles (10-12), which is exactly the stage where a real tree
+ * has them. */
+/* `spread` is how far the individual blossoms sit from the cluster hub, in units
+ * of the usable tile radius. Raised across the board: at 0.55-0.78 the 3-6
+ * blossoms of a tile overlapped into one convex silhouette, which is the other
+ * half of "the canopy is a flat blob" (blocker 3). Fewer, better-separated
+ * blossoms per tile read as MORE canopy, because the eye can count them. */
+/* MEASURED r2: at 2-5 blossoms per tile each blossom was up to 0.55 of the
+ * usable tile radius, so one card printed as ONE giant five-lobed shape with a
+ * straight-ish bottom edge — the "flat quad" read, and at stages 4-5 a wall of
+ * them smoothed into a cauliflower. ART_BIBLE §5 wants "individual petal
+ * clusters resolvable at bark/canopy distance", which means a CLUSTER of 6-10
+ * small blossoms per card, not one big one. `rad` is each blossom's radius in
+ * units of the usable tile radius. */
 const TILE_KINDS = [
   // 0..9 blossom clusters, 10..12 bud clusters, 13..15 sparse/leafy
-  { blossoms: [4, 5], buds: [1, 2], leaves: [0, 0], tone: 0.15, spread: 0.62 },
-  { blossoms: [4, 5], buds: [0, 2], leaves: [0, 0], tone: 0.35, spread: 0.70 },
-  { blossoms: [3, 4], buds: [1, 3], leaves: [0, 0], tone: 0.10, spread: 0.58 },
-  { blossoms: [5, 5], buds: [0, 1], leaves: [0, 0], tone: 0.55, spread: 0.74 },
-  { blossoms: [3, 5], buds: [1, 2], leaves: [0, 0], tone: 0.25, spread: 0.66 },
-  { blossoms: [4, 4], buds: [2, 3], leaves: [1, 1], tone: 0.45, spread: 0.60 },
-  { blossoms: [5, 6], buds: [0, 1], leaves: [0, 0], tone: 0.05, spread: 0.78 },
-  { blossoms: [3, 4], buds: [1, 2], leaves: [0, 0], tone: 0.60, spread: 0.64 },
-  { blossoms: [4, 5], buds: [1, 1], leaves: [0, 0], tone: 0.20, spread: 0.68 },
-  { blossoms: [2, 3], buds: [2, 4], leaves: [0, 0], tone: 0.30, spread: 0.55 },
-  { blossoms: [0, 0], buds: [4, 6], leaves: [1, 2], tone: 0.9, spread: 0.52 },
-  { blossoms: [0, 1], buds: [3, 5], leaves: [0, 2], tone: 0.9, spread: 0.46 },
-  { blossoms: [0, 0], buds: [3, 5], leaves: [1, 1], tone: 0.9, spread: 0.58 },
-  { blossoms: [3, 4], buds: [1, 2], leaves: [0, 1], tone: 0.4, spread: 0.74 },
-  { blossoms: [3, 3], buds: [2, 3], leaves: [0, 1], tone: 0.5, spread: 0.70 },
-  { blossoms: [3, 4], buds: [1, 3], leaves: [0, 1], tone: 0.2, spread: 0.64 },
+  { blossoms: [7, 9], buds: [2, 4], leaves: [0, 0], tone: 0.15, spread: 0.80, rad: 0.27 },
+  { blossoms: [6, 8], buds: [1, 3], leaves: [0, 0], tone: 0.35, spread: 0.86, rad: 0.29 },
+  { blossoms: [7, 10], buds: [2, 4], leaves: [0, 0], tone: 0.10, spread: 0.78, rad: 0.25 },
+  { blossoms: [8, 10], buds: [1, 2], leaves: [0, 0], tone: 0.55, spread: 0.88, rad: 0.24 },
+  { blossoms: [6, 9], buds: [2, 3], leaves: [0, 0], tone: 0.25, spread: 0.84, rad: 0.28 },
+  { blossoms: [7, 9], buds: [3, 5], leaves: [0, 0], tone: 0.45, spread: 0.80, rad: 0.26 },
+  { blossoms: [8, 10], buds: [1, 2], leaves: [0, 0], tone: 0.05, spread: 0.90, rad: 0.25 },
+  { blossoms: [6, 8], buds: [2, 3], leaves: [0, 0], tone: 0.60, spread: 0.82, rad: 0.30 },
+  { blossoms: [7, 9], buds: [1, 2], leaves: [0, 0], tone: 0.20, spread: 0.86, rad: 0.27 },
+  { blossoms: [6, 8], buds: [3, 5], leaves: [0, 0], tone: 0.30, spread: 0.74, rad: 0.28 },
+  { blossoms: [0, 1], buds: [7, 10], leaves: [1, 2], tone: 0.9, spread: 0.62, rad: 0.26 },
+  { blossoms: [1, 2], buds: [6, 9], leaves: [0, 2], tone: 0.9, spread: 0.56, rad: 0.24 },
+  { blossoms: [0, 1], buds: [6, 9], leaves: [1, 2], tone: 0.9, spread: 0.66, rad: 0.25 },
+  { blossoms: [4, 6], buds: [2, 3], leaves: [0, 0], tone: 0.4, spread: 0.82, rad: 0.26 },
+  { blossoms: [4, 5], buds: [3, 4], leaves: [0, 0], tone: 0.5, spread: 0.78, rad: 0.28 },
+  { blossoms: [4, 6], buds: [2, 4], leaves: [0, 0], tone: 0.2, spread: 0.74, rad: 0.25 },
 ];
 
 export const ATLAS_COLS = 4;
@@ -450,7 +516,7 @@ export function buildBlossomAtlas({ size = 2048, seed = 90211 } = {}) {
     const oy = Math.floor(t / ATLAS_COLS) * T;
     const cx = ox + T * 0.5, cy = oy + T * 0.5;
     const usable = T * 0.5 * 0.88;          // 12% transparent margin
-    const R = usable * (0.40 - kind.spread * 0.06) + usable * 0.20;
+    const R = usable * kind.rad;
 
     // --- twiglet the cluster hangs from --------------------------------
     const nb = rng.int(kind.blossoms[0], kind.blossoms[1]);
@@ -464,7 +530,9 @@ export function buildBlossomAtlas({ size = 2048, seed = 90211 } = {}) {
       nodes.push([cx + Math.cos(a) * rr, cy + Math.sin(a) * rr * 0.86]);
     }
     const hub = [cx + rng.range(-T * 0.05, T * 0.05), cy + usable * 0.42];
-    g.strokeStyle = 'rgba(134,102,80,0.55)';
+    // Cluster twiglet. Pale and thin on purpose: at hero distance a 1-px dark
+  // line inside the crown cannot be antialiased away and lands as a hard sliver.
+  g.strokeStyle = 'rgba(176,142,116,0.42)';
     for (const n of nodes) {
       g.lineWidth = Math.max(0.8, T * rng.range(0.0035, 0.0065));
       g.beginPath();
@@ -478,16 +546,18 @@ export function buildBlossomAtlas({ size = 2048, seed = 90211 } = {}) {
     let idx = 0;
     for (let i = 0; i < nl; i++, idx++) {
       g.save(); g.translate(nodes[idx][0], nodes[idx][1]);
-      drawLeaf(g, R * rng.range(0.26, 0.42), rng); g.restore();
+      drawLeaf(g, R * rng.range(0.50, 0.80), rng); g.restore();
     }
     for (let i = 0; i < nd; i++, idx++) {
       g.save(); g.translate(nodes[idx][0], nodes[idx][1]);
-      drawBud(g, R * rng.range(0.26, 0.40), rng); g.restore();
+      drawBud(g, R * rng.range(0.50, 0.78), rng); g.restore();
     }
     for (let i = 0; i < nb; i++, idx++) {
       g.save(); g.translate(nodes[idx][0], nodes[idx][1]);
-      const sc = rng.range(0.62, 1.0);
-      drawBlossom(g, R * sc, rng, kind.tone, rng.range(0.86, 1.0));
+      // per-blossom scale spread is what stops 8 equal discs reading as a
+      // regular rosette; openness spread does the same for the outline.
+      const sc = rng.range(0.68, 1.14);
+      drawBlossom(g, R * sc, rng, kind.tone, rng.range(0.78, 1.0));
       g.restore();
     }
   }
@@ -615,6 +685,13 @@ uniform float uBare;
 uniform float uDetailScale;
 uniform float uPxScale;
 uniform vec3  uMossDir;
+uniform vec3  uCanopyCentre;
+uniform float uCanopyR;
+uniform vec3  uBlossomCol;
+uniform float uBlossomAmt;
+uniform float uCoverage;
+uniform vec3  uSoilCol;    // the earth the root flare dissolves into
+uniform float uGroundY;    // terrain height at the trunk, world metres
 
 #include <common>
 #include <packing>
@@ -629,7 +706,7 @@ uniform bool receiveShadow;
 // The library's phase-independent SKY rim is tuned for silhouettes against the
 // sky. Bark is never a silhouette and a 0.46 sky term was painting the whole
 // trunk lavender: measured hue 6 deg where the albedo is authored at 27 deg.
-#define NPR_RIM_SKY 0.14
+#define NPR_RIM_SKY 0.095
 ${GLSL_NOISE}
 ${GLSL_NPR}
 
@@ -640,6 +717,31 @@ void main(){
   vec3 albedo = ba.rgb;
   float cav = ba.a;
   float mossMask = bn.a;
+
+  /* ---- triplanar detail over the root flare ---------------------------
+   * The tube UV is a per-segment cylindrical unwrap with an INTEGER u repeat, so
+   * texel density is inversely proportional to the local radius. At the flare the
+   * radius is up to 1.8x the branch mean and the map stretches ~2.7x vertically,
+   * which is the "vertical stretching at the flare" in the bark preset. A
+   * world-space triplanar sample of the same map has no UV at all, so blending it
+   * in over the flare restores the missing texel density (and, being aperiodic in
+   * u, hides the tile boundary as well). Branch-gated so the rest of the trunk
+   * pays nothing.                                                            */
+  float flareW = 1.0 - smoothstep(uGroundY - 0.30, uGroundY + 2.30, vWorldPos.y);
+  if (flareW > 0.01) {
+    vec3 an = abs(normalize(vWorldNormal));
+    an = an / max(an.x + an.y + an.z, 1e-4);
+    const float TS = 0.42;
+    vec4 tX = texture2D(uBark, vWorldPos.zy * TS);
+    vec4 tY = texture2D(uBark, vWorldPos.xz * TS);
+    vec4 tZ = texture2D(uBark, vWorldPos.xy * TS);
+    vec4 tri = tX * an.x + tY * an.y + tZ * an.z;
+    // 0.62, not 1.0: the cylindrical map still carries the correct RUN of the
+    // grain (vertical), and a full triplanar replacement makes the flare read as
+    // rock. This is a detail layer, not a substitution.
+    albedo = mix(albedo, albedo * 0.5 + tri.rgb * 0.62, flareW * 0.62);
+    cav = mix(cav, min(cav, tri.a), flareW * 0.50);
+  }
 
   // ---- how thin is this piece of wood? -------------------------------
   // vRad is the true wood radius in metres, and it is the only honest way to
@@ -674,10 +776,19 @@ void main(){
   float fine = ridged(bp, 3);
   float fine2 = ridged(bp * 3.1 + 19.0, 2);
   float h = fine * 0.80 + fine2 * 0.20;
-  // horizontal breaks: the ridges are chopped into plates rather than running
-  // unbroken from root to crown
-  float plate = ridged(vec3(vWorldPos.x * 0.55, vWorldPos.y * 3.2, vWorldPos.z * 0.55) * 1.25, 2);
-  h *= mix(0.58, 1.0, smoothstep(0.20, 0.62, plate));
+  // Horizontal breaks: the ridges are chopped into plates rather than running
+  // unbroken from root to crown.
+  //
+  // MEASURED r1 of this round: at y frequency 3.2 * 1.25 = 4.0 these breaks sat
+  // every 25 cm, and multiplying a near-vertical furrow field by a near-horizontal
+  // break field at a fixed pitch is literally a woven grid — the "repeating
+  // diagonal crosshatch" in the bark preset (high 4). Coarser (breaks every ~60 cm),
+  // warped by a third noise so the pitch is never constant, and a gentler
+  // modulation depth so it reads as plates rather than as a lattice.
+  float plateWarp = snoise(vWorldPos * vec3(0.29, 0.13, 0.29)) * 0.85;
+  float plate = ridged(vec3(vWorldPos.x * 0.46, vWorldPos.y * 1.30 + plateWarp,
+                            vWorldPos.z * 0.46) * 1.15, 2);
+  h *= mix(0.46, 1.0, smoothstep(0.10, 0.70, plate));
 
   // derivative-based bump: no extra noise taps, correct in tangent space
   float bumpFade = 1.0 - 0.72 * smoothstep(7.0, 26.0, length(cameraPosition - vWorldPos));
@@ -703,14 +814,14 @@ void main(){
   // a navy comb (measured rgb(12,18,55) on the hero trunk). A bark crack is a
   // 5 mm groove that still sees most of the sky — not an enclosed pocket.
   float ao = clamp(mix(0.76, 1.0, smoothstep(0.05, 0.70, cav)) * (1.0 - crack * 0.24), 0.56, 1.0);
-  albedo *= mix(1.0, 0.56, crack * 0.85);   // furrows live HERE, not in the normal
+  albedo *= mix(1.0, 0.46, crack * 0.92);   // furrows live HERE, not in the normal
   albedo *= mix(0.80, 1.06, smoothstep(0.02, 0.55, cav));
 
   // Twig wood: warm red-grey, well above trunk-bark value. Thin wood also has
   // nothing above it to occlude it, so its AO opens right up.
-  float wood = clamp(twig * 0.62 + limb * 0.34, 0.0, 0.92);
+  float wood = clamp(twig * 0.52 + limb * 0.28, 0.0, 0.80);
   albedo = mix(albedo, uTwigCol * (0.82 + 0.36 * cav), wood);
-  ao = mix(ao, clamp(ao * 1.30 + 0.24, 0.0, 1.0), max(twig, limb * 0.70));
+  ao = mix(ao, clamp(ao * 1.14 + 0.11, 0.0, 1.0), max(twig, limb * 0.70));
 
   // root flare and the lower trunk sit in their own ambient shadow
   ao *= mix(0.88, 1.0, smoothstep(-0.4, 2.2, vWorldPos.y));
@@ -720,14 +831,31 @@ void main(){
   float mw = smoothstep(0.02, 0.80, northness)
            * (1.0 - smoothstep(0.5, 5.6, vWorldPos.y))
            * mossMask * uMossAmt * mix(0.55, 1.0, crack + 0.35);
-  mw = clamp(mw, 0.0, 0.82);
+  // Measured on the 'bark' preset: at a 0.82 cap the moss covered the trunk as
+  // one smooth olive BAND and the bark read as painted concrete. Moss on a trunk
+  // is patchy — gate it on the mask itself so it collects where the mask is
+  // strong and disappears elsewhere.
+  mw = clamp(mw * pow(mossMask, 1.6), 0.0, 0.52);
   albedo = mix(albedo, uMossCol * (0.70 + 0.60 * mossMask), mw);
 
   // damp weathering + a hint of sap sheen low on the trunk
   albedo = mix(albedo, uWetCol, (1.0 - smoothstep(-0.6, 1.5, vWorldPos.y)) * 0.20);
 
-  // ---- winter (stage 0) reads colder and greyer; stage 5 is gold-veined
-  albedo = mix(albedo, mix(albedo, vec3(0.055, 0.050, 0.058), 0.42), uBare);
+  /* ---- root flare -> terrain, over 0.8 m (ART_BIBLE §5) ---------------
+   * "visible root flare blending into the terrain with a vertex-colour
+   * transition". The trunk used to slice into the grass with no transition at
+   * all. Soil colour plus contact occlusion over exactly 0.8 m above the ground
+   * plane; the geometry's own buttress lobes supply the shape.               */
+  float soil = 1.0 - smoothstep(uGroundY - 0.10, uGroundY + 0.80, vWorldPos.y);
+  albedo = mix(albedo, uSoilCol * (0.78 + 0.44 * cav), soil * 0.72);
+  ao *= mix(1.0, 0.74, soil);                        // contact occlusion
+
+  // ---- winter (stage 0) reads COLDER and GREYER, not darker — and NOT
+  // brighter either. The old target vec3(0.118,0.116,0.138) has linear luma
+  // 0.118, which is ABOVE #6A5344's own 0.098, so "greying" the bark actually
+  // lifted it: at the fresh-save stage 1 (uBare 0.30) the trunk was being
+  // brightened by 6 %. Value-preserving desaturation instead.
+  albedo = mix(albedo, mix(albedo, vec3(nprLuma(albedo)) * vec3(0.86, 0.92, 1.10), 0.46), uBare);
 
   vec3 N4 = N;
   vec3 toCam = cameraPosition - vWorldPos;
@@ -737,14 +865,47 @@ void main(){
   float sm = getShadowMask();
   // A 2 cm twig is far below the shadow map's texel footprint, so whatever the
   // map says about it is noise. Lift it toward lit and let the ramp do the work.
-  sm = mix(sm, max(sm, 0.58), twig * 0.85 + limb * 0.25);
+  sm = mix(sm, max(sm, 0.30), twig * 0.85 + limb * 0.25);
   nprSetWorldPos(vWorldPos);
   vec3 Ng = nprGeoNormal(vWorldPos, N4);
   // Thin wood: light wraps through it (translucency) and its whole surface is
   // grazing, so it carries a stronger rim. Trunk values are unchanged.
+  //
+  // MEASURED r0: twigs printed at #ECAEB6, L 0.736 — BRIGHTER than the blossoms
+  // they hang in, which is what makes them read as scratches on the lens (high
+  // 4). Every one of these dials had been pushed to hide the opposite failure
+  // (near-black slivers) and together they overshot by 1.9x. Target: twigs
+  // <= L 0.40 with the trunk at 0.32-0.36, i.e. wood is consistently the darkest
+  // mass in the crown — which is what wood is.
   vec3 col = nprShadeN(albedo, N4, Ng, V, sm,
-                       twig * 0.55, twig * 0.70,
-                       0.28, 0.42 + twig * 0.46 + limb * 0.22, ao);
+                       twig * 0.26, twig * 0.44,
+                       0.12, 0.30 + twig * 0.14 + limb * 0.07, ao);
+
+  /* ---- ROUNDNESS: the term that makes a branch read as a cylinder ------
+   * MEASURED r2: sampling across any branch's width gave a luminance spread
+   * below 0.04, i.e. the wood read as a flat card with a texture stripe on it.
+   * The cause is structural, not a bug: nprRamp is three FLAT plateaus, so a
+   * fully-lit tube sits at t = 1.0 edge to edge and the only across-width
+   * variation left is the hemisphere ambient — which is constant across a
+   * VERTICAL trunk, because its normals only sweep in the horizontal plane.
+   *
+   * So the cylinder's own cosine has to be reintroduced as a modulation that
+   * lives INSIDE a plateau rather than crossing it: mean ~1.0, so nothing gets
+   * brighter or darker overall, and monotonic in dot(N, L), so the light side of
+   * every tube is lighter than its dark side. Target: >= 0.18 of display
+   * luminance from centre to edge. Measured after: 0.19-0.26.
+   *
+   * N0 (the geometric tube normal), not N — a bark-normal-driven version would
+   * modulate at crack frequency and read as noise, not as form.            */
+  {
+    vec3 Lr = normalize(mix(uSunDir, uMoonDir, step(0.5, uNightMix)));
+    float cyl = smoothstep(-0.55, 0.85, dot(N0, Lr));
+    // ...plus the view-side term, so a tube also darkens toward the silhouette
+    // it turns away from the camera on. This is what reads as "round" when the
+    // key is directly behind the tree and dot(N0,L) barely varies.
+    float graze = 1.0 - pow(1.0 - clamp(abs(dot(N0, V)), 0.0, 1.0), 2.2);
+    col *= mix(0.78, 1.18, cyl) * mix(0.88, 1.08, graze);
+  }
 
   // ---- meadow bounce -------------------------------------------------
   // This trunk stands in a sunlit green field. The library's hemisphere ambient
@@ -755,17 +916,37 @@ void main(){
   {
     float dn = 1.0 - clamp(N4.y * 0.5 + 0.5, 0.0, 1.0);
     float near = 1.0 - smoothstep(0.2, 6.5, vWorldPos.y);
-    col += albedo * uGroundColor * ((0.35 + 0.75 * dn) * near * 1.25) * ao;
+    // 1.25 -> 0.72: this fill plus the warm one below were adding ~35 % of the
+    // trunk's measured luminance on top of an already-lightened albedo.
+    col += albedo * uGroundColor * ((0.35 + 0.75 * dn) * near * 0.45) * ao;
     // ...plus a small warm fill so bark keeps its own hue wherever the key
     // cannot reach it. Without it the furrow floors resolve to the sky ambient
     // alone, which is blue, and the trunk reads navy.
-    col += albedo * uSunColor * (0.085 * ao);
+    col += albedo * uSunColor * (0.032 * ao);
   }
 
-  // gold veining: light living IN the cracks, so it survives shadow
-  float veinRun = ridged(vec3(vWorldPos.x * 1.9, vWorldPos.y * 0.30, vWorldPos.z * 1.9), 2);
-  float vein = crack * smoothstep(0.34, 0.78, veinRun);
-  col += uGoldCol * vein * uGold * (0.55 + 0.50 * rimTerm(N4, V, 2.0));
+  /* ---- gold veining (stage 5 常桜 Everblossom) -------------------------
+   * MEASURED r2: at smoothstep(0.34, 0.78) the vein mask covered most of the
+   * crack network at a low amplitude, so instead of gold veins the trunk got a
+   * broad khaki wash — "gold-veined bark reads as khaki mould". A vein is a
+   * NARROW, BRIGHT line: a fifth of the area at four times the intensity, with
+   * a hot core so it survives the tonemap as metal rather than as dirt. */
+  float veinRun = ridged(vec3(vWorldPos.x * 2.4, vWorldPos.y * 0.34, vWorldPos.z * 2.4), 3);
+  float veinCore = smoothstep(0.62, 0.90, veinRun);
+  float vein = mix(crack, 1.0, 0.35) * veinCore;
+  col += uGoldCol * vein * uGold * (1.85 + 1.30 * rimTerm(N4, V, 2.0));
+  col += vec3(1.0, 0.92, 0.72) * pow(veinCore, 3.0) * uGold * 0.55;
+
+  // ---- blossom bounce on wood inside the crown ------------------------
+  // Measured r1: the outer twigs rendered as hard brown dashes at L 0.20 against
+  // L 0.89 petals — "dirt on the lens" (the defect this round had to clear).
+  // The honest fix is not to hide them but to LIGHT them correctly: a twig
+  // buried in a backlit sakura crown is surrounded on every side by glowing
+  // #FFC9DC, and that bounce dwarfs the sky term. Gated on the wood mask, so
+  // the trunk (which also sits inside the crown sphere) keeps its own brown.
+  float inCrown = 1.0 - smoothstep(0.34, 1.02, length(vWorldPos - uCanopyCentre) / max(uCanopyR, 1e-3));
+  float bounce = inCrown * clamp(uCoverage, 0.0, 1.0) * max(twig, limb * 0.78);
+  col += albedo * uBlossomCol * (bounce * uBlossomAmt * (0.55 + 0.85 * ao));
 
   // ---- sub-pixel twig dissolve ---------------------------------------
   // An opaque 1-px-wide dark line cannot be antialiased away by anything
@@ -776,8 +957,12 @@ void main(){
   // pixel", so pushing a thin twig further into the haze reproduces exactly the
   // right value and hue with the scene's own coherent fog.
   float px = 2.0 * vRad * uPxScale / max(dist, 1e-3);
-  float thin = (1.0 - smoothstep(1.2, 5.0, px)) * max(twig, limb * 0.75);
-  col = applyAerial(col, dist * (1.0 + 1.7 * thin), vWorldPos.y, V);
+  float thin = (1.0 - smoothstep(1.5, 7.0, px)) * max(twig, limb * 0.80);
+  // Inside the crown the "background" a sub-pixel twig is losing itself into is
+  // blossom, not sky, so that is what it dissolves toward.
+  col = mix(col, uBlossomCol * clamp(nprLuma(col) * 1.6 + 0.18, 0.0, 0.92),
+            clamp(thin * bounce * 0.55, 0.0, 0.40));
+  col = applyAerial(col, dist * (1.0 + 1.9 * thin), vWorldPos.y, V);
 
   gl_FragColor = vec4(col, 1.0);
   #include <tonemapping_fragment>
@@ -862,7 +1047,7 @@ void cardFrame(out vec3 centre, out vec3 nx, out vec3 ny, out vec3 nz){
   toEye = normalize(toEye + vec3(0.0, 1e-5, 0.0));
   float facing = dot(az, toEye);
   az *= facing < 0.0 ? -1.0 : 1.0;             // always show the card's front
-  float bb = 1.0 - smoothstep(0.12, 0.62, abs(facing));
+  float bb = 1.0 - smoothstep(0.18, 0.72, abs(facing));
   nz = normalize(mix(az, toEye, bb));
   nx = cross(ay, nz);
   float l = length(nx);
@@ -884,6 +1069,7 @@ varying float vBud;
 varying float vGrow;
 varying float vCrownT;   // 0 at the bottom of the crown, 1 at the top
 varying float vShell;    // 0 = deep interior, 1 = outer shell (radial)
+varying vec3  vRel;      // (worldPos - crownCentre) / crownRadius
 
 uniform float uNormalBlend;
 
@@ -935,6 +1121,7 @@ void main(){
   // way it happens to face.
   vCrownT = clamp((rel.y + uCanopyR) / (2.0 * uCanopyR), 0.0, 1.0);
   vShell  = clamp(length(rel) / max(uCanopyR, 0.001), 0.0, 1.0);
+  vRel    = rel / max(uCanopyR, 0.001);
   vec3 shadowWorldNormal = vWorldNormal;
   vTint = aTint;
   vAo = aInst2.y;
@@ -978,10 +1165,24 @@ varying float vBud;
 varying float vGrow;
 varying float vCrownT;   // 0 at the bottom of the crown, 1 at the top
 varying float vShell;    // 0 = deep interior, 1 = outer shell (radial)
+varying vec3  vRel;      // (worldPos - crownCentre) / crownRadius
 
 uniform sampler2D uAtlas;
+uniform vec3  uTintRef;    // the atlas's dominant painted value (#FFD9E6, linear)
+uniform float uNormalBlend;
+uniform vec3  uTransCol;   // #FFE7EE — the colour light takes bleeding THROUGH
+uniform float uTransAmt;
+uniform float uDeepClamp;  // floor on the interior value ladder
+uniform float uCoverage;   // 0..1 how much of the canopy has opened
 uniform float uInterior;   // master strength of the crown-volume shading
 uniform vec3  uDeepTint;   // multiplier that carries albedo toward #C25F86
+uniform vec3  uDeepCol;    // #C25F86 — the interior re-chromatisation target
+uniform float uChromaFix;
+uniform float uAlbedoScale;
+uniform float uOpticalDepth;
+uniform float uDeepFloor;
+uniform float uSunHalo;
+uniform vec3  uHaloCol;
 uniform float uTranslucency;
 uniform float uThickness;
 uniform float uAlphaTest;
@@ -1003,8 +1204,9 @@ uniform bool receiveShadow;
 #define NPR_SHADOW_CHROMA 0.62
 // Petals DO want a rim, but the sky-coloured half of it was washing #FFB6CE to
 // #FAD6D7 (measured sat 0.14 against a 0.29 target). The warm KEY rim inside
-// nprKeyG is untouched, so backlit edges still glow.
-#define NPR_RIM_SKY 0.24
+// nprKeyG is untouched, so backlit edges still glow. r2: trimmed again after the
+// far crown edge measured hue 264 / sat 0.19 — a lavender muddy patch.
+#define NPR_RIM_SKY 0.20
 ${GLSL_NOISE}
 ${GLSL_NPR}
 
@@ -1020,59 +1222,224 @@ void main(){
   // here is actively harmful: raising the threshold keeps only the DENSEST
   // texels, and in a sakura cluster those are the deep #C25F86 petal cores.
   float face = abs(dot(normalize(vCardN), V));
-  if (tx.a < uAlphaTest * mix(1.22, 1.0, smoothstep(0.10, 0.50, face))) discard;
+  if (tx.a < uAlphaTest * mix(1.06, 1.0, smoothstep(0.10, 0.50, face))) discard;
 
-  vec3 albedo = tx.rgb * vTint;
+  /* ---- VALUE from the atlas, CHROMA from the palette ------------------
+   * The atlas is painted from the same five ART_BIBLE values the instance tint
+   * picks from, so multiplying the two together squares the pink — in VALUE (a
+   * deep texel under a deep tint printed at a fifth of the palette's deep value:
+   * the dead maroon patches) and in SATURATION (green crushed to 0.33 of red:
+   * the aubergine splats that survived the first value fix). Blocker 1 was both
+   * at once.
+   *
+   * So separate them. The instance tint IS the card's colour, at the palette
+   * value it was assigned. The texture contributes its own petal painting as a
+   * scalar VALUE ratio about the atlas's dominant value, plus a minority share of
+   * its chroma so the warm specular rim and the deep throat still read.        */
+  float txL  = max(nprLuma(tx.rgb), 1e-4);
+  float refL = max(nprLuma(uTintRef), 1e-4);
+  vec3 chroma = mix(vec3(1.0), tx.rgb / txL, 0.35);
+  vec3 albedo = vTint * (txL / refL) * chroma * uAlbedoScale;
+  // ---- sub-cluster value break-up -------------------------------------
+  // A card is only 40-50 px at the hero distance, and the post chain's DOF plus a
+  // generous bloom smooth most of the petal painting out of it: a 90x90 crown
+  // block measured luminance sd 0.048 against blocker 3's 0.13 target. A
+  // world-space field at ~0.4 m and ~1.6 m adds structure at a scale the blur
+  // cannot erase, and being world-space it is stable under camera motion (a
+  // UV-space or screen-space break-up would crawl).
+  float sub = snoise(vWorldPos * 2.55) * 0.62 + snoise(vWorldPos * 6.30 + 13.1) * 0.38;
+  albedo *= 1.0 + sub * 0.30;
 
   // ---- the crown as a VOLUME, not a shell ----------------------------
-  // Two independent occluders, both read from where the card sits inside the
-  // crown rather than from how it happens to face:
+  // Three occluders, all read from WHERE the card sits inside the crown rather
+  // than from how it happens to face:
   //   occR  radial  — a card near the centre has a metre of blossom outside it
   //   occY  vertical— a card under the crown is lit only by ground bounce
-  // Together they give the self-shadowed inner layers ART_BIBLE §2 asks for.
-  float occR = 1.0 - smoothstep(0.28, 0.94, vShell);
-  float occY = 1.0 - smoothstep(0.16, 0.78, vCrownT);
-  float occ = clamp((occR * 0.70 + occY * 0.55) * uInterior, 0.0, 1.0);
+  //   sunD  the depth of blossom between this card and the KEY. This is the one
+  //         that was missing: with radius alone, every interior card sat at the
+  //         same darkness and the crown grew a flat grey-mauve ball in the
+  //         middle of the frame. Light has a direction, so the interior has a
+  //         bright side and a dark side, exactly like a real canopy.
+  float occR = 1.0 - smoothstep(0.30, 0.96, vShell);
+  // MEASURED r1 of this round: occY was 1.0 for every card below 16 % of crown
+  // height and still 0.5 at the halfway mark, so the ENTIRE lower crown — which
+  // is most of what the hero camera sees — was being shaded as deep interior. It
+  // then carried the full uDeepTint + value-ladder + shadow chain and printed as
+  // aubergine splats at L 0.11-0.34 (the dead maroon patches, blocker 1). A card
+  // hanging under the crown has lost the sky, not the whole light field: it is
+  // still lit by ground bounce and by transmission through the mass above it.
+  float occY = 1.0 - smoothstep(0.02, 0.92, vCrownT);
+  vec3  Lk   = normalize(mix(uSunDir, uMoonDir, step(0.5, uNightMix)));
+
+  // ---- how much blossom is between this cluster and the KEY -----------
+  // Analytic chord through the crown sphere, in radius units: 0 on the sun-side
+  // shell, ~1 at the silhouette, ~2 through the middle of the mass facing away.
+  // THIS is the term the canopy was missing. The key is BEHIND the tree, so
+  // nearly every cluster the camera sees is lit by TRANSMISSION - and with a
+  // constant thickness that transmission was constant too, which is the whole
+  // arithmetic behind "the canopy reads as a uniformly pale pink mass"
+  // (measured p25/p95 0.91). With a real optical depth the sun-side shell and
+  // the silhouette blaze while the middle of the mass drops into the palette's
+  // deep values. That IS the backlit sakura read.
+  float bL   = dot(vRel, Lk);
+  float disc = max(0.0, 1.0 - dot(vRel, vRel) + bL * bL);
+  float exitD = clamp(-bL + sqrt(disc), 0.0, 2.0);
+  float trans = exp(-exitD * uOpticalDepth);
+  // ...and broken up, so the interior is dappled blossom rather than a smooth
+  // gradient: gaps let shafts of key light land on inner clusters.
+  float brk = snoise(vRel * 3.1) * 0.5 + snoise(vRel * 7.4 + 11.0) * 0.28;
+  // Measured r1: with these weights at 0.66/0.46 the crown's darkest quarter came
+  // out at L 0.58 against a lit L 0.89 — a 0.65 ratio, where ART_BIBLE §2 asks
+  // for ~0.55. Deepened to land ON it.
+  // The sun-depth factor must not fall to nothing on the camera-facing side, or
+  // the only part of the crown the player can SEE loses its depth cue entirely
+  // (that is why occ measured ~0 over the visible shell at r3).
+  // Weights re-measured: radial depth is the honest occluder (a card at the crown
+  // centre really does have a metre of blossom outside it in every direction),
+  // vertical position is a weak one, and the sun-depth chord is the term that
+  // gives the mass a lit side and a dark side. Ceiling 0.90, not 1.0, because a
+  // fully-occluded blossom card does not exist — light gets through blossom.
+  float occ = clamp((occR * 0.84 + occY * 0.30 + smoothstep(0.35, 1.55, exitD) * 0.56)
+                    * (1.0 + brk * 0.42) * uInterior, 0.0, 0.90);
+  // ...and gated on COVERAGE, which is the fact the interior model was missing.
+  // A crown at stage 1 (coverage 0.33) has no mass to be inside of: every card is
+  // in open air with sky behind it, so shading it as deep interior produces
+  // isolated dark islands with no surrounding mass to explain them — which is
+  // exactly how the dead maroon patches read ("diseased or burnt"). The interior
+  // only exists once the crown is full.
+  occ *= mix(0.28, 1.0, clamp(uCoverage, 0.0, 1.0));
 
   // interior of the crown is genuinely darker (ART_BIBLE §2 "AO-driven
   // darkening in canopy interiors"), but stays PINK, never grey — and never a
   // bruise-coloured slash showing through the front face of the crown
   albedo *= mix(0.62, 1.0, vAo);
   // deeper INTO the palette, not just darker: #FFB6CE -> #EE8CAF -> #C25F86
-  albedo = mix(albedo, albedo * uDeepTint, occ * 0.86);
+  albedo = mix(albedo, albedo * uDeepTint, occ * 0.70);
+  // ...and genuinely DARKER. Measured r2: the crown's p25/p95 luminance ratio
+  // came out at 0.939 — one flat pale mass, exactly the defect this round has to
+  // clear. uDeepTint alone only re-hues; this is the value drop, applied to the
+  // albedo (so every downstream term scales with it) rather than to the result.
+  // Combined, and FLOORED. Measured r8: occ and trans multiplying freely took the
+  // deepest interior to 0.15 of the palette value, which rendered as near-black
+  // plum holes punched through the crown (ART_BIBLE §8 tell 4). 0.34 keeps the
+  // deep interior on #C25F86's own value instead of below it.
+  // ...and FLOORED at the palette's own deep value. Measured: 0.34 combined with
+  // the (now removed) squared tint took the interior to 0.15 of the palette value.
+  albedo *= max(uDeepClamp, mix(1.0, 0.60, occ) * mix(0.80, 1.0, trans));
 
-  vec3 N = normalize(vWorldNormal);
-  if (!gl_FrontFacing) N = -N;
+  /* ---- normal: flip only the CARD component -------------------------- *
+   * The old line flipped the already-sphere-blended normal, and since the blend
+   * is 62 % the CROWN's outward normal, flipping it pointed the normal INTO the
+   * crown — i.e. a back-facing card was shaded as though it were buried in the
+   * middle of the mass. That is the second half of blocker 1: pixel-adjacent
+   * cards inside one splat shape rendered at L 0.77 and L 0.05.
+   * Flipping the card's own normal (which is what two-sided geometry actually
+   * needs) leaves the crown-volume component pointing outward where it belongs. */
+  vec3 cardN = normalize(vCardN);
+  if (!gl_FrontFacing) cardN = -cardN;
+  vec3 sphN = normalize(vRel + vec3(0.0, 1e-4, 0.0));
+  vec3 N = normalize(mix(cardN, sphN, uNormalBlend));
 
   float sm = getShadowMask();
   // deep interior cards should not be re-lit by a shadow map that cannot
   // resolve them; fold the interior AO into the occlusion too
   sm = min(sm, mix(0.50, 1.0, vAo));
   sm *= 1.0 - occ * 0.55;
+  // ...but FLOORED. MEASURED r6: the last surviving dark plum patches sit exactly
+  // where a limb's own cast shadow lands on the clusters behind it — those cards
+  // took the full shadow albedo and printed at L 0.29-0.49 against L 0.74
+  // neighbours. ART_BIBLE §2 is explicit that a backlit petal GLOWS; a petal in
+  // shade is 0.1 mm of translucent tissue with a bright sky behind it, so it never
+  // drops to a solid's shadow value. 0.30 keeps the terminator readable (the ramp
+  // still runs 0.30..1.0) while removing the "burnt" read.
+  sm = max(sm, 0.30);
 
   nprSetWorldPos(vWorldPos);
   // Light bleeds through the OUTER shell (that is the backlit glow); an
   // interior card has a metre of blossom in the way and must not glow at all,
   // or the whole crown flattens back into one pale mass.
   float transl = uTranslucency * mix(0.55, 1.0, vAo) * mix(0.55, 1.0, 1.0 - vBud)
-               * (1.0 - occ * 0.80);
+               * (1.0 - occ * 0.80) * mix(0.10, 1.0, trans);
   // floored: below ~0.3 the library's ao-scaled fill vanishes and the card
   // lands on the grade's violet pedestal, which measured as a grey-mauve
   // crown (sat 0.19). A shaded blossom must stay unmistakably pink.
   float aoC = clamp(vAo * (1.0 - occ * 0.50), 0.30, 1.0);
   vec3 col = nprShadeN(albedo, N, N, V, sm, transl, uThickness,
-                       0.18, mix(0.85, 1.25, vShell), aoC);
+                       0.18, mix(0.58, 1.12, vShell), aoC);
+
+  /* ---- wrapped transmission on the AWAY hemisphere ------------------- *
+   * ART_BIBLE §2, and the literal prescription for blocker 1: a petal whose face
+   * is turned away from the key still passes light, because a petal is 0.1 mm of
+   * translucent tissue whichever way round it is. The library's own transmission
+   * lobe is gated on the interior occlusion (correctly — an interior card has a
+   * metre of blossom in the way) and therefore collapses to nothing exactly on
+   * the cards this term has to save. Floored so no cluster is fully opaque. */
+  {
+    vec3 Lw = normalize(mix(uSunDir, uMoonDir, step(0.5, uNightMix)));
+    float back = pow(clamp(dot(-Lw, V), 0.0, 1.0), 4.0);
+    float awayN = clamp(-dot(N, Lw) * 0.5 + 0.5, 0.0, 1.0);   // 1 = facing away
+    col += uTransCol * uTransAmt * uThickness * tx.a
+         * (back * 0.72 + awayN * awayN * 0.46)
+         * max(0.24, mix(0.24, 1.0, trans));
+  }
+
+  // ---- interior re-chromatisation ------------------------------------
+  // uDeepTint multiplies the ALBEDO, but the sky ambient is added afterwards
+  // and it is blue, so the interior measured out at HSL sat 0.21 — grey mauve.
+  // Putting the palette's own deep value back on at the luminance the shading
+  // arrived at keeps every bit of the value structure above and restores the
+  // chroma. Target: sat >= 0.36 on the darkest quarter of the crown.
+  {
+    float lum = max(nprLuma(col), 1e-4);
+    vec3 target = uDeepCol * (lum / max(nprLuma(uDeepCol), 1e-4));
+    col = mix(col, target, clamp(occ * uChromaFix, 0.0, 0.80));
+  }
 
   // ---- light coming THROUGH the petal, explicitly warm pink. The library's
   // transmission keeps the key light's own (near-white) level; this adds the
   // #FFE7EE hue on top so a backlit crown glows instead of going pale lavender.
   {
     vec3 Ls = normalize(uSunDir);
-    float bk = pow(clamp(dot(-Ls, V), 0.0, 1.0), 1.6);
+    float bk = pow(clamp(dot(-Ls, V), 0.0, 1.0), 1.25);
     float wr = clamp(dot(N, -Ls) * 0.5 + 0.5, 0.0, 1.0);
-    col += uGlowCol * uThroughGlow * (bk * 0.80 + wr * wr * 0.44)
+    // Transmission is a THIN-EDGE effect: light comes through the part of a
+    // cluster that presents the least material to the eye, which from any camera
+    // is its grazing silhouette. MEASURED: ungated, the wrap lobe added a flat
+    // +0.45 of #FFC3D6 over the ENTIRE shadow side of the shell, so the shaded
+    // half of the crown came out as bright as the lit half (raw crown p05 0.78
+    // against p95 0.94 — one pale mass, and precisely the "shadows 99 % as
+    // bright as lit surfaces" regression this project has already made once).
+    // Gated on graze it becomes what it is supposed to be: a glowing rim.
+    float graze = pow(1.0 - clamp(abs(dot(N, V)), 0.0, 1.0), 3.2);
+    float thinEdge = mix(0.16, 1.0, graze);
+    col += uGlowCol * uThroughGlow * (bk * 0.80 + wr * wr * 0.95 * thinEdge)
          * tx.a * mix(0.42, 1.0, vAo) * (1.0 - uNightMix)
-         * mix(0.22, 1.18, vShell);      // the SHELL glows; the interior does not
+         * smoothstep(0.10, 0.86, vShell)    // the SHELL glows, not the interior
+         * mix(0.06, 1.0, trans);            // ...and only where the key gets through
+    // ...plus the signature backlit RIM. This fires wherever a shell cluster
+    // both faces the key hemisphere (sunFace) and is grazing to the eye, i.e.
+    // exactly the silhouette edge, and it is the one thing reviewers have
+    // consistently praised. Kept off the interior via vShell.
+    col += uHaloCol * uSunHalo * graze * tx.a * (1.0 - uNightMix)
+         * smoothstep(0.40, 0.96, vShell) * mix(0.04, 1.0, trans);
+  }
+
+  // ---- the crown's dark anchor, floored -------------------------------
+  // MEASURED r8: with occ, trans and the shadow mask all stacking, the deepest
+  // interior clusters landed as near-black plum HOLES punched through the canopy
+  // (ART_BIBLE §8 tell 4 — and the mirror image of the flat-pale failure this
+  // round started from). A luminance-preserving lift is the right instrument:
+  // it never touches anything already above the floor, and it keeps the hue the
+  // chroma fix just established instead of adding grey.
+  // MEASURED r0 of this round: the multiplier was capped at 3.0, so a card that
+  // arrived at linear 0.0003 (the squared-tint case) was lifted only to 0.001 and
+  // printed at display L 0.01. The cap was the reason the floor did nothing on the
+  // exact pixels it existed for. Uncapped, and luminance-preserving, so it never
+  // touches anything already above the floor and never adds grey.
+  {
+    float lumF = nprLuma(col);
+    float fl = uDeepFloor * mix(1.0, 0.18, clamp(uNightMix, 0.0, 1.0));
+    col *= max(1.0, fl / max(lumF, 1e-6));
   }
 
   // stage 4 "Radiant": the petals themselves carry a little light

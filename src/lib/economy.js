@@ -346,7 +346,23 @@ const tenderUpNames = {
   ],
 };
 
-/** Per-Tender ×2 upgrades unlock at owned 1 / 5 / 25 / 50; cost ≈ 10–25× current cost. */
+/**
+ * Per-Tender ×2 upgrades, unlocked at owned 1 / 5 / 25 / 50. Cost is
+ * `baseCost × COSTF[tier]`.
+ *
+ * MEASURED, do not "fix" these to the spec's "10–25× the current cost of the
+ * thing it improves" without re-running .tmp-game/sim.mjs. Read literally, that
+ * rule wants ≈12× / 25× / 500× / 16000× baseCost, i.e. tier 1 twice as dear and
+ * tiers 2–4 roughly 40× cheaper than they are here. Both moves were simulated:
+ *   tier 1 → 12× base   pushes 満開 Full Bloom to 2159 s (target 2100, good) but
+ *                       drags 初咲 First Bloom out to 675 s (target 480, 1.41× —
+ *                       out of band). Net worse.
+ *   tiers 2–4 ÷20       pulls Full Bloom in to 1830 s and the first Season to
+ *                       3377 s. Also net worse.
+ * The two legs of the curve move together under every authored price, because a
+ * payback-greedy player just buys more Tenders instead. Current values are the
+ * measured optimum against the GAME_DESIGN pacing table.
+ */
 const TENDER_UP_GATES = [1, 5, 25, 50];
 const TENDER_UP_COSTF = [6, 900, 30000, 900000];
 
@@ -364,13 +380,21 @@ for (const t of TENDERS) {
   }
 }
 
+/* A ×1.5 on EVERY Tender at once is the single most powerful thing money can
+ * buy, and it used to be the cheapest. `all_1` at 2.0e4 paid itself back in 30
+ * seconds of income; measured in .tmp-game/sim.mjs that one price was pulling
+ * 満開 Full Bloom (1e7) forward from the spec's ~35 min to 25 min, and the first
+ * Season with it. Lifted ×50 to a ~6-minute payback, which also regularises the
+ * ladder to a clean ~60× per rung (it used to widen from 60× to 167×). Only
+ * all_1 / all_2 are inside the measured 75-minute window; the upper four are
+ * priced to keep the ladder's shape and were checked against a 4-hour run. */
 const globalUps = [
-  ['all_1', 'A Word of Thanks', 2.0e4, 15, 'Said once, at dusk, to everyone at the same time.'],
-  ['all_2', 'Shared Kettle', 1.2e6, 40, 'Nobody in the history of groves has ever worked well cold.'],
-  ['all_3', 'The Rota', 1.5e8, 75, 'Written on the wall in a neat hand. Everyone obeys it. Nobody wrote it.'],
-  ['all_4', 'Festival Wages', 2.0e10, 120, 'Paid in petals, spent on nothing, saved with enormous care.'],
-  ['all_5', 'One Purpose', 3.0e12, 180, 'Ask any of them what they are doing. You will get the same answer.'],
-  ['all_6', 'The Grove Remembers', 5.0e14, 260, 'It knows every name that has ever worked here, including yours.'],
+  ['all_1', 'A Word of Thanks', 1.0e6, 15, 'Said once, at dusk, to everyone at the same time.'],
+  ['all_2', 'Shared Kettle', 6.0e7, 40, 'Nobody in the history of groves has ever worked well cold.'],
+  ['all_3', 'The Rota', 3.5e9, 75, 'Written on the wall in a neat hand. Everyone obeys it. Nobody wrote it.'],
+  ['all_4', 'Festival Wages', 2.5e11, 120, 'Paid in petals, spent on nothing, saved with enormous care.'],
+  ['all_5', 'One Purpose', 1.5e13, 180, 'Ask any of them what they are doing. You will get the same answer.'],
+  ['all_6', 'The Grove Remembers', 1.0e15, 260, 'It knows every name that has ever worked here, including yours.'],
 ].map(([id, name, cost, gate, flavour]) => [
   id, name, cost, { allTenders: 1.5 }, { totalTenders: gate }, flavour,
 ]);
@@ -480,13 +504,43 @@ export const BLOOM_STAGES = [
   { stage: 5, name: 'Everblossom', kanji: '常桜', threshold: 1e13, blurb: 'Gold runs in the bark. The blossom no longer waits for spring, and neither does anything near it.' },
 ];
 
-/** Stage index for a season total, honouring the Constellation threshold discount. */
-export function stageFor(totalThisSeason, thresholdMul = 1) {
+/**
+ * The stage a save opens on before it has earned anything.
+ *
+ * ART CALL (settled): a fresh save opens at 1 蕾 Budding, never at 0 冬芽 Winter
+ * Bud. Frame one has to read as a sakura game — pink buds and the first
+ * scattered blossoms — so stage 0's bare branches are the POST-SEASON reset
+ * look only. The growth arc is untouched; we just never open on a dead tree.
+ */
+export const FIRST_RUN_STAGE = 1;
+/** After a Season turn the tree really does go back to bare wood. */
+export const POST_PRESTIGE_STAGE = 0;
+/**
+ * Blossoms owed for the stages the first-run floor hands out for free.
+ * A stage-up pays `stageIndex × 3` Blossoms (GAME_DESIGN "Bloom stages"), so a
+ * player who climbs 0 → 1 collects 3. Opening AT stage 1 must not silently eat
+ * that, or a first-run save would be permanently 3 Blossoms behind a
+ * post-prestige one. Paid up front in newState(); it also means the Heartwood
+ * panel has exactly one affordable line on the very first screen, which is the
+ * "meaningful decision every ~40 s early on" the design asks for.
+ */
+export const FIRST_RUN_BLOSSOMS = 3;
+
+/**
+ * Stage index for a season total, honouring the Constellation threshold
+ * discount and the save's `stageFloor`.
+ *
+ * `floor` is authoritative: it is the reason a new player cannot be snapped
+ * back to bare branches by a stage recompute. Never derive a stage without it —
+ * 60-game.js always passes `state.stageFloor`.
+ */
+export function stageFor(totalThisSeason, thresholdMul = 1, floor = 0) {
   let s = 0;
   for (let i = BLOOM_STAGES.length - 1; i >= 0; i--) {
     if (totalThisSeason >= BLOOM_STAGES[i].threshold * thresholdMul) { s = i; break; }
   }
-  return s;
+  const f = Math.min(5, Math.max(0, Math.floor(floor || 0)));
+  return s < f ? f : s;
 }
 
 /* ==================================================================== *
@@ -581,8 +635,13 @@ export const NODE_BY_ID = Object.fromEntries(CONSTELLATION.map((n) => [n.id, n])
  * ==================================================================== */
 
 export const CODEX = [
+  /* Gated on the 1e3 petal mark, NOT `{stage:1}`: with the first-run Budding
+   * floor every save is already stage 1, so a stage gate would hand this card
+   * out on frame one, silently, during the quiet boot unlock pass. The petal
+   * mark is the same moment the old stage-1 threshold described (~90 s) and it
+   * gives that beat something to show now that the tree is already budded. */
   ['somei', 'Somei Yoshino', '染井吉野', 3, '#FFD9E6', { passive: 1.02 },
-    { stage: 1 }, 'Five pale petals, almost white at the edge. Every avenue in the country is planted with clones of one tree, and every spring they all agree on the same day.'],
+    { seasonTotal: 1e3 }, 'Five pale petals, almost white at the edge. Every avenue in the country is planted with clones of one tree, and every spring they all agree on the same day.'],
   ['shidare', 'Shidarezakura', '枝垂桜', 3, '#FFC6DC', { click: 1.03 },
     { tenderOwned: ['sprite', 25] }, 'The weeping cherry. Branches fall like water and blossom on the way down; the oldest in the north has been leaning for a thousand years.'],
   ['yae', 'Yaezakura', '八重桜', 3, '#FFB6CE', { passive: 1.03 },
@@ -705,7 +764,8 @@ export const GOLDEN_BOONS = [
  * ==================================================================== */
 
 export const SAVE_KEY = 'sakura.save.v1';
-export const SAVE_VERSION = 2;
+/** v3 added `stageFloor` (the first-run Budding floor). */
+export const SAVE_VERSION = 3;
 
 export function newState(seed = 20260728) {
   const tenders = {};
@@ -714,13 +774,16 @@ export function newState(seed = 20260728) {
     v: SAVE_VERSION,
     seed,
     petals: 0,
-    blossoms: 0,
+    blossoms: FIRST_RUN_BLOSSOMS,       // the 蕾 Budding grant the floor gave away
     essence: 0,
     essenceEarned: 0,
     totalThisSeason: 0,
     totalAllTime: 0,
     season: 0,
-    stage: 0,
+    // Fresh save opens budded (see FIRST_RUN_STAGE). `stageFloor` is what makes
+    // it stick: every recompute goes through stageFor(total, mul, stageFloor).
+    stage: FIRST_RUN_STAGE,
+    stageFloor: FIRST_RUN_STAGE,
     tenders,
     upgrades: {},
     heartwood: {},
@@ -751,7 +814,14 @@ export function sanitizeState(s) {
   base.totalThisSeason = num(s.totalThisSeason);
   base.totalAllTime = Math.max(num(s.totalAllTime), base.totalThisSeason);
   base.season = Math.floor(num(s.season));
-  base.stage = Math.min(5, Math.max(0, Math.floor(num(s.stage))));
+  /* stageFloor: absent means "not written by a v3 save". A player who has
+   * turned a Season has legitimately seen bare branches and keeps floor 0;
+   * anyone else gets the first-run Budding floor. `migrate()` decides this for
+   * real saves — this branch only covers hand-built states (debug scenarios). */
+  base.stageFloor = s.stageFloor === undefined
+    ? (base.season > 0 ? POST_PRESTIGE_STAGE : FIRST_RUN_STAGE)
+    : Math.min(5, Math.max(0, Math.floor(num(s.stageFloor))));
+  base.stage = Math.min(5, Math.max(base.stageFloor, Math.floor(num(s.stage))));
   for (const id of TENDER_IDS) base.tenders[id] = Math.floor(num(s.tenders?.[id]));
   for (const u of UPGRADES) if (s.upgrades?.[u.id]) base.upgrades[u.id] = 1;
   for (const h of HEARTWOOD_LIST) if (s.heartwood?.[h.id]) base.heartwood[h.id] = 1;
@@ -768,6 +838,7 @@ export function sanitizeState(s) {
 /**
  * Versioned migration. v1 was the early-access layout (tenders as a parallel
  * array, `total` instead of `totalThisSeason`, no Heartwood/Constellation).
+ * v2 → v3 introduces `stageFloor`.
  * Unversioned blobs are treated as v1.
  */
 export function migrate(raw) {
@@ -790,7 +861,31 @@ export function migrate(raw) {
     s.essenceEarned = num(s.essenceEarned, num(s.essence));
     v = 2;
   }
-  // future: if (v < 3) { ... v = 3; }
+
+  if (v < 3) {
+    /* The first-run Budding floor. Two kinds of old save reach this line at
+     * stage 0 and they must NOT be treated alike:
+     *   - never prestiged (season 0): they are effectively a new player who has
+     *     been staring at a bare tree because of the old default. Give them the
+     *     floor so their grove finally buds.
+     *   - has turned at least one Season: stage 0 is the state they earned. It
+     *     is the post-prestige look by design, so no floor — lifting them would
+     *     erase the reset they just paid for.
+     * Either way stageFor() re-derives the real stage from totalThisSeason, so
+     * nobody LOSES a stage; the floor can only ever raise a bare tree. */
+    s.stageFloor = Math.floor(num(s.season)) > 0 ? POST_PRESTIGE_STAGE : FIRST_RUN_STAGE;
+    /* If the floor is what lifts this save to 蕾 Budding, pay the stage grant it
+     * skipped — but only when the save had genuinely never earned it. A save
+     * already past 1e3 petals either collected it or will when boot re-derives
+     * the stage, and double-paying a permanent currency is not recoverable. */
+    if (s.stageFloor === FIRST_RUN_STAGE
+        && Math.floor(num(s.stage)) < FIRST_RUN_STAGE
+        && num(s.totalThisSeason) < BLOOM_STAGES[FIRST_RUN_STAGE].threshold) {
+      s.blossoms = num(s.blossoms) + FIRST_RUN_BLOSSOMS;
+    }
+    v = 3;
+  }
+  // future: if (v < 4) { ... v = 4; }
 
   s.v = SAVE_VERSION;
   return sanitizeState(s);

@@ -300,7 +300,7 @@ void main() {
 /** Quarter-res radial occlusion blur toward the sun's screen position. */
 export const RAY_BLUR_SHADER = {
   name: 'sakura.rayBlur',
-  defines: { RAY_TAPS: 48 },
+  defines: { RAY_TAPS: 64 },
   uniforms: {
     tDiffuse: { value: null },
     uSunUV: { value: null },
@@ -363,7 +363,9 @@ export const ATMOS_SHADER = {
     uRayColor: { value: null },   // vec3 sun colour * strength
     uSunUV: { value: null },
     uAspect: { value: 1.0 },
-    uRayFalloff: { value: null }, // vec2 (start, end) radial fade from the sun
+    uRayFalloff: { value: null }, // vec4 (innerStart, innerEnd, outerStart, outerEnd)
+    uRayDamp: { value: null },    // vec2 (linear-HDR luma where damping starts, amount)
+    uRayStruct: { value: null },  // vec2 (flat-field floor, contrast gain)
   },
   vertexShader: FS_VERT,
   fragmentShader: /* glsl */`
@@ -374,8 +376,36 @@ uniform sampler2D tRays;
 uniform vec3  uAOTint;
 uniform vec3  uRayColor;
 uniform vec2  uSunUV;
-uniform vec2  uRayFalloff;
+uniform vec4  uRayFalloff;
+uniform vec2  uRayDamp;
+uniform vec2  uRayStruct;
 uniform float uAspect;
+
+/**
+ * How much STRUCTURE the shaft field has at this pixel, measured ACROSS the ray.
+ *
+ * This is the difference between god rays and fog. Where the sky near the source is
+ * unoccluded there is nothing to make shafts out of, so the march returns r ~ 1 over
+ * a large area and a plain composite paints a solid lobe of maximum add: measured at
+ * dawn (sun on the left border, clear sky above it) that lobe was responsible for 14
+ * of the frame's 18 flat 200x200 blocks above L 0.90 — the pass was manufacturing
+ * instant-fail tell 8.2. Sampling the ray buffer PERPENDICULAR to the ray direction
+ * at two baselines gives exactly "is this pixel on the edge of a shaft", and scaling
+ * the add by it keeps every shaft while collapsing the flat wash to a floor.
+ */
+float rayStructure( vec2 uv, float r0 ) {
+  vec2 d = uv - uSunUV;
+  float len = max( length( d * vec2( uAspect, 1.0 ) ), 1e-4 );
+  vec2 perp = normalize( vec2( -d.y * uAspect, d.x ) ) * vec2( 1.0 / uAspect, 1.0 );
+  float c = 0.0;
+  for ( int i = 0; i < 2; i ++ ) {
+    float s = ( i == 0 ? 0.009 : 0.021 ) * min( len * 3.0, 1.0 );
+    float a = texture2D( tRays, uv + perp * s ).r;
+    float b = texture2D( tRays, uv - perp * s ).r;
+    c = max( c, max( abs( r0 - a ), abs( r0 - b ) ) );
+  }
+  return mix( uRayStruct.x, 1.0, sat( c * uRayStruct.y ) );
+}
 
 void main() {
   vec3 c = texture2D( tDiffuse, vUv ).rgb;
@@ -388,8 +418,26 @@ void main() {
   #ifdef USE_RAYS
     float r = texture2D( tRays, vUv ).r;
     float dist = length( ( vUv - uSunUV ) * vec2( uAspect, 1.0 ) );
-    r *= 1.0 - smoothstep( uRayFalloff.x, uRayFalloff.y, dist );
-    c += uRayColor * r;
+    // INNER fade as well as outer. Sky right at the source is unoccluded by
+    // definition, so r = 1 over a disc there and the pass paints a solid lobe of
+    // maximum add — measured at dawn (sun on the left border) that lobe alone was
+    // responsible for 14 of the frame's 18 flat 200x200 blocks above L 0.90, i.e.
+    // the pass was manufacturing instant-fail tell 8.2 next to the light it was
+    // meant to dramatise. Glare AT the source is the bloom's job (it has a sun-disc
+    // pre-multiply for exactly that); the shafts start a little way out, where there
+    // is finally something for them to be shafts BETWEEN.
+    r *= smoothstep( uRayFalloff.x, uRayFalloff.y, dist )
+       * ( 1.0 - smoothstep( uRayFalloff.z, uRayFalloff.w, dist ) )
+       * rayStructure( vUv, r );
+    // A shaft is only VISIBLE where the frame has display range left for it. The
+    // bright sky beside the sun is already past ACES's shoulder, so adding there
+    // buys clipping instead of contrast (instant-fail tell 8.12), while the same
+    // add across the canopy, trunk and grass — the midtones the shafts rake over —
+    // is worth 4-6x as much display luminance. Damping the add by the destination's
+    // own luminance is therefore what turns a flat glow into readable shafts, and
+    // it is exactly the direction real in-scatter goes once the eye adapts.
+    float dampT = smoothstep( uRayDamp.x, uRayDamp.x + 0.9, luma( c ) );
+    c += uRayColor * r * ( 1.0 - uRayDamp.y * dampT );
   #endif
 
   gl_FragColor = vec4( c, 1.0 );
@@ -408,6 +456,7 @@ export const TAA_SHADER = {
     uTexel: { value: null },
     uBlend: { value: 0.125 },
     uWiden: { value: 0.035 },
+    uGamma: { value: 1.6 },
   },
   vertexShader: FS_VERT,
   fragmentShader: /* glsl */`
@@ -417,17 +466,45 @@ uniform sampler2D tHistory;
 uniform vec2  uTexel;
 uniform float uBlend;
 uniform float uWiden;
+uniform float uGamma;
+
+/**
+ * 3x3 VARIANCE CLIPPING (Salvi), not a 5-tap min/max box.
+ *
+ * The old rule was clamp(history, min5 - pad, max5 + pad) with pad = 3.5% of the
+ * local range. On an alpha-tested blossom edge the 5-tap box is exactly two values
+ * — petal and sky — and the history's true sub-pixel value is a MIX of them at a
+ * different jitter phase, i.e. legitimately outside that box only when the edge is
+ * moving. Measured on the canopy preset, that clamp rejected the history on 34% of
+ * canopy-edge pixels, so the jittered accumulation (the entire point of TAA) was
+ * being thrown away on precisely the edges it exists to resolve.
+ *
+ * Clipping to mean +/- gamma*sigma of a 3x3 neighbourhood instead keeps the
+ * sub-pixel mixes (they sit inside one sigma of the local mean) while still
+ * rejecting genuine disocclusion, which is what stops wind-moved petals ghosting.
+ */
+vec3 T( vec2 o ) { return texture2D( tDiffuse, vUv + o * uTexel ).rgb; }
 
 void main() {
-  vec3 c = texture2D( tDiffuse, vUv ).rgb;
-  vec3 n0 = texture2D( tDiffuse, vUv + vec2( uTexel.x, 0.0 ) ).rgb;
-  vec3 n1 = texture2D( tDiffuse, vUv - vec2( uTexel.x, 0.0 ) ).rgb;
-  vec3 n2 = texture2D( tDiffuse, vUv + vec2( 0.0, uTexel.y ) ).rgb;
-  vec3 n3 = texture2D( tDiffuse, vUv - vec2( 0.0, uTexel.y ) ).rgb;
-  vec3 mn = min( c, min( min( n0, n1 ), min( n2, n3 ) ) );
-  vec3 mx = max( c, max( max( n0, n1 ), max( n2, n3 ) ) );
+  vec3 c = T( vec2( 0.0, 0.0 ) );
+  vec3 m1 = c, m2 = c * c, mn = c, mx = c;
+  for ( int i = 0; i < 8; i ++ ) {
+    vec2 o = vec2( i == 0 || i == 3 || i == 5 ? -1.0 : ( i == 2 || i == 4 || i == 7 ? 1.0 : 0.0 ),
+                   i < 3 ? -1.0 : ( i > 4 ? 1.0 : 0.0 ) );
+    vec3 s = T( o );
+    m1 += s; m2 += s * s;
+    mn = min( mn, s ); mx = max( mx, s );
+  }
+  m1 /= 9.0; m2 /= 9.0;
+  vec3 sigma = sqrt( max( m2 - m1 * m1, 0.0 ) );
+  // UNION of the variance box and the min/max box, never the intersection: a value
+  // that literally appears in the 3x3 must always be accepted, and on a hard edge
+  // (sigma large) the variance box is the wider of the two, which is the case this
+  // pass exists for.
   vec3 pad = ( mx - mn ) * uWiden + 0.002;
-  vec3 h = clamp( texture2D( tHistory, vUv ).rgb, mn - pad, mx + pad );
+  vec3 lo = min( m1 - uGamma * sigma, mn ) - pad;
+  vec3 hi = max( m1 + uGamma * sigma, mx ) + pad;
+  vec3 h = clamp( texture2D( tHistory, vUv ).rgb, lo, hi );
   gl_FragColor = vec4( mix( h, c, uBlend ), 1.0 );
 }`,
 };
@@ -591,6 +668,7 @@ export const BLOOM_COMPOSITE_SHADER = {
     tBloom: { value: null },
     uStrength: { value: 0.2 },
     uTint: { value: null },     // vec3
+    uHeadroom: { value: 1.0 },  // 0 = plain add, 1 = full headroom weighting
   },
   vertexShader: FS_VERT,
   fragmentShader: /* glsl */`
@@ -598,12 +676,24 @@ ${CHUNK_COMMON}
 uniform sampler2D tDiffuse;
 uniform sampler2D tBloom;
 uniform float uStrength;
+uniform float uHeadroom;
 uniform vec3  uTint;
 
 void main() {
   vec3 c = texture2D( tDiffuse, vUv ).rgb;
   vec3 b = texture2D( tBloom, vUv ).rgb;
-  gl_FragColor = vec4( c + b * uTint * uStrength, 1.0 );
+  // HEADROOM WEIGHTING — the difference between "atmospheric glow" and
+  // instant-fail tell 8.12, "a hard white halo".
+  //
+  // A plain additive veil is uniform in LINEAR space but not in DISPLAY space:
+  // measured at dusk, the veil adds a flat 3-10/255 everywhere, yet the count of
+  // 200x200 blocks above L 0.90 with sd < 0.05 went 6 -> 31 when it was switched
+  // on, because the dusk sky already sits at L 0.88-0.91 and a flat lift tips a
+  // third of the frame over the line into a structureless plateau. Dividing by
+  // (1 + luma) spends the veil where the frame still has range for it — the
+  // backlit canopy edge keeps ~0.83 of the glow, the near-clipped sky ~0.45.
+  vec3 add = b * uTint * uStrength / ( 1.0 + uHeadroom * max( luma( c ), 0.0 ) );
+  gl_FragColor = vec4( c + add, 1.0 );
 }`,
 };
 
@@ -632,6 +722,12 @@ export const FOCUS_SHADER = {
     uFallback: { value: 24.0 },
     uTarget: { value: 0.0 },
     uClamp: { value: null },   // vec2 (min, max) legal focus distance for the probe
+    // vec2 (geometric aim distance, how far to pull the probe toward it, 0..1).
+    // The probe reads whatever the frame centre happens to hit — in the hero
+    // composition that is a gap between branches. The anchor is the distance along
+    // the view ray to the tree's own axis, so blending toward it keeps the plane on
+    // the subject when the probe sees through it.
+    uAnchor: { value: null },
   },
   vertexShader: FS_VERT,
   fragmentShader: /* glsl */`
@@ -640,6 +736,7 @@ ${CHUNK_DEPTH}
 uniform sampler2D tPrev;
 uniform vec2  uCenter;
 uniform vec2  uClamp;
+uniform vec2  uAnchor;
 uniform float uRate;
 uniform float uFallback;
 uniform float uTarget;
@@ -696,6 +793,11 @@ void main() {
   // from the camera and CONTRACT's world convention (trunk base at the origin),
   // so a bad depth read can now only shift focus, never lose the subject.
   probe = clamp( probe, uClamp.x, uClamp.y );
+  // Pull toward the geometric aim distance. Measured before this existed: the bark
+  // preset's probe resolved to 5.05 m — the exact floor of its legal band — while
+  // the trunk that fills 60% of that frame stands 3.1 m from the lens, so the
+  // "material close-up" was focused two metres behind its own subject.
+  if ( uAnchor.x > 0.0 ) probe = mix( probe, uAnchor.x, sat( uAnchor.y ) );
   float target = uTarget > 0.0 ? uTarget : probe;
   float prev = texture2D( tPrev, vec2( 0.5 ) ).r;
   float f = prev > 0.01 ? mix( prev, target, uRate ) : target;
@@ -858,6 +960,14 @@ export const GRADE_SHADER = {
     // S-curve below only shapes what ACES hands back.
     uSceneCurve: { value: null },      // vec2 day
     uSceneCurveNight: { value: null }, // vec2 night
+    // (knee, log-log slope below the knee, knee softness in log units) of the
+    // scene curve's TOE. Guarantees the curve can never be steeper than `slope`
+    // at the bottom of the range, i.e. it can never crush a dark value to zero.
+    uSceneToe: { value: null },        // vec3
+    // 0 = drive the tone curve off Rec.709 luma (what shipped), 1 = off the max
+    // channel. See the comment at the call site: luma weights blue at 0.0722, so
+    // a saturated sky is read as a SHADOW and crushed by the power law.
+    uCurveNorm: { value: 0.0 },
     uFloor: { value: 0.030 },      // display-space floor — the only "never pure black" lift
     uPivot: { value: 0.18 },       // S-curve pivot (log-ish, so 0 stays 0)
     uContrast: { value: 1.12 },    // S-curve slope about the pivot
@@ -887,6 +997,8 @@ uniform vec3  uLift;
 uniform vec2  uSplit;
 uniform vec2  uSceneCurve;
 uniform vec2  uSceneCurveNight;
+uniform vec3  uSceneToe;
+uniform float uCurveNorm;
 uniform vec2  uDitherOffset;
 uniform float uExposure;
 uniform float uBlack;
@@ -930,13 +1042,57 @@ vec3 encodeSRGB( vec3 v ) {
               vec3( lessThanEqual( v, vec3( 0.0031308 ) ) ) );
 }
 
+/**
+ * The scene-linear tone curve: in log-exposure space a straight line of slope
+ * sc through the pivot (classic film gamma), with its TOE slope clamped to
+ * uSceneToe.y below the knee uSceneToe.x.
+ *
+ * The clamp is the fix for the r2 defect. A pure power law has slope sc
+ * EVERYWHERE, so at sc = 2.1 a value one stop under the pivot loses 2.1 stops
+ * and a value four stops under loses 8.4 — the mapping keeps accelerating
+ * downward with nothing to stop it, which is what took the canopy frame's
+ * zenith to literal zero. Blending to a sub-unity slope below the knee makes
+ * the curve monotonic with a bounded, gentle toe: at slope 0.90 a value four
+ * stops below the knee comes out 3.6 stops down, never crushed.
+ *
+ * softplus() gives the C-infinity blend: it is ~0 far below the knee (slope
+ * -> uSceneToe.y) and ~d far above (slope -> sc), and exact at both limits, so
+ * the midtones and highlights are bit-identical to the pure power law.
+ */
+float sceneTone( float n, float sc, float sp ) {
+  float k = max( uSceneToe.x, 1e-5 );
+  float s0 = uSceneToe.y;
+  float w  = max( uSceneToe.z, 1e-3 );
+  float d  = log( max( n, 1e-8 ) / k );
+  float spl = max( d, 0.0 ) + w * log( 1.0 + exp( -abs( d ) / w ) );
+  float atKnee = log( sp ) + sc * log( k / sp );
+  return exp( atKnee + s0 * d + ( sc - s0 ) * spl );
+}
+
 void main() {
   vec3 c = max( texture2D( tDiffuse, vUv ).rgb, 0.0 ) * uExposure;
 
   // --- (0) a REAL black point, set in linear scene space where it belongs.
   //     Subtracting here (Cineon's trick) is what gives the frame a low end.
   //     Scaled down at night, otherwise the navy sky would crush to nothing.
-  c = max( c - uBlack * ( 1.0 - 0.8 * uNight ), 0.0 );
+  //
+  //     Two changes from r2, both of which that build's zenith failure needed.
+  //     (a) On LUMA, scaling the triplet — not per channel. A per-channel
+  //     subtract removes a FIXED amount from a channel that may be 20x smaller
+  //     than its neighbour, so it does not darken a saturated colour, it
+  //     desaturates it through zero: measured on the canopy frame, the zenith
+  //     sky arrives as (0.030, 0.184, 0.606) and the per-channel subtract took
+  //     its red from 0.0264 to 0.0084, i.e. -68% on one channel and -3% on
+  //     another. Same rule as the curve below — the grade owns tone, the
+  //     lighting rig owns hue.
+  //     (b) A smoothstep-weighted subtract, so the term fades out below 2x the
+  //     black point instead of clipping there. The full amount is still removed
+  //     from everything above it, which is all a black point is for, but no
+  //     input value can be mapped to exactly 0 any more.
+  float bk = uBlack * ( 1.0 - 0.8 * uNight );
+  float b0 = max( luma( c ), 1e-6 );
+  float b1 = max( b0 - bk * smoothstep( 0.0, 2.0 * bk, b0 ), 0.0 );
+  c *= b1 / b0;
 
   // --- (0b) THE contrast, in scene-linear space where a tone curve belongs.
   //     A power law about a scene pivot is a straight line of slope 'contrast'
@@ -950,10 +1106,23 @@ void main() {
   //     the hero p1 from 0.238 to 0.075 display while p99 RISES (0.867 -> 0.90).
   //     Applied to LUMA and scaled back onto the triplet, so it is tone only and
   //     the lighting rig keeps ownership of every hue (same rule as (1) below).
+  //     The DRIVER of the curve is mix(luma, max channel, uCurveNorm), not luma.
+  //     Rec.709 luma weights blue at 0.0722, so a saturated sky — the canopy
+  //     frame's zenith measures (0.030, 0.184, 0.606), luma 0.18 but max 0.606 —
+  //     is handed to the power law as if it were a deep shadow and comes back
+  //     0.38x. That is the whole reason a #4E86D4 zenith rendered at display
+  //     L 0.199 instead of the ~0.50 ART_BIBLE §3 asks for, and it hit every
+  //     saturated colour in the frame the same way (the torii vermilion arrives
+  //     as (0.335, 0.092, 0.122), luma 0.146, and came out a dull maroon).
+  //     Driving the curve off a norm that respects chroma is the standard fix
+  //     and it is SELECTIVE: for a neutral colour max == luma, so ground, bark,
+  //     cloud and haze are untouched and the frame's hard-won mid-ground
+  //     separation is preserved — only the saturated pixels stop being crushed.
   float sc = mix( uSceneCurve.x, uSceneCurveNight.x, uNight );
   float sp = max( mix( uSceneCurve.y, uSceneCurveNight.y, uNight ), 1e-4 );
-  float sl0 = max( luma( c ), 1e-6 );
-  c *= ( sp * pow( sl0 / sp, sc ) ) / sl0;
+  float lc = luma( c );
+  float sl0 = max( mix( lc, max( max( c.r, c.g ), c.b ), uCurveNorm ), 1e-6 );
+  c *= sceneTone( sl0, sc, sp ) / sl0;
 
   // one tonemap, right here — the renderer is set to NoToneMapping by 90-postfx
   c = acesFilmic( c );
@@ -1071,6 +1240,11 @@ export const FINAL_SHADER = {
     uCA: { value: 1.2 },
     uGrain: { value: 0.02 },
     uTime: { value: 0.0 },
+    uSharpen: { value: 0.0 },
+    // ART_BIBLE §3's "never pure black", enforced HERE as well as in GRADE —
+    // this is the last stage before the framebuffer, so it is the only place a
+    // floor cannot be undone by the vignette multiply or the grain add.
+    uFloor: { value: 0.056 },
   },
   vertexShader: FS_VERT,
   fragmentShader: /* glsl */`
@@ -1082,6 +1256,45 @@ uniform float uVignette;
 uniform float uCA;
 uniform float uGrain;
 uniform float uTime;
+uniform float uSharpen;
+uniform float uFloor;
+
+/**
+ * AMD FidelityFX CAS (the cheap 5-tap variant), in display space, after SMAA.
+ *
+ * A jittered temporal resolve is a low-pass filter: measured on hero, TAA at 1.35 px
+ * jitter takes the 300x300 trunk Sobel from 0.521 to 0.389 while removing 68% of the
+ * isolated 1-px spikes. Every shipped TAA renderer pays that back with a sharpen
+ * pass; doing it with CAS rather than an unsharp mask matters because CAS's
+ * amplitude is derived from the LOCAL RANGE (sqrt(min(mn, 1-mx)/mx)) and therefore
+ * falls to zero on the near-clipped high-contrast edges — it restores acuity on
+ * midtone detail (bark, grass, petal interiors) without re-printing the aliasing.
+ */
+vec3 casSharpen( vec2 uv ) {
+  vec3 e = texture2D( tDiffuse, uv ).rgb;
+  if ( uSharpen <= 0.0 ) return e;
+  vec3 b = texture2D( tDiffuse, uv + vec2( 0.0, -uTexel.y ) ).rgb;
+  vec3 h = texture2D( tDiffuse, uv + vec2( 0.0,  uTexel.y ) ).rgb;
+  vec3 dd = texture2D( tDiffuse, uv + vec2( -uTexel.x, 0.0 ) ).rgb;
+  vec3 f = texture2D( tDiffuse, uv + vec2(  uTexel.x, 0.0 ) ).rgb;
+  vec3 mn = min( min( min( dd, e ), min( f, b ) ), h );
+  vec3 mx = max( max( max( dd, e ), max( f, b ) ), h );
+  vec3 amp = sqrt( sat3( min( mn, 1.0 - mx ) / max( mx, vec3( 1e-4 ) ) ) );
+  // peak weight runs from -1/8 (soft) to -1/5 (sharp), exactly as CAS specifies
+  vec3 w = -amp * mix( 0.125, 0.2, sat( uSharpen ) );
+  vec3 o = ( b * w + dd * w + f * w + h * w + e ) / ( 1.0 + 4.0 * w );
+  // Clamp to the 5-tap RANGE, which is what FidelityFX CAS itself does and what
+  // r2 was missing. A sharpen kernel's negative lobe undershoots on the dark side
+  // of a high-contrast edge; sat3() then parks that undershoot at 0 and the frame
+  // gets literal black pixels wherever a 1-2 px bright feature sits on a dark
+  // field. Measured on the r2 canopy frame that is exactly what the zenith was:
+  // the sky/cloud boundary there resolves at pixel scale (a scene scanline reads
+  // 0.60, 0.96, 0.97, 0.98, 0.98, 0.94, 0.163, 0.163, ...), so a dark sky pixel
+  // ringed by cloud undershot straight through zero and printed as one grain of
+  // salt-and-pepper. Clamping to [mn, mx] keeps every bit of the acuity CAS buys
+  // and makes overshoot in either direction impossible.
+  return clamp( o, mn, mx );
+}
 
 void main() {
   vec2 d = vUv - 0.5;
@@ -1091,10 +1304,11 @@ void main() {
   // until rc = 0.84, reaching ~1.2 px only in the corners. Anything wider than
   // this reads as a lens defect rather than as polish.
   vec2 dir = d * ( uCA * smoothstep( 0.84, 1.0, rc ) );
-  vec3 c;
-  c.r = texture2D( tDiffuse, vUv + dir * uTexel ).r;
-  c.g = texture2D( tDiffuse, vUv ).g;
-  c.b = texture2D( tDiffuse, vUv - dir * uTexel ).b;
+  vec3 c = casSharpen( vUv );
+  if ( dot( abs( dir ), vec2( 1.0 ) ) > 1e-5 ) {
+    c.r = casSharpen( vUv + dir * uTexel ).r;
+    c.b = casSharpen( vUv - dir * uTexel ).b;
+  }
 
   // vignette
   c *= 1.0 - uVignette * pow( rc, 2.4 );
@@ -1106,7 +1320,25 @@ void main() {
   vec2 pn = vUv * uResolution;
   float t1 = fract( uTime * 3.317 ) * 137.0, t2 = fract( uTime * 1.913 ) * 211.0;
   float n = hash12( pn + vec2( t1, t2 ) ) * 2.0 - 1.0;   // uniform on [-1,1]
-  c += n * uGrain * ( 1.0 - 0.22 * sat( luma( c ) ) );
+  float gl = luma( c );
+  // ...and rolled off in the DEEP shadows too. A flat +/-2.6% is 6.6/255, which is
+  // a 100% relative modulation on a pixel sitting near the floor: that is where
+  // the r2 zenith's visible salt-and-pepper came from once the sharpen undershoot
+  // had put the base near zero. 0.30 + 0.70 * smoothstep keeps the grain at full
+  // amplitude everywhere it is meant to read and takes it to 30% below L 0.09.
+  c += n * uGrain * ( 1.0 - 0.22 * sat( gl ) )
+     * ( 0.30 + 0.70 * smoothstep( 0.0, 0.09, gl ) );
+
+  c = sat3( c );
+
+  // "never pure black" (ART_BIBLE §3), applied LAST. GRADE has its own floor, but
+  // the vignette multiply and the grain add both run after it, so the guarantee
+  // has to be re-made here or the corners and the noise punch straight through it.
+  // t^2 shape over a 1.7x window: exact at 0, ~11% of the floor at half the
+  // window, zero above it — invisible except where something was about to clip.
+  float fk = max( uFloor * 1.7, 1e-4 );
+  vec3 ft = vec3( 1.0 ) - min( c / fk, vec3( 1.0 ) );
+  c += uFloor * ft * ft;
 
   gl_FragColor = vec4( sat3( c ), 1.0 );
 }`,

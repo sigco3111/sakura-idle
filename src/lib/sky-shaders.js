@@ -95,6 +95,47 @@ function bakeField(N, base, oct, seed, gain, mode) {
   return a;
 }
 
+/**
+ * Periodic separable box blur, three passes ≈ gaussian. Used to build the field
+ * the cumulus GRADIENT is taken from.
+ *
+ * Differentiation amplifies frequency: an octave at f=16 with amplitude 0.22
+ * contributes MORE gradient energy than the f=2 base at amplitude 1.0. So a
+ * normal built from the raw field follows the finest wrinkles, and the deck
+ * renders as wormy crinkled foil instead of as billowing domes — measured, this
+ * was the exact look of round 2. Blurring first (radius ≈ 0.04 uv kills every
+ * octave above f≈8) leaves the relief following only the big lobes, while the
+ * un-blurred field still supplies the crisp cauliflower silhouette.
+ */
+function blurPeriodic(field, N, radius) {
+  const r = Math.max(1, radius | 0);
+  let src = field, dst = new Float32Array(N * N);
+  const inv = 1 / (2 * r + 1);
+  for (let pass = 0; pass < 3; pass++) {
+    for (let j = 0; j < N; j++) {                       // horizontal
+      const row = j * N;
+      let acc = 0;
+      for (let k = -r; k <= r; k++) acc += src[row + ((k % N) + N) % N];
+      for (let i = 0; i < N; i++) {
+        dst[row + i] = acc * inv;
+        acc += src[row + ((i + r + 1) % N)] - src[row + ((i - r + N) % N)];
+      }
+    }
+    const t = src === field ? new Float32Array(N * N) : src;
+    src = dst; dst = t;
+    for (let i = 0; i < N; i++) {                       // vertical
+      let acc = 0;
+      for (let k = -r; k <= r; k++) acc += src[(((k % N) + N) % N) * N + i];
+      for (let j = 0; j < N; j++) {
+        dst[j * N + i] = acc * inv;
+        acc += src[((j + r + 1) % N) * N + i] - src[((j - r + N) % N) * N + i];
+      }
+    }
+    const t2 = src; src = dst; dst = t2;
+  }
+  return src;
+}
+
 function gradientOf(field, N) {
   const gx = new Float32Array(N * N), gy = new Float32Array(N * N);
   const at = (i, j) => field[(((j % N) + N) % N) * N + (((i % N) + N) % N)];
@@ -115,7 +156,7 @@ function gradientOf(field, N) {
 
 /**
  * @returns {{ texA: import('three').DataTexture, texB: import('three').DataTexture,
- *             gradScale: [number, number] }}
+ *             texC: import('three').DataTexture, gradScale: [number, number, number] }}
  */
 export function makeSkyNoiseTextures(THREE, N = 512) {
   /* Only 3 octaves, deliberately.  A 5-octave fbm puts ±3% detail at 1/64 uv,
@@ -125,8 +166,22 @@ export function makeSkyNoiseTextures(THREE, N = 512) {
   const hB = bakeField(N, 3, 3, 7717, 0.45, RIDGE_RIDGED);
   const warp = bakeField(N, 2, 2, 3313, 0.50, RIDGE_FBM);
   const det = bakeField(N, 8, 3, 5501, 0.50, RIDGE_RIDGED);
+  /* ── the cumulus field ────────────────────────────────────────────────────
+   * texA (plain fbm) has no preferred shape: thresholding it yields the flat,
+   * ragged, filamentary blobs that made the day sky read as smeared cirrus at
+   * every coverage setting. BILLOW (|n|) is the classic cumulus generator — its
+   * level sets are ROUNDED LOBES, so a threshold carves cauliflower masses with
+   * convex tops, which is exactly what a painted anime cumulus is.
+   *
+   * base 2 / 4 octaves / gain 0.60: one dominant mass scale (half the texture)
+   * with three visible generations of lobes on it, i.e. a mass that has a shape
+   * AND sub-form. The gradient baked next to it is the gradient of THAT field,
+   * so the relief shading in cloudLayer() follows the lobes it can see. */
+  const hC = bakeField(N, 2, 4, 9137, 0.60, RIDGE_BILLOW);
+  const detC = bakeField(N, 9, 3, 4421, 0.52, RIDGE_BILLOW);
   const gA = gradientOf(hA, N);
   const gB = gradientOf(hB, N);
+  const gC = gradientOf(blurPeriodic(hC, N, Math.max(2, Math.round(N / 24))), N);
 
   const mk = (h, g, extra) => {
     const d = new Uint8Array(N * N * 4);
@@ -151,7 +206,8 @@ export function makeSkyNoiseTextures(THREE, N = 512) {
   return {
     texA: mk(hA, gA, warp),
     texB: mk(hB, gB, det),
-    gradScale: [gA.scale, gB.scale],
+    texC: mk(hC, gC, detC),
+    gradScale: [gA.scale, gB.scale, gC.scale],
   };
 }
 
@@ -176,6 +232,12 @@ uniform vec3  uZenith;      /* ART_BIBLE §3 sky-zenith row  (#4E86D4 at day) */
 uniform vec3  uMid;
 uniform vec3  uHorizon;     /* ART_BIBLE §3 sky-horizon row (#CFE0F2 at day) */
 uniform vec3  uHaze;
+/* The SUN-SIDE horizon band only. uHaze is isotropic: at day it has to stay a
+ * cool pale blue or it warms the entire 360 deg horizon ring, which is what
+ * turned the late-afternoon frame into an acid-yellow band all the way round.
+ * The golden-hour warmth belongs to the sun's own azimuth, so it is carried by
+ * this second colour weighted by pow(dot(viewAz, sunAz), 2.2). */
+uniform vec3  uHazeWarm;
 uniform float uHazeAmt;
 uniform float uHazeH;
 uniform float uZenithPow;   /* exponent on elevation: <1 → the blue owns the top */
@@ -235,7 +297,7 @@ vec3 skyGradient(vec3 rd) {
   vec2 sxz = normalize(vec2(uSunDir.x, uSunDir.z) + 1e-5);
   float azi = pow(max(dot(dxz, sxz), 0.0), 2.2);
   c = mix(c, uHaze, SKY_SAT(hb * uHazeAmt));
-  c += uHaze * hb * azi * uHazeAmt * 0.55;
+  c += uHazeWarm * hb * azi * uHazeAmt * 0.80;
   return c;
 }
 
@@ -254,9 +316,18 @@ vec3 skyRadiance(vec3 rayDir) {
   float am = 1.0 / (max(rd.y, 0.0) + 0.10);
   float g = uMieG;
   float hg = (1.0 - g * g) / pow(max(1.0 + g * g - 2.0 * g * cosT, 1e-4), 1.5);
-  c += uGlowTint * hg * 0.055 * uMieAmt * (0.30 + 4.2 * lowSun)
+  /* Both scatter lobes are re-weighted so their HIGH-SUN contribution is ~60 %
+   * lower while their low-sun contribution is unchanged to within 0.5 %.
+   * MEASURED: at the default anchor the sun sits at 39 deg, where lowSun = 0, and
+   * the old constant terms (0.30 of the Mie lobe + 0.35 of the wide pow-4 lobe +
+   * the sun veil) were laying ~0.10 linear of warm light across the whole upper
+   * sky — enough to take a #7095D4 gradient to #B9BECE, i.e. to erase the blue.
+   * A 39 deg sun has almost no forward-scatter path length; the wide warm lobes
+   * belong to a sun near the horizon, and that is now what gates them. */
+  float lw = pow(lowSun, 0.85);
+  c += uGlowTint * hg * 0.055 * uMieAmt * (0.12 + 4.38 * lw)
        * (0.32 + 0.68 * min(am, 7.0) / 7.0) * sunUp;
-  c += uGlowTint * pow(max(cosT, 0.0), 4.0) * 0.17 * (0.35 + 2.1 * lowSun) * sunUp;
+  c += uGlowTint * pow(max(cosT, 0.0), 4.0) * 0.17 * (0.13 + 2.33 * lw) * sunUp;
   return c;
 }
 
@@ -299,12 +370,22 @@ varying vec3 vDir;
 
 uniform sampler2D uNoiseA;
 uniform sampler2D uNoiseB;
-uniform vec2  uGradScale;
+uniform sampler2D uNoiseC;
+uniform vec3  uGradScale;
 uniform float uTime;
 
 /* shared with 08-lighting when present, otherwise driven locally */
 uniform vec3  uFogColor;
 uniform vec3  uMoonDir;
+/* Where the moon DISC is drawn. 08-lighting derives its moon key direction as
+ * the sun's exact antipode, which at night puts it at ~48 deg elevation — above
+ * the top edge of every shipped camera preset (the hero frame only reaches 20
+ * deg), so the disc was always rendered outside the frustum: a FULL MOON event
+ * banner over an empty sky. 15-sky.js therefore compresses the elevation into a
+ * visible band while keeping the azimuth exactly, and the shading key stays on
+ * uMoonDir. See the note on uMoonRender in 15-sky.js for why that trade is the
+ * right one for a stylised frame. */
+uniform vec3  uMoonRender;
 uniform vec3  uShadowTint;
 
 /* global wind field (src/lib/wind.js) */
@@ -313,6 +394,10 @@ uniform float uWindTime;
 uniform float uWindGust;
 
 uniform float uGroundFade;
+/* radians of screen subtended by ONE vertical pixel — 2*tan(fov/2)/height.
+   Lets the cloud shader express its alpha feather in pixels without needing
+   fwidth() downstream of a divergent early-return. */
+uniform float uPxRad;
 
 /* sun */
 uniform vec3  uSunTint;
@@ -320,17 +405,20 @@ uniform float uSunSize;
 uniform float uSunI;
 
 /* clouds — one component per layer, x = lowest/nearest … w = cirrus */
-uniform vec4  uCovL;
-uniform vec4  uScaleL;
-uniform vec4  uSpeedL;
-uniform vec4  uHeightL;
-uniform vec4  uPuffL;
-uniform vec4  uBumpL;
-uniform vec4  uWarpL;
-uniform vec4  uStretchL;
+uniform vec4  uCovL;      /* density threshold: higher = fewer, more separate masses */
+uniform vec4  uScaleL;    /* angular scale of the mass field */
+uniform vec4  uSpeedL;    /* drift speed along the shared wind direction */
+uniform vec4  uKfL;       /* horizon floor of the cloud-plane projection */
+uniform vec4  uPwL;       /* radial pow-compression: <1 keeps horizon masses round */
+uniform vec4  uBumpL;     /* relief strength (how domed the masses read) */
+uniform vec4  uWarpL;     /* domain warp */
+uniform vec4  uDetL;      /* fine edge nibble */
+uniform vec4  uStretchL;  /* uv stretch along the wind (cirrus streaks) */
 uniform vec4  uAmtL;
 uniform vec4  uZenCovL;   /* coverage threshold ADDED at high elevation (less cloud) */
 uniform vec4  uZenAmtL;   /* opacity multiplier at high elevation */
+uniform vec4  uAerL;      /* how far the deck melts into the haze with distance */
+uniform vec4  uRimL;      /* silver-lining / translucency strength */
 uniform vec3  uCloudLit;
 uniform vec3  uCloudDark;
 uniform vec3  uCloudAmb;
@@ -343,6 +431,7 @@ uniform float uStars;
 uniform float uMilky;
 uniform vec3  uMoonCol;
 uniform float uMoonSize;
+uniform float uMoonBright;
 uniform float uDither;
 
 #define SAT(x) clamp(x, 0.0, 1.0)
@@ -357,110 +446,210 @@ vec3 nrmSafe(vec3 v, vec3 fallback) {
 /* a basis reference axis that is never parallel to the input */
 vec3 refAxis(vec3 a) { return abs(a.y) > 0.94 ? vec3(1.0, 0.0, 0.0) : vec3(0.0, 1.0, 0.02); }
 
-/* ---------------------------------------------------------------- clouds -- */
-/*
- * Each layer is the view ray intersected with a horizontal slab at height
- * hgt (sky units).  1/dir.y gives real perspective compression toward the
- * horizon for free, so a flat noise field reads as a receding cloud deck.
- * The baked gradient turns that field into a heightfield with a normal, so we
- * can ramp-shade it: sunlit tops, shadow-tinted undersides, silver rims.
+/* ---------------------------------------------------------------- clouds --
+ *
+ * Painted anime cumulus. Two things make or break this and both are about
+ * SHAPE, not detail budget:
+ *
+ * 1. THE PROJECTION. A straight slab intersection compresses the deck by
+ *    1/sin(elevation) toward the horizon. The hero frame only shows elevations
+ *    0-20 degrees, so every mass in it was being squashed 15-25x vertically —
+ *    which is precisely how readable cumulus turn into horizontal filament
+ *    smears. Here the plane radius r = cos(e)/(y+kf) is bounded (no infinite
+ *    ray, so no grazing-limit ring) and then pow-compressed, r' = R0*(r/R0)^pw
+ *    with pw ~0.55. That restores vertical extent exactly where we look, so a
+ *    mass keeps a convex top and a flat base — how a painted backdrop draws it.
+ *
+ * 2. THE SHADING FRAME. The old code lit a heightfield whose normal pointed at
+ *    world +Y, i.e. it shaded the deck as a floor seen from below: no matter
+ *    how much contrast you gave it, it could not produce a lit top over a
+ *    shadowed underside. This shades a 2.5-D RELIEF in the SCREEN frame
+ *    (right, up, toward-viewer) with the sun projected into the same frame, so
+ *    tops catch the light, undersides fall into the hue-shifted shadow tint,
+ *    and the sun-facing edge gets a silver lining wherever the sun happens to
+ *    be — including directly behind the deck, which is the money-shot config.
  */
-vec4 cloudLayer(vec3 d, float hgt, float scl, float spd, float cov,
-                float stretch, float puff, float warpAmt, float bump,
-                float amt, float zenCov, float zenAmt, vec3 sunD, vec3 skyC) {
+vec4 cloudLayer(vec3 d, float kf, float scl, float spd, float cov, float pw,
+                float bump, float warpAmt, float detAmt, float stretch,
+                float amt, float zenCov, float zenAmt, float aer, float rimA,
+                vec3 sunD, vec3 skyC) {
   /* ── high-sky coverage budget ─────────────────────────────────────────
-   * The upper sky is the largest single region of the frame and it must be
-   * SKY, not a uniform grey-white cirrus smear (ART_BIBLE §8.2, §8.11 read
-   * together: no dead regions, but also no cheap flat cover). Above ~25° the
-   * coverage threshold is raised (so less of the field crosses it) and the
-   * layer's opacity is scaled down, per layer — hardest on the cirrus. */
-  float hi = smoothstep(0.24, 0.46, d.y);      /* 0 below 14°, 1 above 27° */
+   * The upper sky is the largest single region of the frame and it must stay
+   * SKY (ART_BIBLE §8.2). Above ~30° the coverage threshold is raised and the
+   * layer's opacity scaled down — but only enough to keep the zenith blue
+   * owning the top: the old 0.24 / 0.30 budget deleted the cumulus decks from
+   * everything above 27° and left nothing but wisps, which is half of why the
+   * day sky read as filaments. */
+  float hi = smoothstep(0.30, 0.62, d.y);      /* 0 below 17°, 1 above 38° */
   cov += zenCov * hi;
   amt *= mix(1.0, zenAmt, hi);
-  if (d.y < 0.002 || cov > 0.995 || amt < 0.002) return vec4(0.0);
+  if (d.y < 0.003 || cov > 0.995 || amt < 0.003) return vec4(0.0);
 
-  /* ── slab parameterisation ────────────────────────────────────────────
-   * kMin is the grazing elevation (≈3.3°) below which we stop tracing. It
-   * gives a FINITE maximum ray length  tMax = hgt / kMin, and softening
-   * with sqrt() rather than max() means there is no visible ring where the
-   * limit engages.
-   *
-   * kMin MUST be a constant, not a fraction of hgt. Make it proportional
-   * to hgt (the old  c = hgt * 0.16 ) and t becomes almost constant across
-   * the whole visible sky for the high layers: the mapping degenerates from
-   * a perspective slab intersection into a plain projection of the view
-   * direction, so the pattern stops varying down a screen column and the
-   * deck renders as hard-edged, parallel-sided vertical bars with a flat
-   * terminus. That artefact was the single worst thing in the day hero. */
-  const float kMin = 0.058;
-  float tMax = hgt / kMin;
-  float t = hgt / sqrt(d.y * d.y + kMin * kMin);
-  float tN = clamp(t / tMax, 0.0, 1.0);      /* 0 = zenith … 1 = grazing limit */
-  /* The last ~18 % of slab traversal ramps to zero, so the deck can never
-     terminate on an edge — it dissolves into the horizon haze instead. */
-  float slabFade = smoothstep(1.0, 0.82, tN) * smoothstep(0.004, 0.030, d.y);
+  /* ── cloud-plane projection, radially de-compressed ─────────────────── */
+  float y  = max(d.y, 0.004);
+  float ss = sqrt(max(1.0 - y * y, 1e-4));         /* cos(elevation) = |d.xz| */
+  /* AT THE ZENITH d.xz is exactly zero, and a normalize() of it downstream
+     produced NaN — which the bloom mip chain then smeared into a black speckled
+     hole across the whole upper canopy frame. An explicit fallback azimuth is
+     the fix; the pole is a coordinate singularity, not a real one. */
+  vec2  Ph = (ss > 1e-3) ? d.xz / ss : vec2(1.0, 0.0);
+  vec2  Rt = vec2(Ph.y, -Ph.x);                    /* screen-right, in world xz */
+
+  float r    = ss / (y + kf);                      /* bounded by 1/kf: no ring */
+  float R0   = 1.0 / (0.55 + kf);
+  float rp   = R0 * pow(max(r, 1e-4) / R0, pw);
+  float rpMx = R0 * pow((1.0 / kf) / R0, pw);
+  float tN   = clamp(rp / rpMx, 0.0, 1.0);         /* 0 = zenith … 1 = horizon */
+
+  /* the last degree or so dissolves, so the deck never terminates on an edge */
+  float slabFade = smoothstep(0.004, 0.038, d.y);
   if (slabFade <= 0.002) return vec4(0.0);
 
-  vec2  P = d.xz * t;
+  /* d(uv)/d(screen radian). The mapping is anisotropic near the horizon and
+     feeding that in is what keeps a squashed mass reading as a squashed MASS
+     (steeper shading) instead of as a flat smear.
+     Hoisted above the alpha test on purpose: the ALPHA EDGE needs a screen-space
+     width too (see awP below), and deriving it analytically from these two
+     coefficients is exact, whereas fwidth() here would sit downstream of three
+     divergent early-returns. */
+  float drdy = -(y / (ss * (y + kf)) + ss / ((y + kf) * (y + kf)));   /* < 0 */
+  float dpdr = pw * pow(max(r, 1e-4) / R0, pw - 1.0);
+  float cU = scl * abs(drdy * dpdr) * ss;      /* uv per radian of screen-up */
+  float cR = scl * rp / max(ss, 0.10);         /* uv per radian of screen-right */
+  /* uv travelled per SCREEN PIXEL, isotropic mean */
+  float uvPx = sqrt(max(cU * cR, 1e-9)) * uPxRad;
 
-  /* rotate into the wind frame: drift is then a pure scroll along +x */
+  /* rotate into the wind frame: drift is then a pure scroll along +x, so every
+     layer travels along the ONE shared wind direction (ART_BIBLE §6) */
   vec2 wd = uWindDir;
-  vec2 perp = vec2(-wd.y, wd.x);
-  vec2 W  = vec2(dot(P, wd), dot(P, perp));
-  vec2 q  = W * scl * vec2(1.0 / stretch, stretch) - vec2(uWindTime * spd, uWindTime * spd * 0.09);
+  vec2 wp = vec2(-wd.y, wd.x);
+  vec2 P  = Ph * rp;
+  vec2 W  = vec2(dot(P, wd), dot(P, wp)) * scl;
+  vec2 Q  = vec2(W.x / stretch, W.y * stretch)
+          - vec2(uWindTime * spd, uWindTime * spd * 0.06);
 
-  /* domain warp — kills the "noise texture" look, gives billowing lobes */
-  vec2 wv = vec2(texture2D(uNoiseA, q * 0.34 + 0.11).a,
-                 texture2D(uNoiseB, q * 0.30 + 0.53).a) - 0.5;
-  q += wv * warpAmt;
+  /* domain warp — kills the "noise texture" look, bends the mass boundaries */
+  vec2 wv = vec2(texture2D(uNoiseA, Q * 0.23 + 0.13).a,
+                 texture2D(uNoiseC, Q * 0.19 + 0.61).a) - 0.5;
+  Q += wv * warpAmt;
 
-  vec4 A = texture2D(uNoiseA, q);
-  vec4 B = texture2D(uNoiseB, q * 1.35 + vec2(4.7, 2.3));
-  float H = mix(A.r, A.r * 0.42 + B.r * 0.58, puff) + (B.a - 0.5) * 0.030;
+  vec4  Cf  = texture2D(uNoiseC, Q);
+  float det = texture2D(uNoiseC, Q * 3.7 + vec2(2.9, 5.3)).a;
+  float H   = Cf.r + (det - 0.5) * detAmt;
 
-  /* Narrow thresholds: with only 3 octaves in the field the finest scale is
-     ~6° of arc, so a tight ramp carves cauliflower lobes rather than fibres,
-     and the cores reach full opacity instead of staying as translucent haze. */
-  float aSoft = smoothstep(cov - 0.055, cov + 0.055, H);
-  float aCore = smoothstep(cov - 0.006, cov + 0.020, H);
-  float alpha = mix(aSoft, aCore, 0.50);
+  /* Coverage measured as a normalised depth INTO the mass, so the same edge
+     width in dens units gives the same crisp anime edge at every threshold,
+     and the cores always reach full opacity instead of staying as haze. */
+  float inv   = 1.0 / max(1.0 - cov, 1e-3);
+  float dens  = (H - cov) * inv;
+  float aw    = 0.065 * inv;
+  /* ── screen-space floor on the edge width ──────────────────────────────
+   * 0.065 in dens units is a fixed slice of the noise field, and where that
+   * field is steep on screen — which is most of the deck, since a mass spans
+   * only 0.1-0.2 rad — the ramp lands on well under one pixel. A sub-pixel
+   * alpha ramp is a stencil cut, and that is exactly the hard curdled outline
+   * the round-2 critic read as an oil slick. dens changes by (inv *
+   * uGradScale.z * uvPx) per pixel, so 7 px of feather is that times 7. */
+  float densPx = inv * uGradScale.z * uvPx;
+  float awP   = max(aw, 7.0 * densPx);
+  float alpha = smoothstep(0.0, awP, dens);
   if (alpha <= 0.004) return vec4(0.0);
+  float thick = smoothstep(0.0, awP * 3.0, dens);
 
-  /* heightfield normal — dominated by the LOW frequency field on purpose:
-     a normal built from fine detail reads as crinkled foil, not as billows. */
-  vec2 grad = (A.gb - 0.5) * 2.0 * uGradScale.x
-            + (B.gb - 0.5) * 2.0 * uGradScale.y * 1.35 * puff * 0.30;
-  vec2 gw = vec2(grad.x * wd.x - grad.y * perp.x, grad.x * wd.y - grad.y * perp.y);
-  vec3 N = normalize(vec3(-gw.x * bump, 1.0, -gw.y * bump));
+  /* ── relief gradient, expressed in the SCREEN frame ──────────────────── */
+  vec2 gQ = (Cf.gb - 0.5) * 2.0 * uGradScale.z;
+  vec2 gW = vec2(gQ.x / stretch, gQ.y * stretch);   /* undo the wind anisotropy */
+  vec2 g  = wd * gW.x + wp * gW.y;                  /* back into world xz */
 
-  float hl = dot(N, sunD) * 0.5 + 0.5;
-  /* three readable tone bands rather than a smooth gradient */
-  float band = smoothstep(0.28, 0.44, hl) * 0.32
-             + smoothstep(0.42, 0.64, hl) * 0.36
-             + smoothstep(0.60, 0.92, hl) * 0.32;
+  float gU = -dot(g, Ph) * cU;                 /* up on screen = inward in r */
+  float gR =  dot(g, Rt) * cR;
 
-  /* Self-shadow: three taps marching toward the sun across the deck.  The step
-     MUST stay a small fraction of the feature size (~0.25 uv) — a longer march
-     samples uncorrelated noise and shreds the clouds into fibres. */
-  vec2  sxz = sunD.xz;
-  float sl  = length(sxz);
-  vec2  sd  = (sl > 1e-3 ? sxz / sl : vec2(1.0, 0.0));
-  vec2  sdq = vec2(dot(sd, wd), dot(sd, perp)) * vec2(1.0 / stretch, stretch) * 0.020;
-  float occ = texture2D(uNoiseA, q + sdq * 1.0).r * 0.40
-            + texture2D(uNoiseA, q + sdq * 2.1).r * 0.34
-            + texture2D(uNoiseA, q + sdq * 3.6).r * 0.26;
-  float shadow = 1.0 - smoothstep(cov + 0.01, cov + 0.16, occ) * 0.55;
+  /* NORMALISE the slope by the local characteristic one. dH/d(screen radian) is
+     inherently huge — a mass 0.15 rad wide with unit amplitude has slope ~7 —
+     so feeding it in raw saturates every relief normal sideways and the deck
+     comes back as flat white stencil shapes with no interior at all. Dividing
+     by uGradScale.z * sqrt(cU*cR) makes the relief SCALE-INVARIANT while the
+     cU/cR ratio keeps the near-horizon anisotropy, so a squashed mass still
+     shades like a squashed mass. */
+  float sNorm = max(uGradScale.z * sqrt(max(cU * cR, 1e-6)), 1e-4);
+  vec2 gs = vec2(gR, gU) * (bump / sNorm);
+  gs /= 1.0 + 0.30 * length(gs);               /* soft saturate: no spikes */
+  /* A cumulus is a VOLUME, not a bas-relief. A pure screen-space relief normal
+     points at the VIEWER, so with the key behind the deck — Lr.z ≈ -0.87 in the
+     shipped hero and canopy framings — every lobe on it comes out dark: measured
+     hl ≈ 0.19 across the entire deck, which is why the sky read as slate-blue
+     blotches with fuzzy white outlines. Biasing the normal toward world-up and
+     easing off the front-facing component models the real shape: the mass
+     presents a sunlit crown upward and a flat base downward. Toward the zenith
+     we are looking at that base head-on, so the up-bias eases off. */
+  float upB = mix(0.88, 0.18, smoothstep(0.35, 0.85, d.y));
+  vec3 Nr = normalize(vec3(-gs.x, -gs.y + upB, 0.55));
 
-  /* Thickness. We stand UNDER the deck, so a thick column reads as a dark flat
-     base while a thin one glows: this single term carries the volumetric feel.
-     Hard-clamped to 1 so a grazing-angle column can never accumulate into a
-     solid bar of darkening. */
-  float depth = min(smoothstep(cov - 0.050, cov + 0.090, H)
-                    * (1.0 - tN * 0.45) * smoothstep(0.02, 0.22, d.y), 1.0);
+  /* the sun in the same frame; Lr.z < 0 means the deck is backlit */
+  vec3 R3 = vec3(Rt.x, 0.0, Rt.y);
+  vec3 U3 = normalize(cross(d, R3));
+  vec3 Lr = vec3(dot(sunD, R3), dot(sunD, U3), dot(sunD, -d));
+  vec2 sScr = normalize(Lr.xy + vec2(1e-4, 1e-4));
 
-  /* Sun-facing lobes dominate; the self-shadow only nudges. Weighting the
-     shadow heavily turns every cloud interior into a violet bruise. */
-  float lit = SAT(0.19 + band * 0.57 + shadow * 0.24) * mix(1.0, 0.35, depth);
+  float hl = dot(Nr, normalize(Lr + vec3(1e-5))) * 0.5 + 0.5;
+  /* three readable tone bands rather than a smooth gradient (§2) */
+  /* Bands shifted down the range: a backlit deck only spans hl ≈ 0.25-0.55, so
+     thresholds authored for a 0-1 span put the whole sky in the first band. */
+  float band = smoothstep(0.18, 0.38, hl) * 0.30
+             + smoothstep(0.34, 0.56, hl) * 0.36
+             + smoothstep(0.52, 0.84, hl) * 0.34;
+
+  /* Self-shadow: three taps marching along the sun's SCREEN direction, so a
+     lobe throws its shadow across the lobes behind it the way a painter draws
+     it. The step stays a small fraction of the feature size — a longer march
+     samples uncorrelated noise and shreds the mass into fibres. */
+  vec2 dqw = Rt * (cR * sScr.x) - Ph * (cU * sScr.y);
+  vec2 sQ  = vec2(dot(dqw, wd) / stretch, dot(dqw, wp) * stretch);
+  sQ = normalize(sQ + vec2(1e-5, 1e-5)) * 0.024;
+  float occ = texture2D(uNoiseC, Q + sQ * 1.0).r * 0.42
+            + texture2D(uNoiseC, Q + sQ * 2.2).r * 0.34
+            + texture2D(uNoiseC, Q + sQ * 3.8).r * 0.24;
+  float shadow = 1.0 - smoothstep(cov + 0.008, cov + 0.17, occ) * 0.58;
+
+  /* surfaces that face DOWN are the flat shadowed base of the mass — this is
+     the term the old world-Y heightfield normal could never produce. Faded out
+     toward the zenith: straight overhead there is no "down" on screen, so the
+     term would just darken random halves of the deck. */
+  float down = SAT(gs.y * 0.85) * mix(1.0, 0.40, smoothstep(0.42, 0.86, d.y));
+
+  /* ── TRANSMISSION (ART_BIBLE §2) ──────────────────────────────────────
+   * The shipped hero/canopy framings put the key BEHIND the cloud deck: the
+   * visible masses sit 20-30° below a 38° sun, so Lr.z ≈ -0.87 and a purely
+   * reflective model puts every one of them at the bottom of the ramp — the
+   * deck came back as dark slate smudges on a pale sky, i.e. depth inverted.
+   * A backlit cumulus is LUMINOUS: light scatters through the whole mass, not
+   * just its rim, so transmission lifts the body of the cloud and only the
+   * thickest cores stay dark. Wide lobe (pow 2) on purpose — a tight one only
+   * lights the few degrees around the sun. */
+  float muS   = max(dot(d, sunD), 0.0);
+  float back  = SAT(-Lr.z * 0.85 + 0.15);
+  float trans = back * (0.30 + 0.70 * pow(muS, 2.0));
+
+  /* Per-mass value variation. Without it every mass in the deck lands on the
+     same value and the whole sky reads as one paint colour; two masses side by
+     side must not be the same white (§8.11). */
+  float mv = texture2D(uNoiseA, Q * 0.115 + vec2(0.71, 0.29)).r;
+
+  float lit = SAT(0.10 + band * 0.72 + shadow * 0.18) * mix(1.0, 0.56, down * 0.85);
+  lit *= mix(0.86, 1.05, mv);
+  /* Transmission floors the value, but STEEPLY graded by thickness — that
+     gradient IS the backlit look: a thin edge transmits almost everything and
+     goes brighter than a sunlit top, while the core of the mass blocks the light
+     and stays a deep cool violet. A flat floor (measured at 0.50-0.96 across the
+     whole mass) lifts the deck into one pale wash with no interior at all. */
+  /* The core floor is a VALUE-CONTRAST decision, not a physical one: low in the
+     frame the sky is pale (#CFE0F2 haze) so a dark core reads as mass, but at the
+     zenith the sky is a deep saturated blue and a dark core reads as a hole — up
+     there the mass has to be the LIGHT shape, as every painted anime sky draws
+     it. Measured: with a flat 0.26 floor the canopy deck sat within 0.03 of the
+     zenith's own luminance, i.e. invisible. */
+  float coreF = mix(0.21, 0.52, smoothstep(0.30, 0.70, d.y));
+  lit = max(lit, trans * (coreF + (1.04 - coreF) * pow(1.0 - thick, 1.35)));
   /* three-stop ramp: hue-shifted shadow → warm midtone → near-white top.
      A two-stop lerp is what makes procedural clouds read as grey mush. */
   vec3 col = mix(uCloudDark, uCloudAmb, SAT(lit * 2.0));
@@ -475,24 +664,68 @@ vec4 cloudLayer(vec3 d, float hgt, float scl, float spd, float cov,
   float stL = max(skyLuma(uShadowTint), 1e-4);
   vec3  stChroma = mix(vec3(1.0), uShadowTint / stL, 0.45);
   vec3  shadeC = col * 0.55 * stChroma;
-  float litMask = SAT(band * 1.30 + shadow * 0.42 - 0.30) * (1.0 - depth * 0.55);
-  col = mix(shadeC, col, SAT(litMask));
+  float litMask = SAT(band * 1.35 + shadow * 0.40 - 0.32 - down * 0.55);
+  /* a backlit mass is not "in shadow" — but its core still is */
+  litMask = max(litMask, trans * (0.32 + 0.68 * (1.0 - thick)));
+  col = mix(shadeC, col, litMask);
 
-  /* silver lining: thin translucent edges glow where they cross the sun */
-  float mu  = max(dot(d, sunD), 0.0);
-  float fwd = pow(mu, 13.0);
-  float edge = smoothstep(0.05, 0.50, alpha) * (1.0 - smoothstep(0.50, 0.96, alpha));
-  col += uCloudRim * edge * (0.05 + 1.05 * fwd) * uCloudRimAmt;
-  col += uCloudRim * pow(mu, 44.0) * (1.0 - alpha * 0.82) * 0.75 * uCloudRimAmt;
+  /* ── low-sun relight (ART_BIBLE §2) ───────────────────────────────────
+   * MEASURED on critic-p4-r2-dusk/canopy.png, cloud mass x 900-1250 y 120-330:
+   * the deck came back DARKER than the sky behind it on every row (L 0.14-0.24
+   * against a 0.16-0.28 gradient) with no warm edge anywhere — an oil slick in
+   * front of a sunset. Two terms were missing, and both only exist when the key
+   * is near the horizon, so day and night are untouched by construction
+   * (lowK = 0 above ~22 deg of sun elevation and 0 when the sun is down).
+   *
+   * 1. A cloud is a SCATTERER lit by the whole sky dome. Its shadow side cannot
+   *    fall far below the radiance of the sky it is silhouetted against; only
+   *    optically thick cores can. Lift toward skyC up to 0.92 of the sky.
+   * 2. A raking key lights the flanks that face it ON SCREEN — including the
+   *    undersides, which is where a sunset actually puts its gold. */
+  float sunUpC = smoothstep(-0.14, 0.05, sunD.y);
+  float lowK   = pow(1.0 - SAT(sunD.y * 2.6), 2.0) * sunUpC;
+  if (lowK > 0.002) {
+    float lsky = skyLuma(skyC);
+    float lcol = skyLuma(col);
+    col += skyC * max(lsky * 0.92 - lcol, 0.0) * lowK * (0.35 + 0.65 * (1.0 - thick));
+    vec2  eNr  = -normalize(gs + vec2(1e-5, 1e-5));
+    float rake = pow(SAT(dot(eNr, sScr) * 0.5 + 0.5), 1.5);
+    col += uCloudRim * lowK * rake * (0.10 + 0.40 * (1.0 - thick * 0.7))
+         * rimA * uCloudRimAmt;
+  }
 
-  /* aerial perspective along the slab — distant deck melts into the haze.
-     Driven by the NORMALISED slab parameter so every layer melts over the
-     same angular range instead of the high layers saturating instantly. */
-  float far = 1.0 - exp(-tN * 3.2);
-  col = mix(col, skyC * 1.06 + uHaze * 0.06, far * 0.86);
+  /* ── silver lining + translucency ─────────────────────────────────────
+   * Only the edges that FACE the sun on screen get the silver rim; a rim on
+   * every edge is a traced outline, which is the cheap-looking version. */
+  float fwd = pow(muS, 12.0);
+  vec2  en  = -normalize(gs + vec2(1e-5, 1e-5));      /* outward edge normal */
+  float sunEdge = pow(SAT(dot(en, sScr) * 0.5 + 0.5), 1.7);
+  float edge = smoothstep(0.03, 0.42, alpha) * (1.0 - smoothstep(0.42, 0.96, alpha));
+  /* the 0.85*lowK term is the golden-hour silver lining: with the key raking the
+     deck, the sun-facing boundary of every mass has to out-read the sky behind
+     it (target: >= 1.35x the adjacent sky luminance), not merely tint it */
+  col += uCloudRim * edge * (0.20 + 0.85 * lowK + 1.25 * fwd) * sunEdge * rimA * uCloudRimAmt;
+  /* light bleeding through the thin parts of a backlit mass */
+  col += uCloudRim * (1.0 - thick * 0.75) * trans * 0.20 * rimA * uCloudRimAmt;
+  /* the deck immediately around the sun goes incandescent */
+  col += uCloudRim * pow(muS, 40.0) * (1.0 - alpha * 0.75) * 0.65 * rimA * uCloudRimAmt;
+
+  /* ── aerial perspective ───────────────────────────────────────────────
+   * Distance melts the deck toward the sky it is silhouetted against (skyC
+   * already carries the horizon haze band). The wash is deliberately MILD:
+   * washing 86 % of every cloud into the sky is what left the deck at 0.010-
+   * 0.035 luminance contrast, i.e. invisible. The last couple of degrees above
+   * the horizon still wash out completely, so the deck sits IN the haze. */
+  float far  = 1.0 - exp(-tN * 2.4);
+  float wash = max(far * aer, smoothstep(0.075, 0.010, d.y) * 0.90);
+  col = mix(col, skyC * 1.03 + uHaze * 0.04, SAT(wash));
 
   alpha *= slabFade * uCloudAmt * amt;
-  return vec4(col, SAT(alpha));
+  /* Belt and braces against the NaN class of bug: a single poisoned pixel here
+     is smeared across the frame by the bloom mip chain. NaN fails equality with
+     itself, so this catches anything the guards above missed. */
+  if (!all(equal(col, col)) || !(alpha == alpha)) return vec4(0.0);
+  return vec4(max(col, vec3(0.0)), SAT(alpha));
 }
 
 /* ----------------------------------------------------------------- stars -- */
@@ -500,19 +733,28 @@ vec4 cloudLayer(vec3 d, float hgt, float scl, float spd, float cov,
  * One hashed point per cubic cell of the direction vector.  The dot must stay
  * FAR smaller than the cell (rad ~ 0.3 of a cell) and its falloff must be a
  * tight gaussian — a broad tail fills each cell and the whole field turns into
- * a visible lattice of square blobs.
+ * a visible lattice of square blobs.  It also means a star can never be bigger
+ * than its own cell, so DENSITY and SIZE are coupled: a 620-cell grid gives
+ * sub-pixel stars that TAA averages straight back into the background. That is
+ * why the three layers below all sit within 140-168 cells (8.8-12.3 px cells at
+ * the shipped fovs) and get their density from the THRESHOLD instead, with a
+ * per-layer rotation so three near-equal lattices cannot align into a visible
+ * grid.
  */
 /*
- * Explicit magnitude distribution: 80 % faint (0.12–0.30), 15 % medium
- * (0.30–0.60), 5 % bright (0.60–1.00).  A pow() curve crushes ~95 % of the
- * field below the visible threshold, which is exactly why the old star field
- * read as a scatter of dots over an empty sky.
+ * Magnitude, authored as PEAK LINEAR RADIANCE so the distribution survives ACES
+ * + the grade rather than being specified in a space the pipeline then crushes:
+ *   5 %  bright  2.10-3.60  -> display L ~0.85
+ *  25 %  medium  0.55-1.15  -> display L ~0.45
+ *  70 %  faint   0.10-0.36  -> display L 0.15-0.28
+ * MEASURED before this change: the whole field peaked at display L 0.139 over a
+ * pure-sky box of the night pond frame — i.e. 95 % of it sat below the
+ * background's own dither and the sky read as empty navy (ART_BIBLE §8.11).
  */
 float starMag(float r) {
-  float a = mix(0.12, 0.30, clamp(r / 0.80, 0.0, 1.0));
-  float b = mix(0.30, 0.60, clamp((r - 0.80) / 0.15, 0.0, 1.0));
-  float c = mix(0.60, 1.00, clamp((r - 0.95) / 0.05, 0.0, 1.0));
-  return r < 0.80 ? a : (r < 0.95 ? b : c);
+  if (r > 0.95) return mix(2.10, 3.60, (r - 0.95) / 0.05);
+  if (r > 0.70) return mix(0.55, 1.15, (r - 0.70) / 0.25);
+  return mix(0.10, 0.36, r / 0.70);
 }
 
 vec3 starLayer(vec3 d, float grid, float thresh, float rad, float seed) {
@@ -524,21 +766,31 @@ vec3 starLayer(vec3 d, float grid, float thresh, float rad, float seed) {
   vec3 h = hash31(id + 1.7);
   vec3 sp = c + vec3(0.25) + h * 0.5;
   float dd = length(p - sp) / rad;
-  float core = exp(-dd * dd * 6.5) + 0.13 * exp(-dd * dd * 1.4);
+  /* Tight core + a very small tail. The old 0.13*exp(-dd*dd*1.4) tail put 3 % of
+     a bright star's energy out at a full cell radius, which at display L 0.9
+     still reads as a 7 px blob — the prescription caps a star at 3 px. */
+  float core = exp(-dd * dd * 6.5) + 0.07 * exp(-dd * dd * 2.2);
   float mag = starMag(hash11(id * 1.317 + 19.3));
-  /* two detuned oscillators — a single sine reads as a synchronised pulse */
-  float tw = 0.56 + 0.30 * sin(uTime * (1.05 + h.z * 2.9) + h.y * 47.0)
-                  + 0.14 * sin(uTime * (2.70 + h.x * 4.1) + h.z * 91.0);
+  /* ±12 % over a per-star 3-6 s period. A deeper modulation (the old ±44 %
+     around a 0.56 mean) both dims the field and reads as a pulse. */
+  float per = 3.0 + h.z * 3.0;
+  float tw = 1.0 + 0.12 * sin(uTime * 6.2831853 / per + h.y * 47.0);
   /* colour temperature spread: most white, a few warm, a few blue */
   vec3 tint = mix(vec3(1.05, 0.84, 0.66), vec3(0.70, 0.84, 1.14), smoothstep(0.30, 0.75, h.x));
   tint = mix(vec3(1.0), tint, 0.8);
   return tint * (core * mag * tw);
 }
 
+/* Two fixed rotations, so the three star lattices are neither the same scale nor
+   the same orientation. Rotations preserve |d| = 1, so the cell metric is
+   unchanged. */
+vec3 starRotA(vec3 d) { return vec3(d.x * 0.80 - d.z * 0.60, d.y, d.x * 0.60 + d.z * 0.80); }
+vec3 starRotB(vec3 d) { return vec3(d.x, d.y * 0.75 - d.z * 0.66, d.y * 0.66 + d.z * 0.75); }
+
 void main() {
   vec3 d = normalize(vDir);
   vec3 sunD = normalize(uSunDir);
-  vec3 moonD = nrmSafe(uMoonDir, vec3(0.0, 1.0, 0.0));
+  vec3 moonD = nrmSafe(uMoonRender, nrmSafe(uMoonDir, vec3(0.0, 1.0, 0.0)));
 
   float mu = d.y;
   float am = 1.0 / (max(mu, 0.0) + 0.10);                 /* airmass proxy */
@@ -604,39 +856,50 @@ void main() {
          * mw * uMilky * uStars;
 
     /* Stars. Density is deliberately NOT starved toward the horizon — an empty
-       lower sky is the classic tell. Extinction dims, it does not thin. */
+       lower sky is the classic tell. Extinction dims, it does not thin.
+       Three near-equal grids (10.5 / 9.7 / 8.8 px cells at fov 36-42) each
+       rotated onto a different axis; the thresholds put ~55 000 stars on the
+       full sphere, which is ~1000 inside the sky region of the night pond frame
+       — the prescription's 900-1400 band. */
     float dens = 1.0 + 1.6 * bandE;
-    vec3 st = starLayer(d, 140.0, 0.030 * dens, 0.32, 0.0)  * 1.00
-            + starLayer(d, 300.0, 0.0060 * dens, 0.28, 31.7) * 0.80
-            + starLayer(d, 620.0, 0.0012 * dens, 0.26, 77.3) * 0.55;
+    vec3 st = starLayer(d,             140.0, 0.075 * dens, 0.30, 0.0)
+            + starLayer(starRotA(d),   152.0, 0.065 * dens, 0.30, 31.7)
+            + starLayer(starRotB(d),   168.0, 0.050 * dens, 0.29, 77.3);
     /* The band itself is millions of unresolved stars: a very dense, very faint
        layer confined to it supplies the grain that makes it read as a star
        field rather than as a smear of fog. */
-    st += starLayer(d, 1150.0, 0.0022 * bandE, 0.24, 133.0) * 0.45 * bandE;
+    st += starLayer(d, 420.0, 0.055 * bandE, 0.26, 133.0) * 0.30 * bandE;
     st *= smoothstep(-0.006, 0.050, d.y) * mix(0.60, 1.0, smoothstep(0.0, 0.50, d.y));
-    col += st * uStars * 1.7;
+    col += st * uStars;
 
-    /* ---- moon ---- */
+    /* ---- moon ----
+     * It has to read as a BODY, not a lens flare. Three things do that and the
+     * old code had none of them: a step-edged limb (the 0.93→1.05 * R window was
+     * 3.6 px of gradient, and with a broad halo on top of it there was no edge
+     * left to see), a nearly-flat full disc (the old Lambert terminator cut the
+     * disc in half while the HUD announced FULL MOON), and a halo confined to a
+     * few radii instead of the old exp(-ang*7.5), which was still at 1/e SEVEN
+     * disc-radii out and is what made it a smear. */
     float cm = dot(d, moonD);
     float ang = acos(clamp(cm, -1.0, 1.0));
     vec3 T = nrmSafe(cross(moonD, refAxis(moonD)), vec3(1.0, 0.0, 0.0));
     vec3 Bv = cross(T, moonD);
     vec2 mUV = vec2(dot(d, T), dot(d, Bv)) / uMoonSize;
     float r2 = dot(mUV, mUV);
-    vec3 mnrm = vec3(mUV, sqrt(max(0.0, 1.0 - min(r2, 1.0))));
-    float lamM = dot(mnrm, normalize(vec3(-0.52, 0.20, 0.83)));
-    float shade = smoothstep(-0.22, 0.55, lamM);
-    float craters = texture2D(uNoiseB, mUV * 0.30 + 0.5).r * 0.6
-                  + texture2D(uNoiseA, mUV * 0.9 + 0.2).r * 0.4;
-    float disc = 1.0 - smoothstep(uMoonSize * 0.93, uMoonSize * 1.05, ang);
-    vec3 mc = uMoonCol * (0.30 + 0.85 * shade) * (0.78 + 0.42 * craters);
-    /* soft limb darkening */
-    mc *= mix(1.0, 0.82, SAT(r2));
-    col = mix(col, mc * 2.4, disc * uStars);
-    float halo = pow(max(cm, 0.0), 1400.0) * 0.55
-               + pow(max(cm, 0.0), 90.0) * 0.075
-               + exp(-ang * 7.5) * 0.055;
-    col += uMoonCol * halo * uStars * 1.25;
+    /* maria: broad dark plains, deliberately low frequency so the LIMB stays the
+       strongest edge on the disc. Target display L: 0.93 highland / 0.86 mare. */
+    float maria = texture2D(uNoiseB, mUV * 0.34 + 0.5).r * 0.58
+                + texture2D(uNoiseA, mUV * 0.85 + 0.2).r * 0.42;
+    float mv = mix(1.0, 0.62, smoothstep(0.40, 0.70, maria));
+    /* a step limb: ~1.3 px of gradient, just enough that it does not alias */
+    float disc = 1.0 - smoothstep(uMoonSize * 0.975, uMoonSize * 1.020, ang);
+    /* very slight limb darkening — a full moon is nearly flat, and a strong
+       falloff here is what reads as a soft ball of light */
+    vec3 mc = uMoonCol * uMoonBright * mv * mix(1.0, 0.90, SAT(r2 * r2));
+    col = mix(col, mc, disc * uStars);
+    /* Mie halo: 1/e at 0.75 R, 0.018 of peak by 3 R — present, never a flare */
+    float halo = exp(-ang / max(uMoonSize * 0.75, 1e-4)) * 0.15;
+    col += uMoonCol * halo * uStars;
   }
 
   /* ---- sun: Mie forward scatter, then the disc ---- */
@@ -645,42 +908,80 @@ void main() {
   float cosT = dot(d, sunD);
   float gg = uMieG;
   float hg = (1.0 - gg * gg) / pow(max(1.0 + gg * gg - 2.0 * gg * cosT, 1e-4), 1.5);
-  float mie = hg * 0.055 * uMieAmt * (0.30 + 4.2 * lowSun) * (0.32 + 0.68 * min(am, 7.0) / 7.0);
+  /* Same re-weighting as skyRadiance() — the two MUST agree term for term or a
+     hazed ridge stops matching the sky it is silhouetted against. */
+  float lw = pow(lowSun, 0.85);
+  float mie = hg * 0.055 * uMieAmt * (0.12 + 4.38 * lw) * (0.32 + 0.68 * min(am, 7.0) / 7.0);
   col += uGlowTint * mie * sunUp;
-  col += uGlowTint * pow(max(cosT, 0.0), 4.0) * 0.17 * (0.35 + 2.1 * lowSun) * sunUp;
+  col += uGlowTint * pow(max(cosT, 0.0), 4.0) * 0.17 * (0.13 + 2.33 * lw) * sunUp;
 
+  /* ── the sun itself ───────────────────────────────────────────────────
+   * This is the money shot's backdrop: the hero/canopy framings put the key
+   * BEHIND the tree, so the disc sits near or just inside the frustum and it
+   * has to read as a glowing orb sitting in air rather than as a clipped white
+   * hole. Three nested falloffs do that: a soft-limbed disc, a tight aureole
+   * roughly two disc-radii wide, and a broad veil ~10 radii out. A single hard
+   * disc + one exponential is what produces the flat white blob ART_BIBLE §8.12
+   * calls out, and it is also what the god-ray pass in 90-postfx.js seeds from,
+   * so the graded falloff feeds it a graded source.
+   *
+   * MEASURED: an aureole of 0.27*uSunI over 2.2 disc radii plus a veil of
+   * 0.075*uSunI over 10 radii puts 1.3-4.6 linear units of light across a 20°
+   * disc of sky whose own radiance is 0.2-0.5 — i.e. it white-outs a fifth of
+   * the canopy frame and (at the ultra tier) drove the post chain into a black
+   * speckled hole. The energies below are ~4x lower: the disc stays a hot core
+   * for bloom and the god-ray pass to seed from, the aureole reads as a warm
+   * halo out to ~4°, and the veil only LIFTS the sky (≈+0.2 at 5°, +0.09 at 15°)
+   * instead of replacing it. */
   float ang = acos(clamp(cosT, -1.0, 1.0));
-  float core = 1.0 - smoothstep(uSunSize * 0.80, uSunSize * 1.30, ang);
-  col += uSunTint * core * uSunI * sunUp;
-  col += uSunTint * exp(-ang / (uSunSize * 5.0)) * uSunI * 0.085 * sunUp;
+  float R = max(uSunSize, 1e-4);
+  float core = 1.0 - smoothstep(R * 0.74, R * 1.20, ang);
+  float aur  = exp(-ang / (R * 2.6)) * 0.085;
+  /* ~10 sun-radii of veil is a low-sun phenomenon too: with the sun at 39 deg it
+     was adding 0.05 linear right across the top of the hero frame. */
+  float veilS = exp(-ang / (R * 11.0)) * 0.018 * (0.42 + 0.58 * sqrt(lowSun));
+  /* the core desaturates toward white, the aureole keeps the palette's sun hue —
+     that hue break at the limb is what makes a low sun read as hot */
+  col += mix(uSunTint, vec3(1.0), 0.30) * core * uSunI * 0.60 * sunUp;
+  col += uSunTint * (aur + veilS) * uSunI * sunUp;
 
   /* ---- below the horizon fades to the aerial colour (hills cover it) ---- */
   col = mix(col, uFogColor * 0.92, smoothstep(0.0, -0.14, d.y) * uGroundFade);
 
-  /* ---- clouds, composited front-to-back with early-out ---- */
+  /* ---- clouds, composited front-to-back with early-out ----
+   * The deck is lit by whichever body is actually up. At night uSunDir points
+   * well below the horizon, so every cloud came back on the bottom of its ramp
+   * with no lit tops, no rims and no self-shadow direction — the "flat navy field
+   * with no cloud lighting" of ART_BIBLE §8.2. Blending the key toward the moon
+   * (the drawn one, so the silver linings point at the disc the player can see)
+   * gives the night deck the same three-band read the day deck has. */
+  vec3 cloudKey = normalize(mix(sunD, moonD, smoothstep(0.12, 0.72, uStars)) + vec3(1e-5));
   vec3 skyC = skyGradient(d);
   vec3 cAcc = vec3(0.0);
   float aAcc = 0.0;
   vec4 L;
-  L = cloudLayer(d, uHeightL.x, uScaleL.x, uSpeedL.x, uCovL.x, uStretchL.x, uPuffL.x, uWarpL.x, uBumpL.x, uAmtL.x, uZenCovL.x, uZenAmtL.x, sunD, skyC);
+  #define CLOUD_LAYER(i) cloudLayer(d, uKfL.i, uScaleL.i, uSpeedL.i, uCovL.i, uPwL.i, \
+      uBumpL.i, uWarpL.i, uDetL.i, uStretchL.i, uAmtL.i, uZenCovL.i, uZenAmtL.i, \
+      uAerL.i, uRimL.i, cloudKey, skyC)
+  L = CLOUD_LAYER(x);
   cAcc += (1.0 - aAcc) * L.rgb * L.a; aAcc += (1.0 - aAcc) * L.a;
   if (aAcc < 0.985) {
-    L = cloudLayer(d, uHeightL.y, uScaleL.y, uSpeedL.y, uCovL.y, uStretchL.y, uPuffL.y, uWarpL.y, uBumpL.y, uAmtL.y, uZenCovL.y, uZenAmtL.y, sunD, skyC);
+    L = CLOUD_LAYER(y);
     cAcc += (1.0 - aAcc) * L.rgb * L.a; aAcc += (1.0 - aAcc) * L.a;
   }
   if (aAcc < 0.985) {
-    L = cloudLayer(d, uHeightL.z, uScaleL.z, uSpeedL.z, uCovL.z, uStretchL.z, uPuffL.z, uWarpL.z, uBumpL.z, uAmtL.z, uZenCovL.z, uZenAmtL.z, sunD, skyC);
+    L = CLOUD_LAYER(z);
     cAcc += (1.0 - aAcc) * L.rgb * L.a; aAcc += (1.0 - aAcc) * L.a;
   }
   if (aAcc < 0.985) {
-    L = cloudLayer(d, uHeightL.w, uScaleL.w, uSpeedL.w, uCovL.w, uStretchL.w, uPuffL.w, uWarpL.w, uBumpL.w, uAmtL.w, uZenCovL.w, uZenAmtL.w, sunD, skyC);
+    L = CLOUD_LAYER(w);
     cAcc += (1.0 - aAcc) * L.rgb * L.a; aAcc += (1.0 - aAcc) * L.a;
   }
-  /* Hard ceiling on how much of the HIGH sky cloud is allowed to replace: above
-     ~25° elevation at most 55 % of the frame's sky radiance can be cloud, so the
-     saturated zenith blue always survives in the top third no matter how the
-     noise field lands on a given frame. */
-  float aCap = mix(1.0, 0.55, smoothstep(0.26, 0.46, d.y));
+  /* Ceiling on how much of the HIGH sky cloud may replace, so the saturated
+     zenith blue always survives in the top third no matter how the noise field
+     lands. 0.72 (not 0.55) and starting at 38°: a cumulus mass must be allowed
+     to be a solid mass where we actually look. */
+  float aCap = mix(1.0, 0.80, smoothstep(0.38, 0.66, d.y));
   if (aAcc > aCap) { cAcc *= aCap / max(aAcc, 1e-4); aAcc = aCap; }
   col = cAcc + col * (1.0 - aAcc);
 
@@ -822,9 +1123,10 @@ void main() {
            + texture2D(uNoiseA, vec2(vUv.x * 15.0 + uSeed, 0.13)).a * 0.20;
   float mistTop = 0.30 + mN * 0.26;
   float mist = smoothstep(mistTop, 0.05, vUv.y) * (0.62 + 0.52 * mN);
-  /* 0.96, not 1.05: a mist deck brighter than the sky above it blows out into a
-     near-white bar that competes with the hero subject for the eye. */
-  col = mix(col, skyRadiance(vWPos - uCamPos) * 0.96, SAT(mist * uMistAmt));
+  /* 0.86, not 0.96 and not 1.05: a mist deck at or above the sky's own value
+     blows out into a near-white bar that competes with the hero subject and
+     inverts the depth ordering against the band's own crest. */
+  col = mix(col, skyRadiance(vWPos - uCamPos) * 0.78, SAT(mist * uMistAmt));
 
   /* ── aerial perspective ────────────────────────────────────────────────
    * One exponential extinction law shared with the valley floor, fogging toward
@@ -851,7 +1153,12 @@ void main() {
   vec3 groundAlb = mix(uFloorNear, uFloorFar, smoothstep(95.0, 430.0, dist));
   col = mix(groundAlb, col, baseFade);
 
-  col = applySkyAerial(col, rd, f, 0.70);
+  /* Same ground-vs-sky dimming as the valley floor: a hazed LAND plane converges
+     to a value below the sky's own, and the 0.88 is what keeps each band a
+     readable step darker than the sky it is silhouetted against instead of all
+     three melting into one milky plate. */
+  col = mix(col, vec3(skyLuma(col)), SAT(f * 0.70));
+  col = mix(col, skyRadiance(rd) * 0.88, f);
 
   /* ── night ─────────────────────────────────────────────────────────────
    * A single flat fill reads as a cut-out. The range needs (a) a three-stop
@@ -955,14 +1262,15 @@ void main() {
   col *= mix(0.90, 1.10, f2);
   col *= mix(1.0, 0.90, smoothstep(0.45, 0.75, m));
 
-  /* The strip of this disc that is visible between the playable terrain edge
-     and the first hill band spans roughly 55–125 world units, and its value
-     must land BETWEEN the terrain in front of it and the hill base behind it,
-     with no step at either seam. Left alone the fog ramp alone makes that strip
-     climb ~25 % across its width, which reads as a bright bar. Lifting the near
-     end flattens it: the profile still rises with distance (correct aerial
-     perspective) but only just. */
-  col *= mix(1.22, 1.0, smoothstep(40.0, 132.0, dist));
+  /* The strip of this disc visible between the playable terrain edge and the
+     first hill band spans roughly 55–125 world units. MEASURED (hero, row means
+     over x 1200-1900): that strip came back at 0.60 luminance while the nearest
+     hill band BEHIND it sat at 0.42-0.45 and the grass in FRONT of it at 0.50 —
+     a receding plane brighter than everything either side of it, which is the
+     milky white-out that flattened the whole mid-distance. The old +22 % near
+     lift was most of it. A slight DARKENING is the correct sign: this strip is
+     nearer than the hill band, so it must read darker than it. */
+  col *= mix(0.90, 1.0, smoothstep(40.0, 150.0, dist));
 
   /* ── the SAME aerial operator the hill bands use ───────────────────────
    * Identical extinction coefficient, identical skyRadiance() sample along the
@@ -974,7 +1282,14 @@ void main() {
    * staying a neutral grey plate. */
   float f = 1.0 - exp(-dist * uAerialK * (1.0 + uGroundAerial));
   f = clamp(max(f, uGroundAerial * 0.22), 0.0, 0.94);
-  col = applySkyAerial(col, rd, f, 0.55);
+  /* Aerial perspective on a GROUND plane converges to a DIMMER value than the
+     sky itself: the haze in front of it is lit by half a sky and partly shadowed
+     by the land, whereas the sky above the ridge is lit end to end. Without the
+     0.78 the visible strip of this disc came back at 0.72-0.79 display luminance
+     against a sky of 0.73-0.86 — numerically the same plane, which is exactly the
+     milky white-out that swallowed the whole mid-distance. */
+  col = mix(col, vec3(skyLuma(col)), SAT(f * 0.55));
+  col = mix(col, skyRadiance(rd) * 0.78, f);
 
   /* night: a distance ramp plus moon-side forward scatter, so the valley is a
      receding volume rather than a flat navy fill */
@@ -1005,64 +1320,85 @@ void main() {
  * u is a normalised position in the day cycle:
  *   0.00 deep night · 0.24 dawn · 0.46 day · 0.72 golden · 0.82 dusk · 0.94 night
  */
+/* ══════════════════════════════════════════════════════════════════════════
+ *  The cycle palette.
+ *
+ *  `u` is this module's own 0..1 cycle position (see phaseToU below), NOT
+ *  08-lighting's dayT. The mapping between them goes through the phase NAME +
+ *  progress that the rig publishes on `ctx.assets.lightRig.palette`, so the two
+ *  clocks cannot drift.
+ *
+ *  Which key belongs to which sun elevation (lib/lighting.js KEYS, for
+ *  reference — do not duplicate its numbers here, just stay consistent with the
+ *  ART_BIBLE §3 rows it also uses):
+ *
+ *    u 0.34  elev ~10 deg rising     u 0.74  elev ~22 deg  (golden hour)
+ *    u 0.50  elev 27-52 deg  DAY     u 0.82  elev ~8 deg   (ART_BIBLE dusk row)
+ *    u 0.64  elev ~40 deg  DAY       u 0.89  elev ~-10 deg (twilight)
+ *
+ *  u 0.50 AND u 0.64 are both inside the rig's `day` band, so both must read as
+ *  a DAY sky — cool blue zenith over a pale horizon, ART_BIBLE §3 day column.
+ *  The golden-hour warmth at u 0.64 is carried by `hazeWarm` (sun-azimuth only)
+ *  and by the sun/glow rows, never by the isotropic horizon or haze colours.
+ * ══════════════════════════════════════════════════════════════════════════ */
 export const SKY_KEYS = [
-  { u: 0.00, zenith: 0x101a34, mid: 0x18234a, horizon: 0x2a3355, haze: 0x33406a, hazeAmt: 0.42,
-    sun: 0x9fb6e8, glow: 0x54689e, fog: 0x1b2440, cloudLit: 0x6e7aa8, cloudDark: 0x1d2542,
-    cloudAmb: 0x222c4e, cloudRim: 0x8fa4d8, sunI: 0.0, sunSize: 0.030, mieAmt: 0.35, stars: 1.0,
+  { u: 0.00, zenith: 0x101a34, mid: 0x18234a, horizon: 0x2a3355, haze: 0x33406a, hazeWarm: 0x3a4272, hazeAmt: 0.42,
+    sun: 0x9fb6e8, glow: 0x54689e, fog: 0x1b2440, cloudLit: 0x39436b, cloudDark: 0x161c34,
+    cloudAmb: 0x1e2745, cloudRim: 0x5d6b98, sunI: 0.0, sunSize: 0.030, mieAmt: 0.35, stars: 1.0,
     cov: [0.62, 0.60, 0.58, 0.66], hillLit: 0x2b3559, hillDark: 0x161e38, tree: 0x1a2440,
     floorNear: 0x1d2742, floorFar: 0x1b2440, exposure: 1.0 , zk: 0.36, zdeep: 0.94, midAmt: 0.22, aerialK: 0.0030, gAer: 0.10 },
 
-  { u: 0.15, zenith: 0x14203c, mid: 0x1d2b54, horizon: 0x3b3f62, haze: 0x50496f, hazeAmt: 0.50,
-    sun: 0xa9b8e0, glow: 0x6d6394, fog: 0x232c4a, cloudLit: 0x7e7fa8, cloudDark: 0x232a48,
-    cloudAmb: 0x2a3356, cloudRim: 0x9c9ad4, sunI: 0.0, sunSize: 0.030, mieAmt: 0.5, stars: 0.82,
+  { u: 0.15, zenith: 0x14203c, mid: 0x1d2b54, horizon: 0x3b3f62, haze: 0x50496f, hazeWarm: 0x6b5478, hazeAmt: 0.50,
+    sun: 0xa9b8e0, glow: 0x6d6394, fog: 0x232c4a, cloudLit: 0x474a72, cloudDark: 0x1d2340,
+    cloudAmb: 0x232b48, cloudRim: 0x6a6a9c, sunI: 0.0, sunSize: 0.030, mieAmt: 0.5, stars: 0.82,
     cov: [0.60, 0.58, 0.56, 0.64], hillLit: 0x323a5c, hillDark: 0x1b213c, tree: 0x1e2744,
     floorNear: 0x232c48, floorFar: 0x232c4a, exposure: 1.0 , zk: 0.38, zdeep: 0.94, midAmt: 0.22, aerialK: 0.0032, gAer: 0.14 },
 
-  { u: 0.26, zenith: 0x2a4a86, mid: 0x6a5a92, horizon: 0xe0917e, haze: 0xf0a882, hazeAmt: 0.72,
+  { u: 0.26, zenith: 0x2a4a86, mid: 0x6a5a92, horizon: 0xe0917e, haze: 0xf0a882, hazeWarm: 0xffb488, hazeAmt: 0.72,
     sun: 0xffb488, glow: 0xff9e6e, fog: 0xd9a08c, cloudLit: 0xffd3b4, cloudDark: 0x4a3659,
     cloudAmb: 0xa2879e, cloudRim: 0xffc9a4, sunI: 7.0, sunSize: 0.026, mieAmt: 1.45, stars: 0.28,
     cov: [0.55, 0.53, 0.52, 0.60], hillLit: 0x6d6472, hillDark: 0x39364f, tree: 0x2f3040,
     floorNear: 0x615b72, floorFar: 0x9c7d7c, exposure: 1.0 , zk: 0.50, zdeep: 0.96, midAmt: 0.30, aerialK: 0.0038, gAer: 0.38 },
 
-  { u: 0.34, zenith: 0x3f6fbc, mid: 0x8fa8d6, horizon: 0xf3c9a8, haze: 0xf7d3ac, hazeAmt: 0.60,
+  { u: 0.34, zenith: 0x3f6fbc, mid: 0x8fa8d6, horizon: 0xeed3ba, haze: 0xf2dcc2, hazeWarm: 0xffc9a0, hazeAmt: 0.56,
     sun: 0xffdcb0, glow: 0xffc48e, fog: 0xd6cbc4, cloudLit: 0xfff0e2, cloudDark: 0x676293,
     cloudAmb: 0xb3bcd6, cloudRim: 0xffe4c8, sunI: 12.0, sunSize: 0.022, mieAmt: 1.05, stars: 0.0,
     cov: [0.52, 0.50, 0.50, 0.58], hillLit: 0x7c9070, hillDark: 0x455440, tree: 0x374a32,
-    floorNear: 0x618148, floorFar: 0x91a4a2, exposure: 1.0 , zk: 0.46, zdeep: 0.74, midAmt: 0.26, aerialK: 0.0040, gAer: 0.34 },
+    floorNear: 0x618148, floorFar: 0x91a4a2, exposure: 1.0 , zk: 0.46, zdeep: 0.82, midAmt: 0.26, aerialK: 0.0040, gAer: 0.34 },
 
-  { u: 0.50, zenith: 0x4e86d4, mid: 0x8fbbe8, horizon: 0xcfe0f2, haze: 0xdfeaf6, hazeAmt: 0.55,
+  { u: 0.50, zenith: 0x4e86d4, mid: 0x8fbbe8, horizon: 0xcfe0f2, haze: 0xdfeaf6, hazeWarm: 0xffe8c6, hazeAmt: 0.50,
     sun: 0xffebcb, glow: 0xfff0dc, fog: 0xbcd3ea, cloudLit: 0xfffaf2, cloudDark: 0x6e76a8,
     cloudAmb: 0xbdc9e2, cloudRim: 0xfff4e2, sunI: 17.0, sunSize: 0.019, mieAmt: 0.80, stars: 0.0,
     cov: [0.50, 0.48, 0.49, 0.57], hillLit: 0x7f9a6e, hillDark: 0x435e3c, tree: 0x36502f,
-    floorNear: 0x638148, floorFar: 0x81978f, exposure: 1.0 , zk: 0.42, zdeep: 0.52, midAmt: 0.16, aerialK: 0.0022, gAer: 0.12 },
+    floorNear: 0x638148, floorFar: 0x81978f, exposure: 1.0 , zk: 0.42, zdeep: 0.74, midAmt: 0.16, aerialK: 0.0022, gAer: 0.12 },
 
-  { u: 0.64, zenith: 0x4a7cc8, mid: 0x9cbbdf, horizon: 0xe6d7c2, haze: 0xf2dcbc, hazeAmt: 0.52,
-    sun: 0xffe0b0, glow: 0xffd8a4, fog: 0xcdd2d6, cloudLit: 0xfff2df, cloudDark: 0x6f78a2,
-    cloudAmb: 0xbcc4d8, cloudRim: 0xffeacf, sunI: 15.0, sunSize: 0.020, mieAmt: 1.00, stars: 0.0,
-    cov: [0.49, 0.47, 0.48, 0.56], hillLit: 0x84996c, hillDark: 0x475c3c, tree: 0x39502e,
-    floorNear: 0x688245, floorFar: 0x86998b, exposure: 1.0 , zk: 0.43, zdeep: 0.58, midAmt: 0.19, aerialK: 0.0027, gAer: 0.20 },
+  { u: 0.64, zenith: 0x4b82d0, mid: 0x8fb8e6, horizon: 0xd4dfee, haze: 0xdce6f2, hazeWarm: 0xffd9a8, hazeAmt: 0.42,
+    sun: 0xffe0b0, glow: 0xffdcae, fog: 0xc2d6ea, cloudLit: 0xfff6ea, cloudDark: 0x6f78a2,
+    cloudAmb: 0xbcc8dd, cloudRim: 0xffeacf, sunI: 15.0, sunSize: 0.020, mieAmt: 0.86, stars: 0.0,
+    cov: [0.49, 0.47, 0.48, 0.56], hillLit: 0x7d9a6e, hillDark: 0x445c3c, tree: 0x37502e,
+    floorNear: 0x66823f, floorFar: 0x8aa3a6, exposure: 1.0 , zk: 0.28, zdeep: 0.66, midAmt: 0.15, aerialK: 0.0026, gAer: 0.16 },
 
-  { u: 0.74, zenith: 0x3f68b4, mid: 0x9d8fbe, horizon: 0xf7c489, haze: 0xffcf92, hazeAmt: 0.70,
+  { u: 0.74, zenith: 0x3f68b4, mid: 0x9d8fbe, horizon: 0xf7c489, haze: 0xffcf92, hazeWarm: 0xffc98c, hazeAmt: 0.60,
     sun: 0xffcf94, glow: 0xffb271, fog: 0xefc0a0, cloudLit: 0xffe8c8, cloudDark: 0x5f5081,
     cloudAmb: 0xd6b8ae, cloudRim: 0xffd9a8, sunI: 13.0, sunSize: 0.023, mieAmt: 1.55, stars: 0.0,
     cov: [0.48, 0.47, 0.47, 0.55], hillLit: 0x8a8a62, hillDark: 0x4b4a3c, tree: 0x3c4130,
-    floorNear: 0x616f3e, floorFar: 0x8f8071, exposure: 1.0 , zk: 0.48, zdeep: 0.88, midAmt: 0.28, aerialK: 0.0034, gAer: 0.30 },
+    floorNear: 0x616f3e, floorFar: 0x8f8071, exposure: 1.0 , zk: 0.41, zdeep: 0.88, midAmt: 0.22, aerialK: 0.0034, gAer: 0.30 },
 
-  { u: 0.82, zenith: 0x3a4e86, mid: 0x7d5f8c, horizon: 0xf5a86e, haze: 0xffa268, hazeAmt: 0.86,
+  { u: 0.82, zenith: 0x3a4e86, mid: 0x7d5f8c, horizon: 0xf5a86e, haze: 0xffa268, hazeWarm: 0xffa163, hazeAmt: 0.86,
     sun: 0xff9e5e, glow: 0xff8348, fog: 0xe8a57e, cloudLit: 0xffd0a2, cloudDark: 0x4a3457,
     cloudAmb: 0xc08d80, cloudRim: 0xffb787, sunI: 9.0, sunSize: 0.029, mieAmt: 2.10, stars: 0.10,
     cov: [0.47, 0.46, 0.46, 0.54], hillLit: 0x7a6558, hillDark: 0x3f3040, tree: 0x33283a,
     floorNear: 0x50483e, floorFar: 0x866453, exposure: 1.0 , zk: 0.52, zdeep: 0.92, midAmt: 0.32, aerialK: 0.0041, gAer: 0.42 },
 
-  { u: 0.89, zenith: 0x25315e, mid: 0x4a3f70, horizon: 0xb46a72, haze: 0xc06f6a, hazeAmt: 0.70,
+  { u: 0.89, zenith: 0x25315e, mid: 0x4a3f70, horizon: 0xb46a72, haze: 0xc06f6a, hazeWarm: 0xc86e63, hazeAmt: 0.70,
     sun: 0xd4785e, glow: 0xb85a52, fog: 0x8a5f66, cloudLit: 0xb98a90, cloudDark: 0x2f2648,
     cloudAmb: 0x7d5a68, cloudRim: 0xdc8f7e, sunI: 2.0, sunSize: 0.032, mieAmt: 1.30, stars: 0.42,
     cov: [0.52, 0.50, 0.49, 0.58], hillLit: 0x453c50, hillDark: 0x211d36, tree: 0x1f1c32,
     floorNear: 0x312d49, floorFar: 0x4d3a49, exposure: 1.0 , zk: 0.46, zdeep: 0.94, midAmt: 0.28, aerialK: 0.0038, gAer: 0.34 },
 
-  { u: 1.00, zenith: 0x101a34, mid: 0x18234a, horizon: 0x2a3355, haze: 0x33406a, hazeAmt: 0.42,
-    sun: 0x9fb6e8, glow: 0x54689e, fog: 0x1b2440, cloudLit: 0x6e7aa8, cloudDark: 0x1d2542,
-    cloudAmb: 0x222c4e, cloudRim: 0x8fa4d8, sunI: 0.0, sunSize: 0.030, mieAmt: 0.35, stars: 1.0,
+  { u: 1.00, zenith: 0x101a34, mid: 0x18234a, horizon: 0x2a3355, haze: 0x33406a, hazeWarm: 0x3a4272, hazeAmt: 0.42,
+    sun: 0x9fb6e8, glow: 0x54689e, fog: 0x1b2440, cloudLit: 0x39436b, cloudDark: 0x161c34,
+    cloudAmb: 0x1e2745, cloudRim: 0x5d6b98, sunI: 0.0, sunSize: 0.030, mieAmt: 0.35, stars: 1.0,
     cov: [0.62, 0.60, 0.58, 0.66], hillLit: 0x2b3559, hillDark: 0x161e38, tree: 0x1a2440,
     floorNear: 0x1d2742, floorFar: 0x1b2440, exposure: 1.0 , zk: 0.36, zdeep: 0.94, midAmt: 0.22, aerialK: 0.0030, gAer: 0.10 },
 ];
@@ -1073,7 +1409,14 @@ export function phaseToU(phase, t) {
   switch (phase) {
     case 'dawn': return 0.16 + c * 0.26;   // 0.16 → 0.42
     case 'day': return 0.42 + c * 0.24;    // 0.42 → 0.66
-    case 'dusk': return 0.66 + c * 0.23;   // 0.66 → 0.89
+    /* NON-LINEAR on purpose. 08-lighting's dusk band drops the sun from 40 deg to
+       8 deg over its first 60 %, so a linear palette advance leaves the sky two
+       keys behind the sun: measured, the `dusk` anchor (dayT 0.735, sun at 14.9
+       deg) landed on u 0.743, whose horizon row is authored for a 25 deg sun. The
+       0.62 exponent puts that anchor on u 0.782, i.e. between the golden-hour and
+       the ART_BIBLE dusk rows where a 15 deg sun belongs. Endpoints are exact, so
+       the join with `day` at 0.66 and with `night` at 0.89 is still continuous. */
+    case 'dusk': return 0.66 + Math.pow(c, 0.62) * 0.23;   // 0.66 → 0.89
     case 'night': { const u = 0.89 + c * 0.27; return u >= 1 ? u - 1 : u; }
     default: return 0.5;
   }

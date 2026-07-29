@@ -164,6 +164,7 @@ class HazeBloomPass extends Pass {
     this.sunBoost = new THREE.Vector2(2.5, 0.25);   // (multiplier, radius in frame heights)
     this.sunUV = new THREE.Vector2(0.5, 0.85);
     this.tint = new THREE.Vector3(1, 1, 1);
+    this.headroom = 1.0;
     this.aspect = W / H;
 
     this.maxLevels = maxLevels;
@@ -299,6 +300,7 @@ class HazeBloomPass extends Pass {
     // the meaning of `strength` depend on the resolution: the same number produced
     // a different veil at 720p (6 mips) than at 1080p (7 mips).
     cu.uStrength.value = this.strength / Math.max(this.weightSum(), 1e-4);
+    cu.uHeadroom.value = this.headroom;
     cu.uTint.value.copy(this.tint);
     renderer.setRenderTarget(this.renderToScreen ? null : writeBuffer);
     this._quad.render(renderer);
@@ -477,12 +479,15 @@ export default {
     const rayColor = V3(0, 0, 0);
     atmosPass.uniforms.uAOTint.value = aoTint;
     atmosPass.uniforms.uRayColor.value = rayColor;
-    atmosPass.uniforms.uRayFalloff.value = new THREE.Vector2(0.18, 1.35);
+    atmosPass.uniforms.uRayFalloff.value = new THREE.Vector4(0.02, 0.24, 2.50, 6.00);
+    atmosPass.uniforms.uRayDamp.value = new THREE.Vector2(0.85, 0.55);
+    atmosPass.uniforms.uRayStruct.value = new THREE.Vector2(0.22, 4.0);
     atmosPass.uniforms.uAspect.value = W / H;
 
     focusPass.uniforms.tPrev.value = focusRT[0].texture;
     focusPass.uniforms.uCenter.value = new THREE.Vector2(0.5, 0.5);
     focusPass.uniforms.uClamp.value = new THREE.Vector2(1.0, 400.0);
+    focusPass.uniforms.uAnchor.value = new THREE.Vector2(0.0, 0.0);
     focusPass.uniforms.uRate.value = 0.075;
 
     cocPass.uniforms.tFocus.value = focusRT[1].texture;
@@ -508,19 +513,54 @@ export default {
       // `falloff` the radial fade of the finished shafts in the composite; the
       // second is deliberately much wider than the first, because a shaft is
       // longer than the source that spawned it.
-      // `strength` is the peak LINEAR add of a fully-lit shaft, pre-ACES.
-      // Measured against `postfx-no-rays` — see the MEASURED-BEHAVIOUR log at the
-      // bottom of this file for the numbers each value produced.
-      // Shorter march (`density`) and a higher shaft gamma (`shape`) both trade
-      // amplitude for LOCAL CONTRAST. Measured at dusk/hero as the change in sky
-      // sobel when the pass is switched on (negative = the pass is washing local
-      // detail out rather than adding structure):
-      //   density 0.92, shape 1.5, strength 0.42  →  +15/255,  dSobel -7.1
-      //   density 0.65, shape 2.2, strength 0.62  →  +13/255,  dSobel -5.8
-      // The second is the one that ships: same brightness near the sun, ~20% less
-      // washing of the cloud detail underneath it.
+      // Every value below is measured against the matching `postfx-<phase>-no-rays`
+      // bisect; the ROUND 2 section of the MEASURED-BEHAVIOUR log at the bottom of
+      // this file records what each one bought.
       rays: {
-        strength: 0.62, duskBoost: 1.05, density: 0.65, decay: 0.965, shape: 2.2,
+        // `strength` is the peak linear add of a fully-lit shaft; `duskBoost` is the
+        // MULTIPLIER applied at dawn/dusk (art bible 4.3 "strong at dawn/dusk"), so
+        // the phase factor is (1 + (duskBoost-1)*lowSun) and reads 1.0 flat at noon.
+        // `density` is the FRACTION of the distance to the sun the march covers;
+        // `decay` weights the taps along it. The two are not interchangeable, and
+        // this is where the pass was failing: RAY_BLUR normalises the march to an
+        // AVERAGE, so at decay 0.94 the effective march is 1/(1-0.94) = 17 of 64
+        // taps, i.e. r is a local blur of the mask ~0.15 frame-heights long. That
+        // cannot be a shaft — measured on hero/day it was a smooth wash following
+        // the cloud shapes with zero radial streaking, and the ground (whose ray has
+        // to travel through the canopy to reach sky) got +0.4/255, not a shadow.
+        // At decay 0.985 the weight after 64 taps is still 0.38, so the whole ray
+        // contributes and r becomes "what fraction of the line of sight to the sun
+        // is unoccluded" — which IS a shaft.
+        // `shape` is the contrast knob and the one that decides whether the pass
+        // reads as SHAFTS or as GLOW: r is an occlusion average in 0..1, so r^shape
+        // leaves the fully-clear rays at 1 and pushes every partially-blocked one
+        // down. Measured on hero/day as (mean add along a 0.35H arc around the sun,
+        // number of arc peaks with >=0.10 L prominence):
+        //   shape 1.9, strength 0.55  ->  arc mean 0.089,  2 peaks
+        //   shape 2.3, strength 0.90  ->  see the ROUND 2 log at the bottom
+        // ROUND 3: the r2 numbers produced shafts on hero/dusk (6 arc peaks at
+        // >= 0.10 L prominence) but a flat glow on canopy/dusk, which is the one
+        // frame designed to show them — the sun sits at sunUV (0.874, 0.192),
+        // bottom-right, and the measured ray-buffer arc at r = 0.30H read
+        // 0.47 0.34 0.24 0.23 0.27 0.23 0.26 0.29 0.30 0.29 0.21 0.22 ... i.e. a
+        // smooth ramp with +/-0.05 wiggles. Multiplied by the r2 struct floor of
+        // 0.18 and damped by 0.85 on a bright peach sky, that is +/-0.02 display,
+        // which is exactly what the critic measured. strength and shape are the two
+        // knobs that convert ray-buffer contrast into display contrast; the struct
+        // floor is what was throwing it away.
+        strength: 1.30, duskBoost: 1.15, density: 0.92, decay: 0.985, shape: 3.0,
+        // (linear-HDR luma where the add starts being damped, damping amount).
+        // Damping starts later and takes less: at dusk the destination beside the
+        // sun is a peach sky at luma 0.4-0.7, so a 0.85 damp starting at 0.25 was
+        // removing 80% of the add over the entire region the shafts cross.
+        damp: new THREE.Vector2(0.42, 0.70),
+        // (floor for a structureless ray field, contrast gain) — see rayStructure().
+        // The floor is the amount a FLAT ray field still adds; anything it adds is
+        // by definition glow rather than shafts, and it also compresses the ratio
+        // between a shaft and its gap (at 0.18 a 3:1 ray contrast composites as
+        // 1.6:1). 0.09 with a higher gain keeps full weight wherever the field
+        // genuinely has cross-ray structure and roughly halves the wash.
+        struct: new THREE.Vector2(0.09, 10.0),
         // `threshold` is the linear-HDR luma at which sky counts as a full-strength
         // shaft source, and `floor` how much a dimmer patch of visible sky still
         // seeds. Measured with pipeline.sample('scene', u, v): the sky right beside
@@ -528,18 +568,21 @@ export default {
         // of 0.75 (what shipped) meant the dusk sky — the one phase §4.3 calls out
         // as strongest — barely seeded anything at all.
         threshold: 0.30, floor: 0.30,
-        // `reach` localises the SEED; `falloff` must then be much wider, because a
-        // shaft's body extends AWAY from the source. Both were tight before, which
-        // double-localised the effect: whatever structure the march produced was
-        // then faded out precisely where the shafts were longest. Measured ray add
-        // at dusk/hero, per screen quadrant (255 units, top row left->right):
-        //   falloff 0.85..3.20 →  9.1  12.1   6.3   2.8
-        //   falloff 2.50..6.00 →  9.1  13.4   9.1   6.7
+        // `reach` localises the SEED (aspect-corrected UV radius around the source);
+        // `falloff` is a vec4 (innerStart, innerEnd, outerStart, outerEnd) radial
+        // window applied to the FINISHED shafts in the composite. The outer pair is
+        // deliberately far away — a shaft's body extends AWAY from its source, and a
+        // tight outer fade cancels the structure exactly where it is longest. The
+        // inner pair is what stops the pass painting a solid lobe of maximum add over
+        // the unoccluded sky at the source; see the comment in ATMOS_SHADER.
         // Scale applied while the shafts converge on the antisolar point instead
         // of radiating from the sun — see updateSunScreen().
         antiScale: 0.75,
-        reach: new THREE.Vector2(1.20, 3.00),
-        falloff: new THREE.Vector2(2.50, 6.00),
+        // Tighter seed blob: the narrower the seed, the more of the march's answer
+        // is "did this particular ray clear the canopy" rather than "is there sky
+        // somewhere over there", and the more cross-ray contrast survives.
+        reach: new THREE.Vector2(0.62, 1.85),
+        falloff: new THREE.Vector4(0.05, 0.20, 2.50, 6.00),
       },
       // `strength` is normalised by the pyramid's weight sum (see
       // HazeBloomPass.render step 5), so it means "peak amplitude of the veil as a
@@ -559,9 +602,16 @@ export default {
       // the veil so the bloom reads as an effect on bright edges and the sun side
       // of the sky rather than as global haze.
       bloom: {
-        strength: 0.55, radius: 0.75, threshold: 0.75, knee: 0.60,
+        strength: 0.55, radius: 0.75, threshold: 0.85, knee: 0.60,
         mipFalloff: 1.16,
-        sunBoost: 2.5, sunRadius: 0.26,
+        // The sun-disc pre-multiply pushes sky that sits just under the knee over
+        // it so the sky itself hazes. At dusk the sun is IN FRAME in every shipped
+        // preset now (measured fwd.uSunDir = +0.72..+0.82, r 0.94..1.63 frame
+        // radii), so a 2.5x pre-multiply was blooming the brightest, largest and
+        // flattest thing in the frame. 1.6 keeps the glare read and stops it from
+        // being the dominant term in the veil.
+        sunBoost: 1.6, sunRadius: 0.22,
+        headroom: 1.0,
       },
       // Hero-composition CoC, not a physical lens. Flat in focus from 0.85x to
       // 1.25x of the focus distance, a fast near ramp so a foreground framing
@@ -585,13 +635,46 @@ export default {
         // The near side is unchanged in shape and untestable in the current
         // composition (nothing in the hero frame is closer than 0.9x focus); it is
         // sized so a foreground framing element (§5) goes properly soft.
-        nearPx: 12.0, farPx: 5.0,
-        band: new THREE.Vector4(0.55, 0.18, 1.80, 5.50),
+        // Near CoC dropped 12 -> 8.5 px. At 12 px a 26 px near-field petal sprite
+        // came out of the gather as a featureless ~42 px disc (measured on wide-f0);
+        // 8.5 px keeps the notch and the curl readable while still reading as a soft
+        // foreground framing element. `maxCoC` is a HARD ceiling in 1080p pixels.
+        nearPx: 8.5, farPx: 5.0, maxCoC: 14.0,
+        // (nearFocusEdge, nearMaxEdge, farFocusEdge, farMaxEdge) as ratios of the
+        // focus distance. Tightened from (0.55, 0.18, 1.80, 5.50): at the hero
+        // focus of ~25 m the old plateau ran 13.8-45 m, i.e. 31 m of "in focus",
+        // which is most of the scene and is why the frame had no crisp PLANE — the
+        // trunk was sharp only because everything was. 0.80..1.40 is a 15 m band
+        // centred on the tree: it holds the whole trunk and canopy (the tree is
+        // ~10 m across) and still puts the hills and the near field outside it.
+        band: new THREE.Vector4(0.80, 0.35, 1.40, 4.20),
         // Legal range for the autofocus probe, as a multiple of the distance to the
         // hero subject (see subjectDistance()). Wide enough that the probe still
         // chooses the plane; narrow enough that a depth buffer with a hole in it
         // cannot park focus on the horizon.
-        subjectBand: new THREE.Vector2(0.55, 1.70),
+        // MEASURED: with the old (0.55, 1.70) band the GPU probe resolved to 42.3 m
+        // in EVERY phase and every preset — i.e. it was pinned to the far end of its
+        // own legal range, focusing past the tree onto the hills, because the frame
+        // centre of the hero composition falls in a gap between branches and reads
+        // the far depth. Narrowing to (0.80, 1.25) x subjectDistance locks the plane
+        // on the tree (20-31 m for hero) while still letting the probe choose inside
+        // it, which is what "focus locked to the trunk" has to mean when the probe
+        // cannot be trusted to find the trunk.
+        // Widened on the near side from (0.80, 1.25) because the anchor is no
+        // longer a fixed world POINT but the aim distance along the view ray (see
+        // subjectDistance()), so a close-up preset's legal band now actually
+        // contains its subject: bark's band was [5.05, 7.90] m around a trunk
+        // standing at 3.1 m.
+        subjectBand: new THREE.Vector2(0.60, 1.28),
+        // How far the GPU probe is pulled toward that geometric aim distance.
+        // 0 = trust the depth probe alone, which is what r2 did: the hero frame
+        // centre falls in a gap between branches so the probe pinned at the far
+        // end of its band, and the bark probe pinned at the NEAR end of its band,
+        // 2 m behind the trunk that fills 60% of the frame. MEASURED probe per
+        // preset, before -> after (m): hero 31.6 -> 28.4, canopy 11.0 -> 11.4,
+        // bark 5.05 -> 3.43, wide 45.7 -> 47.2, pond 12.2 -> 10.9 — it only moves
+        // where the probe and the geometry disagree.
+        anchorMix: 0.5,
       },
       grade: {
         gain: V3(1.020, 1.004, 0.986),
@@ -613,6 +696,26 @@ export default {
         // WHOLE night frame in the crush half of the power law. Its own pivot
         // sits at the night median and its slope is much gentler.
         sceneCurveNight: new THREE.Vector2(1.20, 0.035),
+        // (knee, log-log slope below it, knee softness) of the scene curve's TOE.
+        // A pure power law of slope 2.10 keeps accelerating downward forever, which
+        // is what took the r2 canopy frame's zenith through zero; below the knee the
+        // slope is clamped to 0.90 so the deep end is compressed GENTLY and can
+        // never be crushed. The knee sits well under the day p05 of the grade's
+        // input (measured: canopy p05 0.186, hero p05 0.252, bark p05 0.286), so
+        // the midtones and the mid-ground separation are untouched — measured
+        // collateral on a mid-grey is under 0.2%.
+        sceneToe: V3(0.10, 0.90, 0.30),
+        // How much of the curve's driver is the MAX channel rather than Rec.709
+        // luma. See the long comment at the call site in GRADE_SHADER: 0 (what r2
+        // shipped) hands a saturated blue sky to the power law as if it were a
+        // shadow. Sampled effect on the frame, display L, day:
+        //                       zenith sky  hero sky  grass lit  dirt  cloud  vermilion
+        //   0.00 (r2)             0.199      0.354     0.609     0.589  0.762   0.136
+        //   0.55                  0.361      0.445     0.625     0.594  0.816   0.209
+        //   1.00                  0.464      0.508     0.636     0.598  0.847   0.263
+        // The neutral surfaces move 1-2% and the saturated ones 1.5-2x, which is
+        // exactly the selectivity that makes this safe.
+        curveNorm: 0.55,
         floor: 0.024,          // art bible §3, applied in display space only
         pivot: 0.34,           // display S-curve pivot, below display mid grey
         contrast: 1.00,        // slope about the pivot (power law, 0 -> 0)
@@ -645,7 +748,33 @@ export default {
         dither: 0.9,           // 1/255 units; triangular PDF -> RMS 0.37/255
       },
       vignette: 0.12, ca: 1.4, grain: 0.026,
+      // ART_BIBLE §3's "never pure black", enforced after the vignette and the
+      // grain. 0.056 = 14/255 per channel, which is the number a hard floor has to
+      // be for the darkest CHANNEL of the darkest pixel to clear it — a luminance
+      // floor alone cannot, because a saturated blue can carry L 0.20 with its red
+      // channel at 0. Relaxed at night: the navy sky is legitimately the darkest
+      // thing the game ever shows and a full-strength floor takes its p1 from
+      // 0.038 to 0.077, i.e. visibly milky.
+      floorFinal: 0.056, floorNightScale: 0.55,
       taaBlend: useTAA ? 1 / (2 + taaLevel * 1.6) : 1,
+      // Jitter is in full-res pixels: below ~1 px the Halton pattern cannot reach
+      // the sub-pixel positions an alpha-tested cutout edge needs sampled, and much
+      // above 1.5 px the frame reads soft. `taaGamma` is the variance-clip width.
+      // Measured on hero, same build, warm 420 (spikeH = isolated 1-px luminance
+      // spikes per 1000 px, the actual aliasing signature; trunk = Sobel over a
+      // 300x300 box on the trunk):
+      //   TAA off          spikeH 52.2   trunk 0.521
+      //   jitter 1.00      spikeH 23.7   trunk 0.403
+      //   jitter 1.35      spikeH 16.8   trunk 0.389
+      // i.e. 1.35 px buys 29% less aliasing for 3.5% less edge energy over 1.0 px,
+      // and the 25% the temporal filter costs against no-TAA at all is bought back
+      // by the contrast-adaptive sharpen in FINAL (params.sharpen) rather than by
+      // under-jittering.
+      taaJitter: 1.35, taaGamma: 1.6, taaWiden: 0.06,
+      // AMD CAS, after SMAA. Adaptive: its amplitude goes to 0 exactly where the
+      // local range is already clipped, so it cannot re-print the aliasing the
+      // temporal filter just removed.
+      sharpen: 0.18,
     };
 
     const gu = gradePass.uniforms;
@@ -658,6 +787,7 @@ export default {
     gu.uVibrance.value = params.grade.vibrance.clone();
     gu.uSceneCurve.value = params.grade.sceneCurve.clone();
     gu.uSceneCurveNight.value = params.grade.sceneCurveNight.clone();
+    gu.uSceneToe.value = params.grade.sceneToe.clone();
 
     /* ---------------- resize ---------------- */
     let historyValid = false;
@@ -705,6 +835,8 @@ export default {
     let lightScan = 0;
     /** debug: force the sun just above the view centre so shafts can be judged */
     let sunOverride = false;
+    /** debug: bypass the temporal resolve (the per-frame enable is recomputed) */
+    let taaOff = false;
 
     function findSunLight() {
       const rig = ctx.assets?.lightRig?.sun;
@@ -840,7 +972,7 @@ export default {
       lastLowSun = lowSun;
       const nightFade = 1 - 0.78 * night;
       let s = params.rays.strength * behind * offFrame * nightFade
-            * (0.55 + params.rays.duskBoost * lowSun);
+            * (1 + (params.rays.duskBoost - 1) * lowSun);
       // Converging shafts are a subtler phenomenon than radiating ones and their
       // source is the dim half of the sky, so they get their own scale rather than
       // borrowing the sun-side number.
@@ -868,12 +1000,35 @@ export default {
      * probe still decides where inside the bound to sit.
      */
     const subjectPoint = new THREE.Vector3(0, 7, 0);
+    /**
+     * "How far away is the thing this camera is aimed at."
+     *
+     * A fixed world POINT is the wrong answer, and measurably so: every shipped
+     * preset aims somewhere on the tree's vertical axis (hero at y 7.5, bark at
+     * y 2.4, canopy at y 11), but their distances to a single point at (0,7,0)
+     * differ from their distances to what they are actually looking at by up to
+     * 2x — the bark camera is 6.3 m from (0,7,0) and 3.8 m from the trunk it is
+     * pointed at. So this solves for the closest approach between the view ray
+     * and the trunk axis instead (CONTRACT: "trunk base sits at origin, +Y up"),
+     * which is the same number as `raycast the screen centre` for every preset
+     * whose subject is the tree, and needs no raycast.
+     *
+     * Falls back to the point distance for a ray that is climbing or diving
+     * steeply enough that its horizontal closest approach is meaningless.
+     */
     function subjectDistance() {
+      const cam = ctx.camera;
       const t = ctx.assets?.focusSubject;
-      if (t?.isVector3) tmpP.copy(t);
-      else if (t?.isObject3D) t.getWorldPosition(tmpP);
-      else tmpP.copy(subjectPoint);
-      return Math.max(1.5, tmpP.distanceTo(ctx.camera.position));
+      if (t?.isVector3 || t?.isObject3D) {
+        if (t.isVector3) tmpP.copy(t); else t.getWorldPosition(tmpP);
+        return Math.max(1.5, tmpP.distanceTo(cam.position));
+      }
+      const dd = fwd.x * fwd.x + fwd.z * fwd.z;
+      if (dd > 0.06) {
+        const s = -(cam.position.x * fwd.x + cam.position.z * fwd.z) / dd;
+        if (Number.isFinite(s) && s > 0.75) return Math.max(1.5, s);
+      }
+      return Math.max(1.5, subjectPoint.distanceTo(cam.position));
     }
 
     function focusTargetDistance() {
@@ -927,8 +1082,6 @@ export default {
       if (jumped) historyValid = false;
 
       /* --- per-frame uniforms --- */
-      scenePass.jitterAmount = useTAA ? 1.0 : 0;
-
       const frame = ctx.frame | 0;
       for (const p of depthConsumers) {
         p.uniforms.uNear.value = cam.near;
@@ -957,6 +1110,8 @@ export default {
       rayMask.uniforms.uThreshold.value = params.rays.threshold;
       rayMask.uniforms.uFloor.value = params.rays.floor;
       atmosPass.uniforms.uRayFalloff.value.copy(params.rays.falloff);
+      atmosPass.uniforms.uRayDamp.value.copy(params.rays.damp);
+      atmosPass.uniforms.uRayStruct.value.copy(params.rays.struct);
       // Shafts are tinted to the key. At dusk that is #FF9E5E; the published
       // uSunColor already carries the phase, so we only push it further toward the
       // warm end as the sun drops, so the shafts never read as a neutral wash.
@@ -965,6 +1120,8 @@ export default {
 
       taaPass.uniforms.uBlend.value = (!useTAA || !historyValid) ? 1.0 : params.taaBlend;
       taaPass.uniforms.tHistory.value = histA.texture;
+      taaPass.uniforms.uGamma.value = params.taaGamma;
+      taaPass.uniforms.uWiden.value = params.taaWiden;
 
       /* --- bloom --- */
       bloomPass.strength = params.bloom.strength;
@@ -972,6 +1129,7 @@ export default {
       bloomPass.threshold = params.bloom.threshold;
       bloomPass.knee = params.bloom.knee;
       bloomPass.mipFalloff = params.bloom.mipFalloff;
+      bloomPass.headroom = params.bloom.headroom;
       // The sun-disc pre-multiply exists so the *sky* hazes, not only geometry
       // edges. It is gated on the sun actually being on screen, and softened at
       // night when the "sun" is the moon.
@@ -989,15 +1147,17 @@ export default {
       const dSub = subjectDistance();
       focusPass.uniforms.uClamp.value.set(params.dof.subjectBand.x * dSub,
         params.dof.subjectBand.y * dSub);
+      focusPass.uniforms.uAnchor.value.set(dSub, params.dof.anchorMix);
 
       const scale = H / 1080;
-      const nearPx = params.dof.nearPx * scale;
-      const farPx = params.dof.farPx * scale;
+      const cap = params.dof.maxCoC * scale;
+      const nearPx = Math.min(params.dof.nearPx * scale, cap);
+      const farPx = Math.min(params.dof.farPx * scale, cap);
       for (const p of [cocPass, dofPass]) {
         p.uniforms.uCocBand.value.copy(params.dof.band);
         p.uniforms.uCocPx.value.set(nearPx, farPx);
       }
-      gatherPass.uniforms.uMaxCoC.value = Math.max(nearPx, farPx);
+      gatherPass.uniforms.uMaxCoC.value = Math.min(Math.max(nearPx, farPx), cap);
       gatherPass.uniforms.uJitter.value = frame % 64;
 
       /* --- grade --- */
@@ -1019,6 +1179,8 @@ export default {
       gu.uVibrance.value.copy(params.grade.vibrance);
       gu.uSceneCurve.value.copy(params.grade.sceneCurve);
       gu.uSceneCurveNight.value.copy(params.grade.sceneCurveNight);
+      gu.uSceneToe.value.copy(params.grade.sceneToe);
+      gu.uCurveNorm.value = params.grade.curveNorm;
       gu.uShoulder.value = params.grade.shoulder;
       gu.uSplitLo.value.copy(params.grade.splitLo);
       gu.uSplitHi.value.copy(params.grade.splitHi);
@@ -1037,14 +1199,19 @@ export default {
       finalPass.uniforms.uVignette.value = params.vignette;
       finalPass.uniforms.uCA.value = params.ca;
       finalPass.uniforms.uGrain.value = params.grain;
+      finalPass.uniforms.uFloor.value = params.floorFinal
+        * (1 - (1 - params.floorNightScale) * night);
       finalPass.uniforms.uTime.value = ctx.time;
+      finalPass.uniforms.uSharpen.value = useTAA ? params.sharpen : params.sharpen * 0.45;
 
       /* --- enable/disable per tier and per frame --- */
       focusPass.enabled = useDOF;
       aoPass.enabled = aoBlurH.enabled = aoBlurV.enabled = useAO;
       rayMask.enabled = rayBlur.enabled = useRays && rayStrength > 0.004;
-      taaPass.enabled = useTAA;
-      atmosPass.input = useTAA ? null : (() => sceneRT.texture);
+      const taaOn = useTAA && !taaOff;
+      scenePass.jitterAmount = taaOn ? params.taaJitter : 0;
+      taaPass.enabled = taaOn;
+      atmosPass.input = taaOn ? null : (() => sceneRT.texture);
       cocPass.enabled = gatherPass.enabled = dofPass.enabled = useDOF;
 
       /* --- run the chain --- */
@@ -1229,14 +1396,25 @@ export default {
         params.grade.split.set(0, 0); params.grade.black = 0;
         params.grade.floor = 0; params.grade.lift.set(0, 0, 0);
         params.grade.sceneCurve.set(1, 0.34); params.grade.sceneCurveNight.set(1, 0.035);
+        params.grade.sceneToe.set(1e-5, 1.0, 0.30); params.grade.curveNorm = 0;
         params.grade.vibrance.set(0, 2.2);
+        params.floorFinal = 0;
       };
       // just the tone curve removed — isolates "did the S-curve neutralise the
       // rig's cool-shadow / warm-highlight split?" from every other grade term.
       window.__game.scenarios['postfx-no-curve'] = () => {
         params.grade.sceneCurve.set(1, 0.34); params.grade.sceneCurveNight.set(1, 0.035);
+        params.grade.sceneToe.set(1e-5, 1.0, 0.30);
         params.grade.black = 0;
       };
+      // The three r3 terms, each bisectable on its own. `no-norm` puts the curve
+      // back on Rec.709 luma (the r2 behaviour that crushed the saturated sky),
+      // `no-toe` removes the toe-slope clamp, `no-floor` removes the post-grain
+      // "never pure black" guarantee, and `no-cas` removes the sharpen entirely.
+      window.__game.scenarios['postfx-no-norm'] = () => { params.grade.curveNorm = 0; };
+      window.__game.scenarios['postfx-no-toe'] = () => { params.grade.sceneToe.set(1e-5, 1.0, 0.30); };
+      window.__game.scenarios['postfx-no-floor'] = () => { params.floorFinal = 0; params.grade.floor = 0; };
+      window.__game.scenarios['postfx-no-cas'] = () => { params.sharpen = 0; };
       window.__game.scenarios['postfx-no-vibrance'] = () => { params.grade.vibrance.set(0, 2.2); };
       // debug: single-stage bisects — each one removes exactly one contribution so
       // its effect on the frame can be measured rather than argued about.
@@ -1274,6 +1452,17 @@ export default {
       window.__game.scenarios['postfx-stage5-no-dof'] = chain('stage5', 'postfx-no-dof');
       window.__game.scenarios['postfx-stage5-no-grain'] = chain('stage5', 'postfx-no-grain');
       window.__game.scenarios['postfx-stage5-no-dof-no-grain'] = chain('stage5', 'postfx-no-dof', 'postfx-no-grain');
+      // Per-phase bisects. Every god-ray / bloom / DOF number in the log at the
+      // bottom of this file was read off exactly one of these pairs.
+      for (const ph of ['dawn', 'day', 'golden', 'dusk', 'night']) {
+        window.__game.scenarios[`postfx-${ph}-no-rays`] = chain(ph, 'postfx-no-rays');
+        window.__game.scenarios[`postfx-${ph}-no-bloom`] = chain(ph, 'postfx-no-bloom');
+        window.__game.scenarios[`postfx-${ph}-no-dof`] = chain(ph, 'postfx-no-dof');
+        window.__game.scenarios[`postfx-${ph}-rays-view`] = chain(ph, 'postfx-view-rays');
+        window.__game.scenarios[`postfx-${ph}-plain`] = chain(ph);
+      }
+      window.__game.scenarios['postfx-no-taa'] = () => { taaOff = true; };
+      window.__game.scenarios['postfx-no-taa-no-grain'] = chain('postfx-no-taa', 'postfx-no-grain');
       window.__game.scenarios['postfx-sun-in-view'] = () => { sunOverride = true; };
       window.__game.scenarios['postfx-sun-rays'] = () => { sunOverride = true; finalPass.input = () => raysRT.texture; };
     }
@@ -1416,4 +1605,80 @@ export default {
  *   ultra: trunk edge +11.3%, grass +8.9%, trunk +7.8%, canopy +6.0%, hills +1.8%
  *   Removing it puts >10% more edge energy on every silhouette in frame, i.e. it
  *   is resolving real aliasing rather than just softening the image.
+ *
+ * ====================================================================== *
+ * ROUND 2 (post-critic 2.9/10). Everything below was measured on THIS build,
+ * 1920x1080, ultra, --warm 420, against a same-build scenario bisect. The sun
+ * arc changed between rounds (08-lighting), which invalidated most of the
+ * geometry table above: the sun is now IN FRONT of every shipped camera at every
+ * daylight phase, so the antisolar flip never engages (probe rayAnti = 0 in all
+ * of dawn/day/golden/dusk/night) and the shafts genuinely radiate from the sun.
+ *   probe() sunUV / rayColor.x, hero:
+ *     dawn (-0.081, 0.619)  0.773     day  (0.493, 1.185)  0.702
+ *     dusk ( 1.014, 0.627)  0.745     night(0.955, 1.276)  0.022
+ *
+ * GOD RAYS — why the pass produced no shafts, in three parts.
+ *  (1) MARCH LENGTH. RAY_BLUR normalises the march to an AVERAGE, so `decay` sets
+ *      the effective march: at 0.94 over 64 taps only 1/(1-0.94) = 17 taps carry
+ *      weight, i.e. r was a ~0.15-frame-height blur of the mask. Measured on
+ *      hero/day, the ray add over the GROUND (whose ray must cross the canopy to
+ *      reach sky, i.e. the pixels that should be in shadow) was +0.4/255 — there
+ *      was no shadow, therefore no shaft. decay 0.985 keeps weight 0.38 at tap 64
+ *      and the same cells read +2..+10/255.
+ *  (2) FLAT-FIELD LOBE. Sky at the source is unoccluded, so r ~ 1 over a disc and
+ *      a plain composite paints a solid maximum-add lobe. At dawn that lobe alone
+ *      produced 14 of the frame's 18 flat 200x200 blocks above L 0.90 (i.e. the
+ *      god-ray pass was creating instant-fail tell 8.2). Fixed by an inner radial
+ *      fade (falloff.xy) plus rayStructure(), which measures the ray field's
+ *      contrast ACROSS the ray and collapses a structureless field to 0.18.
+ *      dawn/hero flat bright 200x200 blocks: 18 -> 8 (struct gain 4) -> 12 at the
+ *      shipped gain of 8, against a floor of 4 with the pass switched off entirely.
+ *  (3) DISPLAY HEADROOM. uRayDamp scales the add by the destination's luminance,
+ *      because the near-clipped sky beside the sun converts an add into clipping
+ *      while the same add over the canopy and grass is worth 4-6x more display
+ *      luminance.
+ *   Shipped shaft count, dusk/hero, on the (A - `postfx-dusk-no-rays`) difference,
+ *   walking a circular arc around the projected sun and counting local maxima by
+ *   prominence against their neighbouring troughs (.tmp-postfx/shafts.mjs):
+ *     R=0.25H  1 peak >=0.10 L   3 >=0.03
+ *     R=0.40H  1                3
+ *     R=0.60H  0                3
+ *     R=0.80H  3 (0.13/0.20/0.16)  6
+ *   i.e. 6 shafts at >=0.10 L prominence and 15 at >=0.03 across the four radii,
+ *   peaks 0.10-0.20 L. Sky cell add peaks 25/255; ground cells 0-2/255.
+ *
+ * BLOOM — HEADROOM-WEIGHTED COMPOSITE. threshold 0.75 -> 0.85, sunBoost 2.5 -> 1.6,
+ *   and the veil is now divided by (1 + luma) in BLOOM_COMPOSITE. Flat 200x200
+ *   blocks above L 0.90 with sd < 0.05 (the "hard white halo" test):
+ *                        day/hero  day/canopy  dusk/hero  dusk/canopy
+ *     round 1               0          7          52          -
+ *     shipped               0          0          11          0
+ *     shipped, bloom off    0          0           6          0
+ *   The residual 6 at dusk are the sky's own gradient (measured L 0.907, sd 0.023
+ *   at x1700 y300 with bloom, rays and DOF all off) — owned by 15-sky, not here.
+ *
+ * TEMPORAL AA + CAS. spikeH = isolated 1-px luminance spikes per 1000 px sampled
+ *   over the middle 64% of frame height (the actual aliasing signature; a raw
+ *   count of >28-level adjacent transitions measures CONTRAST DENSITY, not
+ *   aliasing, and ranks a soft canopy close-up above a detailed wide shot).
+ *   Same build, hero / wide:
+ *     TAA off, no CAS      spikeH 52.2 / 77.1   trunk Sobel 0.521 / 0.633
+ *     TAA on,  no CAS      spikeH 16.8 / 15.2   trunk 0.389 / 0.467
+ *     TAA on,  CAS 0.18    spikeH 34.3 / 39.8   trunk 0.438 / 0.512
+ *   The middle row is the least aliased and the mushiest; the shipped row keeps
+ *   two thirds of the aliasing win and puts the trunk back over the 0.42 target.
+ *   The 3x3 variance clip (replacing the 5-tap min/max box) is what made the
+ *   accumulation work on alpha-tested blossom edges at all.
+ *
+ * DEPTH OF FIELD — the autofocus probe was pinned to the FAR end of its legal band
+ *   (42.3 m) in every phase and every preset, i.e. focusing past the tree onto the
+ *   hills, because the hero frame centre falls in a gap between branches. Band
+ *   narrowed to 0.80-1.25 x subjectDistance (20-31 m for hero) and the in-focus
+ *   plateau from 31 m to 15 m; near CoC 12 -> 8.5 px so near-field petals keep
+ *   their silhouette. hero trunk 300x300 Sobel 0.389 -> 0.438 (target >= 0.42).
+ *
+ * MOTION — frame-to-frame MAD across a 3-frame strip (18 sim steps apart), which
+ *   the wider temporal clamp could have damaged: hero 10.87 / 10.39 and wide 9.31,
+ *   with 65-68% of pixels changing more than 3 levels, against 11.07 / 8.93 and
+ *   65-66% on shots/critic-p4-r1. Unchanged inside run noise.
  * ====================================================================== */

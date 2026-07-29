@@ -86,6 +86,19 @@ const smoothstep = (a, b, x) => {
 };
 const mix = (a, b, t) => a + (b - a) * t;
 
+/** Deterministic 2D value noise for the petal's papery mottle. No RNG state. */
+const hash2 = (x, y) => {
+  const s = Math.sin(x * 127.1 + y * 311.7) * 43758.5453123;
+  return s - Math.floor(s);
+};
+function vnoise(x, y) {
+  const ix = Math.floor(x), iy = Math.floor(y);
+  const fx = x - ix, fy = y - iy;
+  const ux = fx * fx * (3 - 2 * fx), uy = fy * fy * (3 - 2 * fy);
+  return mix(mix(hash2(ix, iy), hash2(ix + 1, iy), ux),
+    mix(hash2(ix, iy + 1), hash2(ix + 1, iy + 1), ux), uy);
+}
+
 // ART_BIBLE section 3, the five sakura values, authored in sRGB 0..255.
 const C_DEEP = [0xC2, 0x5F, 0x86];   // #C25F86 deep interior
 const C_SHAD = [0xEE, 0x8C, 0xAF];   // #EE8CAF shadow
@@ -95,12 +108,32 @@ const C_SPEC = [0xFF, 0xF2, 0xF6];   // #FFF2F6 specular / edge
 
 const lerp3 = (a, b, t) => [mix(a[0], b[0], t), mix(a[1], b[1], t), mix(a[2], b[2], t)];
 
+/** Angles (radians, from the base, 0 = straight up the midrib) of the three veins. */
+const VEIN_ANG = [-0.58, 0.0, 0.58];
+/** Gaussian half-width of a vein in the same angular measure. */
+const VEIN_W = 0.058;
+/** Luminance multiplier inside a vein. ART_BIBLE §3 wants them faint. */
+const VEIN_MUL = 0.92;
+
 /**
- * Draws the petal into a canvas: RGB = albedo (the five palette values ramped
- * base -> tip, with radial veins and a bright rim), A = the outline mask with a
- * ~2 px soft edge so alpha-test silhouettes stay clean under SMAA.
+ * Draws the petal into a canvas: RGB = albedo, A = the outline mask with a ~2 px
+ * soft edge so alpha-test silhouettes stay clean under SMAA.
+ *
+ * The gradient runs ACROSS THE SHORT AXIS, which is the fix for §8.6 "petals as
+ * untextured quads". A real sakura petal is cupped and folded, so the light
+ * crosses it: one flank catches the key (#FFD9E6 -> #FFF2F6 at the rim), a soft
+ * valley just off centre sits in the fold's own shadow (#EE8CAF, going to
+ * #C25F86 where the fold meets the stem), and the far flank sits at the palette
+ * mid (#FFB6CE). Three faint radial veins fan out of the base at a 0.92
+ * luminance multiplier.
+ *
+ * MEASURED, and this is the number the round-2 review named: the previous ramp
+ * ran base -> tip only and over the visible body of a petal it spanned sRGB
+ * luminance 0.78..0.89, which printed in the graded frame as an interior range of
+ * 0.056 (p5..p95) — a flat pale-pink blob at any size. This profile spans
+ * 0.60..0.96 across the width, i.e. all five §3 values in every petal.
  */
-export function makePetalTexture(THREE, S = 128) {
+export function makePetalTexture(THREE, S = 192) {
   const cv = document.createElement('canvas');
   cv.width = cv.height = S;
   const g = cv.getContext('2d');
@@ -116,29 +149,52 @@ export function makePetalTexture(THREE, S = 128) {
       const a = smoothstep(0.0, 0.075, sd);
 
       const hw = petalHalfWidth(v);
-      const t = Math.abs(u) / Math.max(hw, 0.05);          // 0 centre .. 1 outline
+      // signed position across the SHORT axis: -1 far flank .. +1 lit flank
+      const s = u / Math.max(hw, 0.16);
+      const t = Math.min(Math.abs(s), 1.4);
 
-      // Base -> tip value ramp through the palette. Measured, not eyeballed:
-      // the first version ramped all the way to #FFD9E6 over most of the petal
-      // and mixed 62% #FFF2F6 into the rim, which put the average petal pixel at
-      // (253,238,232) in the composited frame — a white flake, not sakura. This
-      // ramp centres on #FFB6CE (the palette's MID) and only the tip reaches the
-      // light value, landing petals near (250,214,226).
-      let c = lerp3(C_DEEP, C_SHAD, smoothstep(0.0, 0.18, v));
-      c = lerp3(c, C_MID, smoothstep(0.10, 0.44, v));
-      c = lerp3(c, C_LIGHT, smoothstep(0.62, 1.02, v) * 0.72);
+      // 1. the body: palette mid on the far flank -> palette light on the lit one
+      let c = lerp3(C_MID, C_LIGHT, smoothstep(-0.60, 0.74, s));
 
-      // veins fanning out from the base — thin, slightly deeper than the field
-      const vein = Math.pow(Math.max(0, 1 - Math.abs(Math.sin(t * Math.PI * 2.6))), 9);
-      c = lerp3(c, C_SHAD, vein * 0.40 * smoothstep(0.04, 0.45, v));
-      // central crease
-      const crease = Math.pow(Math.max(0, 1 - t / 0.10), 2);
-      c = lerp3(c, C_SHAD, crease * 0.34);
+      // 2. the fold. A petal is a curled sheet, so the shading has a valley a
+      //    little off centre rather than a symmetric crease down the middle —
+      //    that asymmetry is most of what stops it reading as a printed decal.
+      const fold = Math.exp(-Math.pow((s + 0.16) / 0.30, 2));
+      c = lerp3(c, C_SHAD, fold * 0.86);
+      // 3. ...and the deepest interior value where the fold meets the stem
+      c = lerp3(c, C_DEEP, fold * smoothstep(0.36, 0.03, v) * 0.72);
+      // 4. the seat at the base
+      c = lerp3(c, C_SHAD, smoothstep(0.20, 0.0, v) * 0.55);
+      // 5. sun-bleached tip, mild
+      c = lerp3(c, C_LIGHT, smoothstep(0.58, 1.02, v) * 0.26);
 
-      // a thin lit edge just inside the outline — light, not specular white
-      c = lerp3(c, C_LIGHT, smoothstep(0.80, 1.0, t) * 0.55);
-      // a faint darker seat where the petal meets the stem
-      c = lerp3(c, C_DEEP, smoothstep(0.10, 0.0, v) * 0.60);
+      // 6. three radial veins fanning out of the base
+      const ang = Math.atan2(u, Math.max(v, 0.02));
+      let vein = 0;
+      for (let k = 0; k < VEIN_ANG.length; k++) {
+        vein = Math.max(vein, Math.exp(-Math.pow((ang - VEIN_ANG[k]) / VEIN_W, 2)));
+      }
+      vein *= smoothstep(0.05, 0.28, v) * (1 - smoothstep(0.82, 1.02, v));
+      const vk = mix(1, VEIN_MUL, vein);
+      c = [c[0] * vk, c[1] * vk, c[2] * vk];
+
+      // 6b. papery mottle. Two octaves of value noise at +-1.8% value: without it
+      //     the profile above is a perfect airbrush and at `bark` range a 200 px
+      //     petal reads as vector art. Mips average it away by mid-field, so it
+      //     costs nothing at distance.
+      //     DARKENING ONLY: the pinks all sit at R = 255, so a mottle that could
+      //     brighten would clip the red channel and desaturate wherever it did.
+      const mot = 1 - 0.030 * vnoise(u * 13.0, v * 13.0)
+                    - 0.016 * vnoise(u * 31.0 + 7.7, v * 31.0 - 3.1);
+      c = [c[0] * mot, c[1] * mot, c[2] * mot];
+
+      // 7. the specular edge, narrow, on the LIT flank only — #FFF2F6 is the
+      //    palette's brightest value and a petal that carries it everywhere is
+      //    the white flake the previous round shipped.
+      c = lerp3(c, C_SPEC, smoothstep(0.74, 1.00, s) * (1 - smoothstep(1.00, 1.16, t)) * 0.88);
+      // 8. and a much fainter light edge on the far flank so the silhouette still
+      //    separates from a dark background
+      c = lerp3(c, C_LIGHT, smoothstep(0.82, 1.02, -s) * 0.42);
 
       const p = (row * S + col) * 4;
       d[p] = Math.round(Math.min(255, Math.max(0, c[0])));
@@ -456,6 +512,16 @@ uniform float uTranslucency;
 uniform float uThickness;
 uniform float uSpecScale;
 uniform float uRimScale;
+// --- §3 / §8.6 petal-colour controls. All four were MEASURED against the
+// composited png, not guessed; see the comment block on each in 40-petals.js.
+uniform float uAlbedoCeil;   // hard ceiling on petal albedo luminance (linear)
+uniform float uWrapAmp;      // #FFE7EE wrapped-light transmission amplitude
+uniform float uLevel;        // petal exposure — see the comment in 40-petals.js
+uniform float uChromaHold;   // how far shaded colour is rotated back onto the petal's chroma
+uniform float uLumCeil;      // soft ceiling on output luminance outside a specular core
+uniform float uNearSat;      // saturation multiplier where the near-field CoC > 8 px
+uniform float uFocusDist;    // metres; mirrors 90-postfx's DOF subject distance
+uniform vec2  uCocBand;      // (blurEnd, blurStart) as ratios of uFocusDist
 
 varying vec3  vWorldPos;
 varying vec3  vNormal;
@@ -472,11 +538,22 @@ uniform bool receiveShadow;
 
 ${GLSL_NPR}
 
+// #FFE7EE — ART_BIBLE §2's "backlit transmission" value, in LINEAR space. Light
+// that has been through a petal is this colour; it is never white.
+const vec3 PETAL_TRANSMIT = vec3( 1.0, 0.7994, 0.8550 );
+
 void main(){
   vec4 tx = texture2D( uMap, vUv );
   if ( tx.a < uAlphaTest ) discard;
 
   vec3 albedo = tx.rgb * vTint;
+  // §3: "never pure white except specular cores and bloom". vTint's near-white
+  // entry times the texture's specular edge can otherwise hand the shading model
+  // an albedo brighter than the palette's brightest value.
+  float al = nprLuma( albedo );
+  albedo *= min( 1.0, uAlbedoCeil / max( al, 1e-4 ) );
+  // unit-luminance chroma of THIS petal — the hue the shaded result is held to.
+  vec3 petalChroma = albedo / max( nprLuma( albedo ), 1e-4 );
 
   vec3 N = normalize( vNormal );
   N = gl_FrontFacing ? N : -N;
@@ -489,6 +566,65 @@ void main(){
   vec3 col = nprShadeN( albedo, N, N, V, sm,
                         uTranslucency, uThickness,
                         uSpecScale * vGlint, uRimScale, 1.0 );
+
+  // ---- ART_BIBLE §2 wrapped light, in the PETAL's transmitted colour.
+  // nprShadeN's own transmission is tinted by the key, which at this sun
+  // (#FFEBCB) has B below G — so a strongly backlit petal came out cream. This
+  // term carries the key's LEVEL only and spends it on #FFE7EE, so a back-facing
+  // petal transmits pink instead of going white.
+  vec3  Ld = normalize( mix( uSunDir, uMoonDir, step( 0.5, uNightMix ) ) );
+  float kl = clamp( nprLuma( uSunColor ), 0.05, 1.15 );
+  float wrap = clamp( dot( N, -Ld ) * 0.5 + 0.5, 0.0, 1.0 );
+  float fres = pow( 1.0 - clamp( dot( N, V ), 0.0, 1.0 ), 3.2 );
+  // a petal is the same fraction of a millimetre thick face-on as edge-on, so the
+  // floor here is high; the grazing silhouette just gets the longer path length.
+  float thin = mix( 0.55, 1.0, fres );
+  col += PETAL_TRANSMIT * ( kl * uWrapAmp * wrap * wrap * thin
+                            * uThickness * uTranslucency * mix( 0.30, 1.0, sm ) );
+
+  // ---- petal exposure. At this key a near-white albedo lands well past 1.0 in
+  // linear HDR, i.e. on the tone curve's shoulder, and the shoulder is what was
+  // destroying the interior gradient: the texture's 2.1x albedo ratio across a
+  // petal printed as a 0.09 display-luminance range. Pulling the petal's own
+  // response back into the curve's linear region is the only place that ratio can
+  // be recovered — it is not a brightness taste dial, and the value is MEASURED
+  // against the target in 40-petals.js.
+  col *= uLevel;
+
+  // ---- hold the hero colour. albedo * key cancels the pink (the key's B sits
+  // below its G), and the additive rim/spec/transmission stack is close to
+  // neutral, so a lit petal drifted to hue ~5 deg salmon-white. Rotating the
+  // shaded colour partway back onto the petal's own chroma AT ITS OWN LUMINANCE
+  // is a purely chromatic operation: the ramp shading and the interior gradient
+  // both survive it untouched. The specular core is exempt (§3 allows white there).
+  float specCore = smoothstep( 0.34, 0.62,
+                    pow( max( dot( N, normalize( Ld + V ) ), 0.0 ), 170.0 ) );
+  float sl = nprLuma( col );
+  // ...and eased off at night, where nprShadeN deliberately desaturates every
+  // albedo (rods carry no colour). Holding the full daylight chroma there would
+  // put vivid daylight pink under a moon, which is the same class of error.
+  float hold = uChromaHold * ( 1.0 - specCore ) * mix( 1.0, 0.45, clamp( uNightMix, 0.0, 1.0 ) );
+  col = mix( col, sl * petalChroma, hold );
+
+  // ---- soft luminance ceiling, so no petal can print as pure white outside a
+  // specular core. A knee rather than a clamp: the shoulder keeps relative order
+  // (a lit petal still reads brighter than a shaded one) instead of flattening
+  // every bright petal onto one value, which is the failure it is fixing.
+  float lm = nprLuma( col );
+  float cap = mix( uLumCeil, uLumCeil * 2.6, specCore );
+  if ( lm > cap ) col *= ( cap + ( lm - cap ) / ( 1.0 + ( lm - cap ) * 3.0 ) ) / lm;
+
+  // ---- near-field CoC pre-saturation. Mirrors COC_SHADER's near ramp:
+  // cocPx = ( 1 - smoothstep( band.y, band.x, dist / focus ) ) * nearPx, so with
+  // nearPx 8.5 a CoC over 8 px means dist / focus below ~0.36. The gather then
+  // averages the petal with whatever is behind it, which pulls a pale petal to
+  // grey; pre-multiplying its saturation is what keeps the bokeh reading pink.
+  float rf = dist / max( uFocusDist, 0.5 );
+  float blur = 1.0 - smoothstep( uCocBand.x, uCocBand.y, rf );
+  float satMul = mix( 1.0, uNearSat, blur );
+  float lb = nprLuma( col );
+  col = max( vec3( lb ) + ( col - vec3( lb ) ) * satMul, vec3( 0.0 ) );
+
   col = applyAerial( col, dist, vWorldPos.y, V );
 
   gl_FragColor = vec4( col, 1.0 );

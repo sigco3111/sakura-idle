@@ -39,7 +39,12 @@ const TINTS = [
   [1.02, 0.955, 0.980], // a touch warmer
   [0.92, 0.890, 0.975], // cooler, reads as further away / in shade
   [1.00, 0.870, 0.925], // more saturated pink  (toward #FFB6CE / #EE8CAF)
-  [0.80, 0.700, 0.790], // deep interior value  (toward #C25F86)
+  // The deep-interior value. It used to be [0.80, 0.70, 0.79], which stacked with
+  // the value spread below gave a 0.56x albedo; a petal that dark in the trunk's
+  // shade printed as an opaque magenta patch — the "bruise" the round-2 review
+  // named on the tree's blossom clusters. The texture already carries #C25F86 in
+  // the fold, so a whole petal never needs to BE the deep value.
+  [0.88, 0.808, 0.876],
   [1.02, 1.010, 1.005], // near-white, the specular/edge value
 ];
 const TINT_W = [0.22, 0.16, 0.16, 0.22, 0.16, 0.08];
@@ -221,7 +226,7 @@ export default {
       // individual petal measures on-palette; ART_BIBLE section 3 wants all five
       // sakura values present in the frame at once.
       const t = pickTint(r);
-      const vm = rng.range(0.80, 1.06);
+      const vm = rng.range(0.87, 1.06);
       aTint[i * 3] = t[0] * vm; aTint[i * 3 + 1] = t[1] * vm; aTint[i * 3 + 2] = t[2] * vm;
 
       // a small detach kick away from the trunk axis
@@ -281,7 +286,7 @@ export default {
     }
 
     /* ---------------- material ---------------- */
-    const petalTex = makePetalTexture(THREE, 128);
+    const petalTex = makePetalTexture(THREE, 192);
 
     const own = {
       uMap: { value: petalTex },
@@ -292,12 +297,46 @@ export default {
       uSwirl: { value: 0.22 },
       uLiftAmp: { value: 0.55 },
       uFlutterMul: { value: 1.0 },
-      // Translucency stays high (backlit sakura MUST glow — ART_BIBLE section 2)
-      // but the additive rim/spec were what washed petals to (253,238,232) white.
-      uTranslucency: { value: 0.90 },
+      // Backlit sakura MUST glow (ART_BIBLE section 2) — but nprShadeN's own
+      // transmission lobe is dominated by back = pow(dot(-L,V), 4), which is a
+      // CAMERA-relative term: with the sun parked behind the tree it is 0.7-0.9
+      // over the whole frame, so every petal transmitted at once and the glow
+      // became a flat neutral DC offset on all of them. That offset is what
+      // compressed the interior gradient onto the tone curve's shoulder. Most of
+      // the transmission now comes from uWrapAmp below, which is gated on the
+      // PETAL's own normal, so a back-facing petal glows and a front-facing one
+      // does not — variation instead of a wash.
+      uTranslucency: { value: 0.42 },
       uThickness: { value: 0.32 },
-      uSpecScale: { value: 0.45 },
+      uSpecScale: { value: 0.34 },
       uRimScale: { value: 0.70 },
+      /* ---- §3 / §8.6 petal colour. All five MEASURED on the composited png.
+       * Round 2 shipped petals at rgb(253,217,214) — hue 3.7 deg, interior
+       * luminance range 0.056 — i.e. a flat salmon-white flake, and in the DOF
+       * near field a featureless cream bokeh ball. */
+      // Hard ceiling on albedo luminance (linear). #FFF2F6, the palette's
+      // brightest value, is 0.916, so this only bites when vTint's near-white
+      // entry and its value multiplier stack above the palette.
+      uAlbedoCeil: { value: 0.93 },
+      // #FFE7EE wrapped-light amplitude (ART_BIBLE §2, non-negotiable for sakura).
+      // Gated on dot(N, -L), i.e. on whether the key is behind THIS petal.
+      uWrapAmp: { value: 0.95 },
+      // Petal exposure. MEASURED on bark.png against the round-2 review's target
+      // ("interior luminance range >= 0.16 on any petal >= 40 px wide"):
+      //   1.00 -> p05 0.849 / p50 0.897 / p95 0.944, range 0.096  (the shoulder)
+      // The sweep that picked the shipped value is in the report; see also uLumCeil.
+      uLevel: { value: 0.55 },
+      // Rotation back onto the petal's own chroma. 0 = whatever albedo*key gives
+      // (hue 4 deg salmon), 1 = the texture's hue exactly at the shaded value.
+      uChromaHold: { value: 0.62 },
+      // Soft knee on output luminance, LINEAR HDR, specular cores exempt.
+      uLumCeil: { value: 1.05 },
+      // Saturation pre-multiply where the near CoC exceeds 8 px.
+      uNearSat: { value: 1.25 },
+      uFocusDist: { value: 25 },
+      // (blurEnd, blurStart) as ratios of the focus distance — mirrors
+      // 90-postfx params.dof.band.yx (0.35, 0.80) at the 8-of-8.5 px crossing.
+      uCocBand: { value: new THREE.Vector2(0.30, 0.44) },
       uDriftTex: { value: driftTex },
       uDriftNow: { value: drift },
       uHeadIdx: { value: 0 },
@@ -388,7 +427,7 @@ export default {
       aLook[i * 4 + 3] = r() < 0.16 ? rng.range(2.0, 3.4) : rng.range(0.8, 1.35);
 
       const t = pickTint(r);
-      const vm = rng.range(0.82, 1.06);
+      const vm = rng.range(0.88, 1.06);
       aTint[i * 3] = t[0] * vm; aTint[i * 3 + 1] = t[1] * vm; aTint[i * 3 + 2] = t[2] * vm;
 
       aImpulse[i * 3] = ix; aImpulse[i * 3 + 1] = iy; aImpulse[i * 3 + 2] = iz;
@@ -453,14 +492,41 @@ export default {
       window.__game.scenarios['petals-storm'] = () => {
         own.uSwirl.value = 0.42; own.uFlutterMul.value = 1.5; own.uDriftScale.value = 0.46;
       };
+      // A/B bisection for the §3 colour work: everything the round-2 build did,
+      // so a diff isolates the chroma hold / ceiling / wrap from the texture.
+      window.__game.scenarios['petals-nocolor'] = () => {
+        own.uChromaHold.value = 0; own.uWrapAmp.value = 0;
+        own.uLumCeil.value = 1e4; own.uNearSat.value = 1;
+      };
+      window.__game.scenarios['petals-noceil'] = () => { own.uLumCeil.value = 1e4; };
+      for (const lv of [30, 40, 50, 55, 65, 80, 100]) {
+        window.__game.scenarios[`petals-lvl${lv}`] = () => { own.uLevel.value = lv / 100; };
+      }
+      window.__game.scenarios['petals-nohold'] = () => { own.uChromaHold.value = 0; };
     }
 
     /* ---------------- per-frame: one vector add, one small upload ---------------- */
     const wv = new THREE.Vector3();
+    // Mirror of 90-postfx's subjectDistance(): the DOF focus plane is locked to
+    // 0.80..1.25 x the distance to the hero subject, so the subject distance is a
+    // good proxy for the focus distance without a GPU readback. Used only to know
+    // which petals are deep in the near-field blur (see uCocBand).
+    const subjectPt = new THREE.Vector3(0, 7, 0);
+    const _fp = new THREE.Vector3();
+    function focusDistance() {
+      const t = ctx.assets?.focusSubject;
+      if (t?.isVector3) _fp.copy(t);
+      else if (t?.isObject3D) t.getWorldPosition(_fp);
+      else _fp.copy(subjectPt);
+      const d = _fp.distanceTo(ctx.camera.position);
+      return Number.isFinite(d) ? clamp(d, 1.5, 400) : 25;
+    }
+
     return {
       object3D: mesh,
       update(dt, time) {
         own.uTime.value = time;
+        own.uFocusDist.value = focusDistance();
 
         // integrate the shared wind field once for the whole system
         wv.copy(WIND.at(0, 7, 0));

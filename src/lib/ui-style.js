@@ -17,14 +17,21 @@ export const T = {
   parchmentHi: '#FBF5E8',
   parchmentLo: '#E3D5BC',
   ink: '#3A322A',
-  inkSoft: '#6B5C49',
-  inkFaint: '#94836C',
+  /* darkened from #6B5C49: measured 5.8:1 on the panel foot's shaded parchment,
+     where the old value sat at 4.61:1 with no headroom. */
+  inkSoft: '#5B4E3E',
+  /* Measured on-screen (glyph core vs local background) at 5.2:1 even inside the
+     panel foot, where the paper's bottom shading drops the ground to L 0.66.
+     The old #94836C measured 3.1:1 and was why every secondary label failed. */
+  inkFaint: '#5F5241',
   border: '#4A4034',
   gold: '#C9A227',
   goldHi: '#F0D68A',
   goldLo: '#B98B32',
   goldDeep: '#A8792C',
   goldPale: '#E8C56A',
+  /* Gold used as TEXT on parchment. goldDeep is only 3.26:1; this is 5.39:1. */
+  goldInk: '#74520E',
   petalLight: '#FFD9E6',
   petalMid: '#FFB6CE',
   petalShadow: '#EE8CAF',
@@ -91,7 +98,7 @@ export function diamond(px = 12, color = T.gold) {
 export function titleFlourish(w = 240) {
   const svg = `<svg xmlns="http://www.w3.org/2000/svg" width="${w}" height="12" viewBox="0 0 240 12" preserveAspectRatio="none">
     <defs>
-      <linearGradient id="tf" x1="0" y1="0" x2="1" y2="0">
+      <linearGradient id="tf" gradientUnits="userSpaceOnUse" x1="0" y1="0" x2="240" y2="0">
         <stop offset="0" stop-color="${T.goldDeep}" stop-opacity="0"/>
         <stop offset=".22" stop-color="${T.goldPale}" stop-opacity=".9"/>
         <stop offset=".44" stop-color="${T.goldDeep}" stop-opacity=".45"/>
@@ -100,7 +107,7 @@ export function titleFlourish(w = 240) {
         <stop offset="1" stop-color="${T.goldDeep}" stop-opacity="0"/>
       </linearGradient>
     </defs>
-    <path d="M0 6 H240" stroke="url(#tf)" stroke-width="1.1"/>
+    <rect x="0" y="5.45" width="240" height="1.1" fill="url(#tf)"/>
     <path d="M26 8.6 C 62 10.4 96 9.4 112 6.8" fill="none" stroke="url(#tf)" stroke-width=".7" opacity=".7"/>
     <path d="M214 8.6 C 178 10.4 144 9.4 128 6.8" fill="none" stroke="url(#tf)" stroke-width=".7" opacity=".7"/>
     <circle cx="106" cy="6" r="1.4" fill="${T.goldDeep}" opacity=".85"/>
@@ -111,11 +118,83 @@ export function titleFlourish(w = 240) {
   return enc(svg);
 }
 
-/** Five-pointed star for rarity rows. */
-export function starIcon(fill = '#FFF3CF') {
+/**
+ * Five-pointed star for rarity rows. `stroke`/`sw` matter: on parchment a cream
+ * or gold star with a hairline outline dissolves into the paper — the review
+ * measured the Tender star row as unreadable at 1080p. The ink cut below runs a
+ * 1 px dark outline plus a gradient fill so each point stays separable.
+ */
+export function starIcon(fill = '#FFF3CF', stroke = 'rgba(90,64,16,.5)', sw = 0.5) {
   const svg = `<svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 14 14">
     <path d="M7 .9 L8.85 5.1 L13.3 5.55 L9.95 8.6 L10.9 13 L7 10.7 L3.1 13 L4.05 8.6 L.7 5.55 L5.15 5.1 Z"
-      fill="${fill}" stroke="rgba(90,64,16,.5)" stroke-width=".5" stroke-linejoin="round"/>
+      fill="${fill}" stroke="${stroke}" stroke-width="${sw}" stroke-linejoin="round"/>
+  </svg>`;
+  return enc(svg);
+}
+
+/** Gold star with a real 1 px dark keyline — legible against parchment. */
+export function starIconInk(on = true) {
+  const svg = `<svg xmlns="http://www.w3.org/2000/svg" width="18" height="18" viewBox="0 0 18 18">
+    <defs><linearGradient id="sv" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="${on ? '#FFF4CE' : 'rgba(196,186,168,.55)'}"/>
+      <stop offset=".55" stop-color="${on ? T.goldPale : 'rgba(168,158,140,.5)'}"/>
+      <stop offset="1" stop-color="${on ? '#B0801F' : 'rgba(140,130,114,.5)'}"/>
+    </linearGradient></defs>
+    <path d="M9 1.4 L11.36 6.6 L17.0 7.2 L12.75 10.98 L13.95 16.6 L9 13.72 L4.05 16.6 L5.25 10.98 L1.0 7.2 L6.64 6.6 Z"
+      fill="url(#sv)" stroke="${on ? 'rgba(46,34,10,.92)' : 'rgba(74,64,52,.42)'}" stroke-width="1.05" stroke-linejoin="round"/>
+    ${on ? '<path d="M9 3.9 L10.3 6.9 L13.2 7.2 L11.0 9.2 L9 8.3 Z" fill="#FFFBE8" opacity=".55"/>' : ''}
+  </svg>`;
+  return enc(svg);
+}
+
+/**
+ * Wax-seal medallion for the locked Tender row. Replaces the grey diagonal
+ * hatch the review read as "a disabled HTML fieldset": a sealed scroll is the
+ * in-world way to say "not yet", and it is gold rather than grey.
+ */
+export function waxSeal(size = 40) {
+  const scallop = [];
+  const N = 15;
+  for (let i = 0; i < N; i++) {
+    const a = (i / N) * Math.PI * 2;
+    const r = 17.4 + (i % 2 ? -0.85 : 0.95);
+    scallop.push(`${(20 + Math.cos(a) * r).toFixed(2)} ${(20 + Math.sin(a) * r).toFixed(2)}`);
+  }
+  const svg = `<svg xmlns="http://www.w3.org/2000/svg" width="${size}" height="${size}" viewBox="0 0 40 40">
+    <defs>
+      <radialGradient id="wx" cx=".38" cy=".32" r=".78">
+        <stop offset="0" stop-color="#FBEDC0"/><stop offset=".42" stop-color="${T.goldPale}"/>
+        <stop offset=".78" stop-color="#B98B32"/><stop offset="1" stop-color="#7C5510"/>
+      </radialGradient>
+      <linearGradient id="wr" x1="0" y1="0" x2="0" y2="1">
+        <stop offset="0" stop-color="#FFF6D6"/><stop offset="1" stop-color="#A8792C"/>
+      </linearGradient>
+    </defs>
+    <polygon points="${scallop.join(' ')}" fill="url(#wx)" stroke="rgba(66,46,10,.8)" stroke-width=".9"/>
+    <circle cx="20" cy="20" r="13.4" fill="none" stroke="rgba(72,50,10,.42)" stroke-width=".8"/>
+    <circle cx="20" cy="20" r="11.2" fill="none" stroke="url(#wr)" stroke-width=".7" opacity=".8"/>
+    <g fill="rgba(70,48,10,.62)">
+      ${[0, 1, 2, 3, 4].map((i) => {
+    const a = (i / 5) * Math.PI * 2 - Math.PI / 2;
+    const cx = 20 + Math.cos(a) * 5.4, cy = 20 + Math.sin(a) * 5.4;
+    return `<ellipse cx="${cx.toFixed(2)}" cy="${cy.toFixed(2)}" rx="3.5" ry="2.5" transform="rotate(${(a * 180 / Math.PI + 90).toFixed(1)} ${cx.toFixed(2)} ${cy.toFixed(2)})"/>`;
+  }).join('')}
+    </g>
+    <circle cx="20" cy="20" r="2.2" fill="#FFF6DA" opacity=".85"/>
+  </svg>`;
+  return enc(svg);
+}
+
+/** Monochrome blossom watermark — sits inside the rarity icon chip. */
+export function blossomMark(size = 40, color = '#FFFFFF') {
+  const p = [];
+  for (let i = 0; i < 5; i++) {
+    const a = (i / 5) * Math.PI * 2 - Math.PI / 2;
+    const cx = 20 + Math.cos(a) * 7.2, cy = 20 + Math.sin(a) * 7.2;
+    p.push(`<ellipse cx="${cx.toFixed(2)}" cy="${cy.toFixed(2)}" rx="5.2" ry="3.6" transform="rotate(${(a * 180 / Math.PI + 90).toFixed(1)} ${cx.toFixed(2)} ${cy.toFixed(2)})"/>`);
+  }
+  const svg = `<svg xmlns="http://www.w3.org/2000/svg" width="${size}" height="${size}" viewBox="0 0 40 40">
+    <g fill="${color}">${p.join('')}</g>
   </svg>`;
   return enc(svg);
 }
@@ -165,25 +244,53 @@ export function essenceIcon(size = 20) {
   return enc(svg);
 }
 
+/**
+ * Band divider for long card lists: a tapered dark hairline, a gold companion
+ * line and a centred rhombus. Heavier than `taperRule` on purpose — at 6 px and
+ * 42% alpha the plain rule vanished between two tinted cards.
+ */
+export function bandRule(w = 320) {
+  const svg = `<svg xmlns="http://www.w3.org/2000/svg" width="${w}" height="10" viewBox="0 0 ${w} 10" preserveAspectRatio="none">
+    <defs>
+      <linearGradient id="br" gradientUnits="userSpaceOnUse" x1="0" y1="0" x2="${w}" y2="0">
+        <stop offset="0" stop-color="${T.border}" stop-opacity="0"/>
+        <stop offset=".14" stop-color="${T.border}" stop-opacity=".5"/>
+        <stop offset=".38" stop-color="${T.border}" stop-opacity=".82"/>
+        <stop offset=".62" stop-color="${T.border}" stop-opacity=".82"/>
+        <stop offset=".86" stop-color="${T.border}" stop-opacity=".5"/>
+        <stop offset="1" stop-color="${T.border}" stop-opacity="0"/>
+      </linearGradient>
+      <linearGradient id="bg" gradientUnits="userSpaceOnUse" x1="0" y1="0" x2="${w}" y2="0">
+        <stop offset="0" stop-color="${T.gold}" stop-opacity="0"/>
+        <stop offset=".5" stop-color="${T.goldPale}" stop-opacity=".9"/>
+        <stop offset="1" stop-color="${T.gold}" stop-opacity="0"/>
+      </linearGradient>
+    </defs>
+    <rect x="0" y="3.6" width="${w}" height="1.3" fill="url(#br)"/>
+    <rect x="0" y="5.5" width="${w}" height="1" fill="url(#bg)"/>
+  </svg>`;
+  return enc(svg);
+}
+
 /** Tapered hairline divider (thick centre, vanishing ends) + gold underline. */
 export function taperRule(w = 320) {
   const svg = `<svg xmlns="http://www.w3.org/2000/svg" width="${w}" height="6" viewBox="0 0 ${w} 6" preserveAspectRatio="none">
     <defs>
-      <linearGradient id="tr" x1="0" y1="0" x2="1" y2="0">
+      <linearGradient id="tr" gradientUnits="userSpaceOnUse" x1="0" y1="0" x2="${w}" y2="0">
         <stop offset="0" stop-color="${T.border}" stop-opacity="0"/>
         <stop offset=".18" stop-color="${T.border}" stop-opacity=".42"/>
         <stop offset=".5" stop-color="${T.border}" stop-opacity=".62"/>
         <stop offset=".82" stop-color="${T.border}" stop-opacity=".42"/>
         <stop offset="1" stop-color="${T.border}" stop-opacity="0"/>
       </linearGradient>
-      <linearGradient id="tg" x1="0" y1="0" x2="1" y2="0">
+      <linearGradient id="tg" gradientUnits="userSpaceOnUse" x1="0" y1="0" x2="${w}" y2="0">
         <stop offset="0" stop-color="${T.gold}" stop-opacity="0"/>
-        <stop offset=".5" stop-color="${T.gold}" stop-opacity=".55"/>
+        <stop offset=".5" stop-color="${T.gold}" stop-opacity=".6"/>
         <stop offset="1" stop-color="${T.gold}" stop-opacity="0"/>
       </linearGradient>
     </defs>
-    <path d="M0 2.5 H${w}" stroke="url(#tr)" stroke-width="1"/>
-    <path d="M0 4.2 H${w}" stroke="url(#tg)" stroke-width=".8"/>
+    <rect x="0" y="2" width="${w}" height="1" fill="url(#tr)"/>
+    <rect x="0" y="3.7" width="${w}" height=".9" fill="url(#tg)"/>
   </svg>`;
   return enc(svg);
 }
@@ -243,18 +350,27 @@ export function uiCss() {
   const corner = filigreeCorner(42);
   const cornerSm = filigreeCorner(26);
   const rule = taperRule(320);
+  const brule = bandRule(320);
   const dia = diamond(12);
   const diaInk = diamond(9, 'rgba(74,64,52,.62)');
   const flourish = titleFlourish(240);
   const star = starIcon('#FFF3CF');
   const starOff = starIcon('rgba(255,255,255,.18)');
+  /* 1 px dark keyline + gradient fill; at 11 px these stay countable on parchment */
+  const starInk = starIconInk(true);
+  const starInkOff = starIconInk(false);
+  const seal = waxSeal(46);
+  const mark = blossomMark(44, '#FFFFFF');
 
   return `
 #ui-root{
   --u: clamp(12px, calc(0.55vw + 0.25vh), 18px);
-  --rail: min(34%, calc(var(--u)*40));
+  --rail: min(37%, calc(var(--u)*44));
   --parchment:${T.parchment}; --ink:${T.ink}; --ink-soft:${T.inkSoft}; --ink-faint:${T.inkFaint};
   --border:${T.border}; --gold:${T.gold}; --gold-hi:${T.goldHi}; --gold-lo:${T.goldLo};
+  --gold-ink:${T.goldInk};
+  /* every secondary label lands at >=12 px at 1080p (u = 13.26 px there) */
+  --t-sec:calc(var(--u)*.92);
   --grain:${grain};
   --serif:"Hiragino Mincho ProN","Yu Mincho","YuMincho","Songti SC","Source Han Serif",Georgia,"Times New Roman",serif;
   --sans:"Hiragino Sans","Yu Gothic UI","Hiragino Kaku Gothic ProN",-apple-system,BlinkMacSystemFont,"Segoe UI","Helvetica Neue",Arial,sans-serif;
@@ -285,7 +401,7 @@ export function uiCss() {
   background-image:
     linear-gradient(180deg,rgba(255,253,246,.78),rgba(255,253,246,0) 26%),
     radial-gradient(130% 80% at 50% -8%,rgba(255,250,235,.85),rgba(243,235,220,0) 62%),
-    radial-gradient(120% 70% at 50% 108%,rgba(180,152,110,.20),rgba(243,235,220,0) 58%),
+    radial-gradient(120% 70% at 50% 108%,rgba(180,152,110,.13),rgba(243,235,220,0) 58%),
     var(--grain);
   background-size:auto,auto,auto,156px 156px;
   border:1.5px solid var(--border);
@@ -322,53 +438,57 @@ export function uiCss() {
 /* readability scrims — Genshin darkens the corners its HUD sits in.
    Kept soft and corner-bound so the tree never loses the frame. */
 #ui-root .sk-vig{position:absolute;pointer-events:none;}
-#ui-root .sk-vig.tl{left:0;top:0;width:48%;height:42%;
-  background:radial-gradient(118% 118% at 0% 0%,rgba(22,10,24,.56),rgba(22,10,24,.22) 44%,rgba(22,10,24,.06) 68%,rgba(22,10,24,0) 82%);}
+#ui-root .sk-vig.tl{left:0;top:0;width:44%;height:38%;
+  background:radial-gradient(118% 118% at 0% 0%,rgba(22,10,24,.30),rgba(22,10,24,.12) 44%,rgba(22,10,24,.04) 68%,rgba(22,10,24,0) 82%);}
 #ui-root .sk-vig.bt{left:0;right:0;bottom:0;height:15%;
   background:linear-gradient(0deg,rgba(18,9,20,.42),rgba(18,9,20,0));}
 
-#ui-root .sk-bank{
-  position:absolute;left:calc(var(--u)*1.9);top:calc(var(--u)*1.6);
-  display:flex;flex-direction:column;gap:calc(var(--u)*.28);
-  text-shadow:0 2px 6px rgba(24,10,20,.9),0 0 calc(var(--u)*1.8) rgba(30,12,26,.65);
-  animation:sk-in .34s var(--ease) both;
-}
-#ui-root .sk-bank-row{display:flex;align-items:center;gap:calc(var(--u)*.62);}
-#ui-root .sk-bank-icon{width:calc(var(--u)*2.15);height:calc(var(--u)*2.15);flex:0 0 auto;
-  background:${blossomIcon(28)} no-repeat center/contain;
-  filter:drop-shadow(0 0 calc(var(--u)*.55) rgba(255,190,215,.85));
-  animation:sk-breathe 5.5s ease-in-out infinite;}
-#ui-root .sk-bank-val{font-family:var(--serif);font-size:calc(var(--u)*2.65);line-height:1;
-  color:#FFF4F8;letter-spacing:.015em;font-weight:600;}
-#ui-root .sk-bank-unit{font-size:calc(var(--u)*.82);letter-spacing:.28em;color:rgba(255,232,240,.72);
-  font-family:var(--serif);align-self:flex-end;padding-bottom:calc(var(--u)*.16);}
-#ui-root .sk-bank-sub{display:flex;gap:calc(var(--u)*1.05);align-items:baseline;
-  padding-left:calc(var(--u)*2.8);font-size:calc(var(--u)*.86);color:rgba(255,238,244,.86);letter-spacing:.05em;}
-#ui-root .sk-bank-sub b{font-weight:600;color:#FFE6B8;}
-#ui-root .sk-bank-sub .sep{width:1px;height:calc(var(--u)*.9);background:rgba(255,225,235,.35);}
+/* ---- HUD parchment plate (ART_BIBLE §7).  Every string inside it is dark ink
+   on parchment: measured >=4.97:1 for the faintest label, 10.6:1 for the rate
+   line.  Before this the HUD was 13 px grey text floating on a lit sky. ---- */
+#ui-root .sk-plate{position:absolute;left:calc(var(--u)*1.35);top:calc(var(--u)*1.2);
+  width:calc(var(--u)*27.6);pointer-events:none;
+  padding:calc(var(--u)*.86) calc(var(--u)*1.0) calc(var(--u)*.8);
+  display:flex;flex-direction:column;gap:calc(var(--u)*.5);
+  animation:sk-in .34s var(--ease) both;}
 
-#ui-root .sk-chips{position:absolute;left:calc(var(--u)*2.0);top:calc(var(--u)*7.4);display:flex;gap:calc(var(--u)*.5);
-  animation:sk-in .34s .06s var(--ease) both;}
-#ui-root .sk-chip{display:flex;align-items:center;gap:calc(var(--u)*.4);
-  padding:calc(var(--u)*.24) calc(var(--u)*.72) calc(var(--u)*.24) calc(var(--u)*.4);
-  border-radius:99px;background:linear-gradient(180deg,rgba(28,20,34,.5),rgba(18,12,24,.62));
-  border:1px solid rgba(232,197,106,.42);box-shadow:0 1px 6px rgba(0,0,0,.3),0 0 0 1px rgba(0,0,0,.18) inset;
-  backdrop-filter:blur(6px);-webkit-backdrop-filter:blur(6px);}
-#ui-root .sk-chip i{width:calc(var(--u)*1.15);height:calc(var(--u)*1.15);background-repeat:no-repeat;background-position:center;background-size:contain;}
+#ui-root .sk-bank{display:flex;flex-direction:column;gap:calc(var(--u)*.24);}
+#ui-root .sk-bank-row{display:flex;align-items:center;gap:calc(var(--u)*.55);}
+#ui-root .sk-bank-icon{width:calc(var(--u)*2.05);height:calc(var(--u)*2.05);flex:0 0 auto;
+  background:${blossomIcon(28)} no-repeat center/contain;
+  filter:drop-shadow(0 1px 2px rgba(120,70,96,.5));
+  animation:sk-breathe 5.5s ease-in-out infinite;}
+#ui-root .sk-bank-val{font-family:var(--serif);font-size:calc(var(--u)*2.3);line-height:1;
+  color:#33291E;letter-spacing:.01em;font-weight:600;
+  text-shadow:0 1px 0 rgba(255,255,255,.7);}
+#ui-root .sk-bank-unit{font-size:var(--t-sec);letter-spacing:.24em;color:${T.inkFaint};
+  font-family:var(--serif);align-self:flex-end;padding-bottom:calc(var(--u)*.2);}
+#ui-root .sk-bank-sub{display:flex;gap:calc(var(--u)*.3) calc(var(--u)*.62);align-items:center;flex-wrap:wrap;
+  font-size:calc(var(--u)*1.21);color:${T.ink};letter-spacing:.01em;line-height:1.18;}
+#ui-root .sk-bank-sub>span{display:flex;align-items:baseline;gap:.32em;white-space:nowrap;}
+#ui-root .sk-bank-sub b{font-weight:600;color:#2F2618;font-family:var(--serif);}
+#ui-root .sk-bank-sub em{font-style:normal;font-size:var(--t-sec);color:${T.inkFaint};letter-spacing:.05em;}
+#ui-root .sk-bank-sub .sep{width:1px;height:calc(var(--u)*1.0);background:rgba(74,64,52,.3);}
+
+#ui-root .sk-chips{display:flex;gap:calc(var(--u)*.42);flex-wrap:wrap;}
+#ui-root .sk-chip{display:flex;align-items:center;gap:calc(var(--u)*.34);
+  padding:calc(var(--u)*.2) calc(var(--u)*.62) calc(var(--u)*.2) calc(var(--u)*.3);
+  border-radius:99px;
+  background:linear-gradient(180deg,rgba(255,251,240,.9),rgba(224,210,184,.82));
+  border:1px solid rgba(74,64,52,.42);
+  box-shadow:0 1px 0 rgba(255,255,255,.7) inset,0 -2px 4px rgba(120,96,60,.16) inset,0 1px 3px rgba(50,36,20,.16);}
+#ui-root .sk-chip i{width:calc(var(--u)*1.1);height:calc(var(--u)*1.1);background-repeat:no-repeat;background-position:center;background-size:contain;
+  filter:drop-shadow(0 1px 1px rgba(80,60,20,.35));}
 #ui-root .sk-chip.blossom i{background-image:${sealIcon(22)};}
 #ui-root .sk-chip.essence i{background-image:${essenceIcon(22)};}
-#ui-root .sk-chip span{font-size:calc(var(--u)*.86);color:#F6E6C4;letter-spacing:.04em;}
+#ui-root .sk-chip span{font-size:var(--t-sec);color:#3E3425;letter-spacing:.04em;font-weight:600;}
 
 /* --- bloom stage --- */
-#ui-root .sk-stage{
-  position:absolute;left:calc(var(--u)*2.0);top:calc(var(--u)*10.9);width:calc(var(--u)*21.5);
-  animation:sk-in .34s .1s var(--ease) both;
-}
-#ui-root .sk-stage-head{display:flex;align-items:baseline;gap:calc(var(--u)*.55);
-  text-shadow:0 2px 5px rgba(24,10,20,.9),0 0 calc(var(--u)*1.2) rgba(24,10,20,.6);}
-#ui-root .sk-stage-k{font-family:var(--serif);font-size:calc(var(--u)*1.42);color:#FFEDF3;letter-spacing:.12em;}
-#ui-root .sk-stage-n{font-family:var(--serif);font-size:calc(var(--u)*.94);color:rgba(255,232,242,.92);letter-spacing:.2em;text-transform:uppercase;}
-#ui-root .sk-stage-i{margin-left:auto;font-size:calc(var(--u)*.76);color:${T.goldPale};letter-spacing:.2em;font-weight:600;}
+#ui-root .sk-stage{display:flex;flex-direction:column;}
+#ui-root .sk-stage-head{display:flex;align-items:baseline;gap:calc(var(--u)*.5);}
+#ui-root .sk-stage-k{font-family:var(--serif);font-size:calc(var(--u)*1.34);color:#33291E;letter-spacing:.1em;}
+#ui-root .sk-stage-n{font-family:var(--serif);font-size:calc(var(--u)*.96);color:${T.inkSoft};letter-spacing:.18em;text-transform:uppercase;}
+#ui-root .sk-stage-i{margin-left:auto;font-size:calc(var(--u)*.95);color:${T.goldInk};letter-spacing:.16em;font-weight:700;}
 #ui-root .sk-bar{position:relative;height:calc(var(--u)*.56);margin-top:calc(var(--u)*.42);
   border-radius:99px;background:linear-gradient(180deg,rgba(16,10,20,.62),rgba(30,20,36,.5));
   border:1px solid rgba(232,197,106,.34);overflow:hidden;
@@ -380,23 +500,41 @@ export function uiCss() {
 #ui-root .sk-bar>u{position:absolute;top:0;bottom:0;width:calc(var(--u)*1.6);border-radius:99px;
   background:linear-gradient(90deg,rgba(255,255,255,0),rgba(255,255,255,.55),rgba(255,255,255,0));
   animation:sk-sheen 2.6s linear infinite;}
-#ui-root .sk-stage-foot{display:flex;justify-content:space-between;margin-top:calc(var(--u)*.38);
-  font-size:calc(var(--u)*.76);color:rgba(255,240,246,.96);letter-spacing:.06em;
-  text-shadow:0 2px 5px rgba(22,8,18,1),0 0 calc(var(--u)*.9) rgba(22,8,18,.85);}
-#ui-root .sk-stage-foot span:last-child{color:${T.goldPale};}
+
+/* --- the bloom progression capsule: 10 px tall, one tick per stage threshold,
+       a glowing head at the current position.  Was a 2 px hairline. --- */
+#ui-root .sk-sbar{position:relative;height:calc(var(--u)*.76);margin-top:calc(var(--u)*.46);
+  border-radius:99px;overflow:hidden;
+  background:linear-gradient(180deg,rgba(96,80,58,.34),rgba(150,132,102,.2));
+  border:1px solid rgba(74,64,52,.5);
+  box-shadow:0 2px 4px rgba(60,44,26,.3) inset,0 1px 0 rgba(255,255,255,.6);}
+#ui-root .sk-sbar>i{position:absolute;left:0;top:0;bottom:0;width:0%;border-radius:99px;
+  background:linear-gradient(90deg,${T.petalDeep} 0%,${T.petalShadow} 38%,${T.petalMid} 74%,#FFF2F7 100%);
+  box-shadow:0 0 calc(var(--u)*.5) rgba(255,150,195,.85),0 1px 0 rgba(255,255,255,.45) inset;
+  transition:width .5s cubic-bezier(.25,.8,.3,1);}
+#ui-root .sk-sbar>i::after{content:"";position:absolute;right:calc(var(--u)*-.16);top:50%;
+  width:calc(var(--u)*.5);height:calc(var(--u)*.5);margin-top:calc(var(--u)*-.25);border-radius:99px;
+  background:radial-gradient(circle at 40% 34%,#FFFFFF,#FFD6E7 55%,#EE8CAF);
+  box-shadow:0 0 calc(var(--u)*.7) rgba(255,170,205,1);}
+#ui-root .sk-sbar>u{position:absolute;top:0;bottom:0;width:1px;
+  background:rgba(58,50,42,.55);box-shadow:1px 0 0 rgba(255,255,255,.42);}
+#ui-root .sk-sbar>u.done{background:${T.goldInk};box-shadow:1px 0 0 rgba(255,240,190,.6);}
+#ui-root .sk-stage-foot{display:flex;justify-content:space-between;margin-top:calc(var(--u)*.34);
+  font-size:var(--t-sec);color:${T.inkSoft};letter-spacing:.05em;}
+#ui-root .sk-stage-foot span:last-child{color:${T.goldInk};font-weight:600;}
 
 /* --- shake readout, bottom centre --- */
 #ui-root .sk-shake{position:absolute;left:calc(50% - var(--rail)*0.5);bottom:calc(var(--u)*1.5);transform:translateX(-50%);
   display:flex;align-items:center;gap:calc(var(--u)*.7);padding:calc(var(--u)*.38) calc(var(--u)*1.15);
-  border-radius:99px;background:linear-gradient(180deg,rgba(26,18,32,.44),rgba(14,9,20,.58));
-  border:1px solid rgba(232,197,106,.3);backdrop-filter:blur(7px);-webkit-backdrop-filter:blur(7px);
-  box-shadow:0 4px 16px rgba(0,0,0,.35);pointer-events:auto;
+  border-radius:99px;background:linear-gradient(180deg,rgba(26,18,32,.70),rgba(12,7,18,.80));
+  border:1px solid rgba(232,197,106,.42);backdrop-filter:blur(7px);-webkit-backdrop-filter:blur(7px);
+  box-shadow:0 4px 16px rgba(0,0,0,.42);pointer-events:auto;
   animation:sk-in .34s .16s var(--ease) both;}
-#ui-root .sk-shake kbd{font-family:var(--sans);font-size:calc(var(--u)*.68);letter-spacing:.14em;
-  padding:calc(var(--u)*.12) calc(var(--u)*.5);border-radius:3px;color:#2B2118;
+#ui-root .sk-shake kbd{font-family:var(--sans);font-size:var(--t-sec);letter-spacing:.14em;
+  padding:calc(var(--u)*.14) calc(var(--u)*.52);border-radius:3px;color:#2B2118;font-weight:700;
   background:linear-gradient(180deg,${T.goldHi},${T.goldLo});border:1px solid rgba(90,64,16,.6);
   box-shadow:0 1px 0 rgba(255,255,255,.5) inset;}
-#ui-root .sk-shake span{font-size:calc(var(--u)*.82);color:rgba(255,236,242,.85);letter-spacing:.1em;}
+#ui-root .sk-shake span{font-size:calc(var(--u)*.92);color:rgba(255,242,246,.96);letter-spacing:.1em;}
 #ui-root .sk-shake b{font-family:var(--serif);color:#FFE6B8;font-size:calc(var(--u)*1.0);}
 #ui-root .sk-shake:hover{border-color:rgba(232,197,106,.6);}
 
@@ -426,9 +564,9 @@ export function uiCss() {
   animation:sk-toast-in .4s var(--ease) both;}
 #ui-root .sk-toast .glyph{width:calc(var(--u)*2.1);height:calc(var(--u)*2.1);flex:0 0 auto;
   background:${sealIcon(28)} no-repeat center/contain;filter:drop-shadow(0 0 calc(var(--u)*.5) rgba(232,197,106,.8));}
-#ui-root .sk-toast .cap{font-size:calc(var(--u)*.68);letter-spacing:.24em;color:${T.goldDeep};text-transform:uppercase;}
+#ui-root .sk-toast .cap{font-size:var(--t-sec);letter-spacing:.22em;color:${T.goldInk};text-transform:uppercase;font-weight:600;}
 #ui-root .sk-toast .nm{font-family:var(--serif);font-size:calc(var(--u)*1.0);letter-spacing:.06em;color:var(--ink);}
-#ui-root .sk-toast .rw{font-size:calc(var(--u)*.72);color:var(--ink-soft);}
+#ui-root .sk-toast .rw{font-size:var(--t-sec);color:var(--ink-soft);}
 #ui-root .sk-toast::after{content:"";position:absolute;inset:0;pointer-events:none;
   background:linear-gradient(105deg,rgba(255,255,255,0) 38%,rgba(255,246,214,.75) 50%,rgba(255,255,255,0) 62%);
   background-size:260% 100%;animation:sk-shine 1.05s .12s ease-out 1 both;}
@@ -460,79 +598,200 @@ export function uiCss() {
 #ui-root .sk-panel-head{position:relative;flex:0 0 auto;padding:calc(var(--u)*1.05) calc(var(--u)*1.5) calc(var(--u)*.5);text-align:center;}
 #ui-root .sk-panel-head h2{font-family:var(--serif);font-size:calc(var(--u)*1.22);letter-spacing:.3em;
   color:#2F281F;text-indent:.3em;}
-#ui-root .sk-panel-head .kj{font-family:var(--serif);font-size:calc(var(--u)*.78);letter-spacing:.5em;
-  color:${T.goldDeep};text-indent:.5em;margin-top:calc(var(--u)*.14);}
+#ui-root .sk-panel-head .kj{font-family:var(--serif);font-size:calc(var(--u)*.88);letter-spacing:.5em;
+  color:${T.goldInk};text-indent:.5em;margin-top:calc(var(--u)*.14);}
 #ui-root .sk-panel-head .fl{height:12px;margin:calc(var(--u)*.44) auto 0;width:82%;
   background:${flourish} no-repeat center/100% 12px;opacity:.95;}
 #ui-root .sk-panel-head .fl.mirror{transform:scaleX(-1);}
 #ui-root .sk-rule{height:6px;flex:0 0 auto;margin:calc(var(--u)*.1) calc(var(--u)*1.2);
   background:${rule} no-repeat center/100% 6px;}
-#ui-root .sk-panel-body{flex:1 1 auto;overflow-y:auto;overflow-x:hidden;
-  padding:calc(var(--u)*.7) calc(var(--u)*.95) calc(var(--u)*1.4);
+/* flex:0 1 auto — the body sizes to its content, so a fresh save shows a panel
+   the height of the rows it actually has instead of a tall dead parchment field */
+#ui-root .sk-panel-body{flex:0 1 auto;overflow-y:auto;overflow-x:hidden;
+  padding:calc(var(--u)*.6) calc(var(--u)*.9) calc(var(--u)*.5);
   scrollbar-width:thin;}
-#ui-root .sk-panel-foot{flex:0 0 auto;padding:calc(var(--u)*.55) calc(var(--u)*3.5) calc(var(--u)*.85);
+#ui-root .sk-panel-foot{flex:0 0 auto;padding:calc(var(--u)*.6) calc(var(--u)*3.2) calc(var(--u)*.9);
   display:flex;gap:calc(var(--u)*.5);align-items:center;justify-content:space-between;
   border-top:1px solid rgba(74,64,52,.18);}
-#ui-root .sk-hint{font-size:calc(var(--u)*.7);color:var(--ink-faint);letter-spacing:.08em;}
+#ui-root .sk-hint{font-size:var(--t-sec);color:var(--ink-faint);letter-spacing:.06em;}
 
 /* ================= tender cards ================= */
 #ui-root .sk-card{position:relative;display:grid;
-  grid-template-columns:calc(var(--u)*3.1) 1fr auto;gap:0 calc(var(--u)*.75);
-  align-items:center;
-  padding:calc(var(--u)*.58) calc(var(--u)*.7);margin-bottom:calc(var(--u)*.48);
-  border-radius:2px;border:1px solid rgba(74,64,52,.28);
-  background:linear-gradient(180deg,rgba(255,252,244,.72),rgba(232,220,198,.5));
-  box-shadow:0 1px 0 rgba(255,255,255,.6) inset,0 1px 3px rgba(60,44,26,.14);
-  transition:transform .14s var(--ease),box-shadow .16s ease,border-color .16s ease,background .16s ease;
+  grid-template-columns:calc(var(--u)*2.9) minmax(0,1fr) auto;gap:0 calc(var(--u)*.62);
+  align-items:center;overflow:hidden;
+  padding:calc(var(--u)*.46) calc(var(--u)*.6) calc(var(--u)*.46) calc(var(--u)*.72);
+  margin-bottom:calc(var(--u)*.4);
+  border-radius:3px;border:1px solid rgba(74,64,52,.34);
+  background-image:linear-gradient(180deg,rgba(255,252,244,.74),rgba(232,220,198,.52));
+  box-shadow:0 1px 0 rgba(255,255,255,.6) inset,0 1px 3px rgba(60,44,26,.16);
+  transition:transform .14s var(--ease),box-shadow .16s ease,border-color .16s ease;
   cursor:pointer;}
-#ui-root .sk-card:hover{transform:translateY(-1px);border-color:rgba(74,64,52,.5);
-  box-shadow:0 3px 12px rgba(60,40,20,.22),0 1px 0 rgba(255,255,255,.7) inset;}
-#ui-root .sk-card:active{transform:translateY(1px) scale(.995);}
-#ui-root .sk-card.buy{border-color:rgba(184,138,48,.85);
-  background:linear-gradient(180deg,rgba(255,250,230,.9),rgba(246,228,182,.7));
-  box-shadow:0 0 0 1px rgba(232,197,106,.45),0 2px 10px rgba(150,110,30,.24),0 1px 0 rgba(255,255,255,.75) inset;
-  animation:sk-afford 2.2s ease-in-out infinite;}
-#ui-root .sk-card.poor{opacity:.72;filter:saturate(.6);}
-#ui-root .sk-card.poor:hover{opacity:.86;}
+/* ---- rarity as a GRADIENT CARD BACKGROUND (§7), not a hairline hint ----
+   The r2 review measured a 3-star row and a 5-star row 5.6 deg apart in mean
+   hue and 0.008 apart in saturation: with the wash confined to a 56%-wide
+   corner it was invisible at 1080p. The wash now runs top-to-bottom over the
+   whole card at ~.30 -> .05, which is what actually separates the tiers.
+   Blue is nearly opposite parchment on the wheel, so the 3-star card lands
+   cool and the 5-star card lands warm — a large, readable split. */
+#ui-root .sk-card.r3{background-image:
+  linear-gradient(180deg,rgba(64,132,198,.34) 0%,rgba(70,134,196,.19) 44%,rgba(76,139,201,.07) 100%),
+  linear-gradient(101deg,rgba(48,116,186,.24) 0%,rgba(76,139,201,.04) 58%,rgba(76,139,201,0) 100%),
+  linear-gradient(180deg,rgba(255,252,244,.8),rgba(228,220,206,.58));}
+#ui-root .sk-card.r4{background-image:
+  linear-gradient(180deg,rgba(158,112,220,.34) 0%,rgba(162,119,221,.19) 44%,rgba(162,119,221,.07) 100%),
+  linear-gradient(101deg,rgba(140,92,208,.24) 0%,rgba(162,119,221,.04) 58%,rgba(162,119,221,0) 100%),
+  linear-gradient(180deg,rgba(255,252,244,.8),rgba(230,220,208,.58));}
+#ui-root .sk-card.r5{background-image:
+  linear-gradient(180deg,rgba(216,162,58,.42) 0%,rgba(213,165,74,.24) 44%,rgba(213,165,74,.09) 100%),
+  linear-gradient(101deg,rgba(206,150,42,.28) 0%,rgba(213,165,74,.05) 58%,rgba(213,165,74,0) 100%),
+  linear-gradient(180deg,rgba(255,252,238,.82),rgba(238,224,190,.6));}
+#ui-root .sk-card::before{content:"";position:absolute;left:0;top:0;bottom:0;width:calc(var(--u)*.24);z-index:1;
+  background:linear-gradient(180deg,rgba(120,104,80,.5),rgba(90,76,54,.75));
+  box-shadow:1px 0 0 rgba(255,255,255,.35);}
+#ui-root .sk-card.r3::before{background:linear-gradient(180deg,#8FBEE8,#3B6E9F 55%,#24486C);}
+#ui-root .sk-card.r4::before{background:linear-gradient(180deg,#C7A8F0,#7E52B6 55%,#4A2F76);}
+#ui-root .sk-card.r5::before{background:linear-gradient(180deg,#F7E4AE,#C08F2C 55%,#7C5510);}
+/* tier-coloured inner keyline, offset 2 px — replaces the generic gold */
+#ui-root .sk-card::after{content:"";position:absolute;inset:2px;pointer-events:none;border-radius:2px;
+  border:1px solid rgba(74,64,52,.18);}
+#ui-root .sk-card.r3::after{border-color:rgba(44,96,156,.5);box-shadow:0 0 0 1px rgba(255,255,255,.3) inset;}
+#ui-root .sk-card.r4::after{border-color:rgba(104,66,164,.5);box-shadow:0 0 0 1px rgba(255,255,255,.3) inset;}
+#ui-root .sk-card.r5::after{border-color:rgba(160,112,26,.62);box-shadow:0 0 0 1px rgba(255,248,220,.4) inset;}
+#ui-root .sk-card:hover{transform:translateY(-1px);border-color:rgba(74,64,52,.58);
+  box-shadow:0 3px 12px rgba(60,40,20,.24),0 1px 0 rgba(255,255,255,.7) inset;}
+#ui-root .sk-card:active{transform:translateY(1px) scale(.996);}
+#ui-root .sk-card.buy{border-color:rgba(184,138,48,.9);
+  box-shadow:0 0 0 1px rgba(232,197,106,.5),0 2px 10px rgba(150,110,30,.26),0 1px 0 rgba(255,255,255,.78) inset;}
+#ui-root .sk-card.poor{filter:saturate(.72);}
 #ui-root .sk-card.reveal{animation:sk-flip .56s var(--ease) both;}
-#ui-root .sk-card .ico{grid-column:1;grid-row:1/3;width:calc(var(--u)*3.1);height:calc(var(--u)*3.1);
-  border-radius:2px;display:grid;place-items:center;position:relative;
-  font-family:var(--serif);font-size:calc(var(--u)*1.42);color:#FFF6E4;
-  background:linear-gradient(155deg,#8E6E4E,#5E4632 62%,#3E2E22);
-  border:1px solid rgba(60,44,28,.8);
-  box-shadow:0 1px 0 rgba(255,255,255,.28) inset,0 -3px 8px rgba(0,0,0,.32) inset;
-  text-shadow:0 1px 2px rgba(0,0,0,.5);}
-#ui-root .sk-card.buy .ico{background:linear-gradient(155deg,#C79E52,#8E6A28 62%,#5E4614);}
+/* ---- rarity icon chip.  Two-stop tier gradient, a 1 px dark border with a
+       3 px gold inner keyline, an embossed blossom watermark so it is never a
+       flat single-colour square, and the same drop shadow the buy button uses. */
+#ui-root .sk-card .ico{grid-column:1;grid-row:1/4;align-self:center;
+  width:calc(var(--u)*2.9);height:calc(var(--u)*2.9);
+  border-radius:3px;display:grid;place-items:center;position:relative;
+  font-family:var(--serif);font-size:calc(var(--u)*1.36);color:#FFF6E4;
+  background:linear-gradient(155deg,#9A7855 0%,#6A4F38 46%,#3A2B20 100%);
+  border:1px solid ${T.border};
+  box-shadow:0 1px 0 rgba(255,255,255,.3) inset,0 -6px 12px rgba(0,0,0,.36) inset,
+             0 2px 5px rgba(30,20,8,.46),0 1px 0 rgba(255,255,255,.34);
+  text-shadow:0 1px 2px rgba(0,0,0,.6),0 0 calc(var(--u)*.5) rgba(0,0,0,.35);}
+#ui-root .sk-card .ico::before{content:"";position:absolute;inset:0;pointer-events:none;
+  background:${mark} no-repeat center/72% 72%;opacity:.14;mix-blend-mode:overlay;}
+#ui-root .sk-card .ico::after{content:"";position:absolute;inset:3px;pointer-events:none;border-radius:1px;
+  border:1px solid rgba(232,197,106,.62);
+  box-shadow:0 0 0 1px rgba(0,0,0,.28) inset;}
+#ui-root .sk-card.r3 .ico{background:linear-gradient(155deg,#7FA6D2 0%,#2F5580 52%,#16304C 100%);}
+#ui-root .sk-card.r4 .ico{background:linear-gradient(155deg,#A98BD6 0%,#553784 52%,#2B1A46 100%);}
+#ui-root .sk-card.r5 .ico{background:linear-gradient(155deg,#EBCE86 0%,#A87C2A 52%,#57400F 100%);}
+#ui-root .sk-card.r5 .ico{color:#FFFDF2;}
+#ui-root .sk-card.r5 .ico::after{border-color:rgba(255,240,196,.72);}
 #ui-root .sk-card .ico b{position:absolute;right:-1px;bottom:-1px;
-  font-family:var(--sans);font-size:calc(var(--u)*.66);font-weight:700;color:#2E2318;
-  padding:0 calc(var(--u)*.28);border-radius:2px 0 2px 0;
+  font-family:var(--sans);font-size:calc(var(--u)*.7);font-weight:700;color:#2E2318;
+  padding:0 calc(var(--u)*.28);border-radius:3px 0 2px 0;
   background:linear-gradient(180deg,${T.goldHi},${T.goldLo});border:1px solid rgba(90,64,16,.7);}
-#ui-root .sk-card .nm{grid-column:2;grid-row:1;display:flex;align-items:baseline;gap:calc(var(--u)*.4);min-width:0;}
-#ui-root .sk-card .nm h3{font-family:var(--serif);font-size:calc(var(--u)*.98);font-weight:600;
-  letter-spacing:.06em;color:#332B22;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;}
-#ui-root .sk-card .nm em{font-style:normal;font-family:var(--serif);font-size:calc(var(--u)*.78);
-  color:${T.goldDeep};letter-spacing:.1em;}
-#ui-root .sk-card .out{grid-column:2;grid-row:2;font-size:calc(var(--u)*.74);color:var(--ink-soft);letter-spacing:.03em;
-  white-space:nowrap;overflow:hidden;text-overflow:ellipsis;}
-#ui-root .sk-card .out i{font-style:normal;color:${T.ok};font-weight:600;}
-#ui-root .sk-card .cost{grid-column:3;grid-row:1/3;align-self:center;text-align:right;white-space:nowrap;padding-left:calc(var(--u)*.5);}
-#ui-root .sk-card .cost .v{font-family:var(--serif);font-size:calc(var(--u)*1.05);color:#4A3C22;display:block;line-height:1.1;}
-#ui-root .sk-card.buy .cost .v{color:#7A5A10;text-shadow:0 0 calc(var(--u)*.6) rgba(232,197,106,.55);}
-#ui-root .sk-card.poor .cost .v{color:${T.no};}
-#ui-root .sk-card .cost .l{font-size:calc(var(--u)*.62);letter-spacing:.18em;color:var(--ink-faint);text-transform:uppercase;}
-#ui-root .sk-mini{grid-column:2/4;grid-row:3;margin-top:calc(var(--u)*.34);display:flex;align-items:center;gap:calc(var(--u)*.45);}
-#ui-root .sk-mini .track{position:relative;flex:1 1 auto;height:calc(var(--u)*.28);border-radius:99px;
-  background:rgba(74,64,52,.2);overflow:hidden;box-shadow:0 1px 0 rgba(255,255,255,.5);}
+#ui-root .sk-card .nm{grid-column:2;grid-row:1;display:flex;align-items:center;gap:calc(var(--u)*.36);min-width:0;}
+#ui-root .sk-card .nm h3{font-family:var(--serif);font-size:calc(var(--u)*1.0);font-weight:600;
+  letter-spacing:.05em;color:#2F2820;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;}
+#ui-root .sk-card .nm em{font-style:normal;font-family:var(--serif);font-size:calc(var(--u)*.82);
+  color:${T.goldInk};letter-spacing:.08em;white-space:nowrap;}
+#ui-root .sk-card .nm .sk-stars{margin-left:auto;flex:0 0 auto;}
+#ui-root .sk-card .out{grid-column:2;grid-row:2;font-size:var(--t-sec);color:${T.inkSoft};letter-spacing:.02em;
+  line-height:1.2;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;}
+#ui-root .sk-card .out i{font-style:normal;color:#3D6633;font-weight:700;}
+#ui-root .sk-card .out u{text-decoration:none;color:#4A3C22;font-weight:600;}
+#ui-root .sk-mini{grid-column:2/4;grid-row:3;margin-top:calc(var(--u)*.26);display:flex;align-items:center;gap:calc(var(--u)*.45);}
+#ui-root .sk-mini .track{position:relative;flex:1 1 auto;height:calc(var(--u)*.34);border-radius:99px;
+  background:linear-gradient(180deg,rgba(74,64,52,.3),rgba(74,64,52,.16));overflow:hidden;
+  box-shadow:0 1px 2px rgba(60,44,26,.24) inset,0 1px 0 rgba(255,255,255,.55);}
 #ui-root .sk-mini .track>i{position:absolute;inset:0 auto 0 0;width:0%;border-radius:99px;
-  background:linear-gradient(90deg,${T.goldDeep},${T.goldPale});transition:width .4s ease;}
-#ui-root .sk-mini .lb{font-size:calc(var(--u)*.62);color:var(--ink-faint);letter-spacing:.06em;white-space:nowrap;}
-#ui-root .sk-mini .lb b{color:${T.goldDeep};font-weight:700;}
+  background:linear-gradient(90deg,${T.goldDeep},${T.goldPale});
+  box-shadow:0 1px 0 rgba(255,255,255,.4) inset;transition:width .4s ease;}
+#ui-root .sk-mini .lb{font-size:var(--t-sec);color:${T.inkFaint};letter-spacing:.04em;white-space:nowrap;}
+#ui-root .sk-mini .lb b{color:${T.goldInk};font-weight:700;}
+
+/* ---- the purchase button (ART_BIBLE §7).  Before this the only affordance on
+       a Tender row was a cost string; a clicker with no button is not a game. ---- */
+#ui-root .sk-buy{position:relative;grid-column:3;grid-row:1/3;align-self:center;
+  display:flex;align-items:center;justify-content:center;gap:calc(var(--u)*.34);
+  min-width:134px;min-height:34px;padding:0 calc(var(--u)*.58);
+  border-radius:3px;overflow:hidden;pointer-events:auto;
+  background:linear-gradient(180deg,${T.goldHi} 0%,#E3C270 40%,${T.goldLo} 100%);
+  border:1px solid #7A5A18;
+  box-shadow:0 1px 0 rgba(255,255,255,.7) inset,0 -3px 7px rgba(120,84,16,.34) inset,
+             0 2px 6px rgba(40,26,6,.32);
+  transition:transform 70ms var(--ease),box-shadow 70ms ease,filter 70ms ease;}
+#ui-root .sk-buy .gl{position:absolute;left:1px;right:1px;top:0;height:46%;pointer-events:none;
+  border-radius:2px 2px 40% 40%/2px 2px 100% 100%;
+  background:linear-gradient(180deg,rgba(255,253,235,.62),rgba(255,253,235,0));}
+#ui-root .sk-buy.sm{padding:0 calc(var(--u)*.48);gap:calc(var(--u)*.28);}
+#ui-root .sk-buy.sm .v{font-size:calc(var(--u)*.94);}
+#ui-root .sk-buy .v{position:relative;font-family:var(--serif);font-size:calc(var(--u)*1.02);
+  color:#2E2318;line-height:1;font-weight:600;text-shadow:0 1px 0 rgba(255,248,214,.55);}
+#ui-root .sk-buy .x{position:relative;font-size:calc(var(--u)*.72);font-weight:700;color:#5E4108;
+  letter-spacing:.04em;padding:1px calc(var(--u)*.28);border-radius:2px;
+  background:rgba(255,250,226,.7);border:1px solid rgba(122,90,24,.5);
+  box-shadow:0 1px 0 rgba(255,255,255,.5) inset;}
+#ui-root .sk-buy:hover{transform:translateY(-1px);filter:brightness(1.05);
+  box-shadow:0 1px 0 rgba(255,255,255,.78) inset,0 -3px 7px rgba(120,84,16,.3) inset,
+             0 4px 12px rgba(40,26,6,.34),0 0 calc(var(--u)*1.3) rgba(232,197,106,.8);}
+#ui-root .sk-buy:active{transform:translateY(1px);
+  box-shadow:0 3px 6px rgba(90,62,10,.5) inset,0 1px 2px rgba(40,26,6,.22);}
+#ui-root .sk-card.buy .sk-buy{animation:sk-afford 2.2s ease-in-out infinite;}
+/* unaffordable: still a real pressable control, just inset and cool */
+#ui-root .sk-card.poor .sk-buy{
+  background:linear-gradient(180deg,rgba(230,216,184,.95),rgba(196,180,146,.92));
+  border-color:rgba(110,84,30,.65);
+  box-shadow:0 2px 5px rgba(60,44,26,.3) inset,0 1px 0 rgba(255,255,255,.55);}
+#ui-root .sk-card.poor .sk-buy .gl{background:linear-gradient(180deg,rgba(255,255,250,.4),rgba(255,255,250,0));}
+#ui-root .sk-card.poor .sk-buy .v{color:#6E3225;text-shadow:0 1px 0 rgba(255,255,255,.45);}
+#ui-root .sk-card.poor .sk-buy .x{color:#5A4B36;background:rgba(255,253,246,.55);border-color:rgba(74,64,52,.4);}
+
+/* ---- next-unlock row: a SEALED SCROLL, not a disabled fieldset.
+       The r2 review read the old grey diagonal-hatched rectangle as HTML chrome.
+       This is dimmed parchment at 78%, a gold wax-seal medallion where the '?'
+       square was, and no hatching or grey anywhere. ---- */
+#ui-root .sk-teaser{position:relative;display:grid;
+  grid-template-columns:calc(var(--u)*3.1) minmax(0,1fr);gap:0 calc(var(--u)*.72);
+  align-items:center;overflow:hidden;opacity:.78;
+  padding:calc(var(--u)*.62) calc(var(--u)*.7) calc(var(--u)*.62) calc(var(--u)*.8);
+  border-radius:3px;border:1px solid rgba(74,64,52,.34);
+  background-image:
+    radial-gradient(120% 150% at 8% 50%,rgba(201,162,39,.16),rgba(201,162,39,0) 58%),
+    linear-gradient(180deg,rgba(252,246,232,.72),rgba(226,214,190,.6));
+  box-shadow:0 1px 0 rgba(255,255,255,.5) inset,0 1px 3px rgba(60,44,26,.14);}
+/* the rolled edges of the scroll, top and bottom — replaces the dashed border */
+#ui-root .sk-teaser::before,#ui-root .sk-teaser::after{content:"";position:absolute;left:0;right:0;
+  height:calc(var(--u)*.34);pointer-events:none;}
+#ui-root .sk-teaser::before{top:0;background:linear-gradient(180deg,rgba(160,132,84,.32),rgba(160,132,84,0));}
+#ui-root .sk-teaser::after{bottom:0;background:linear-gradient(0deg,rgba(160,132,84,.32),rgba(160,132,84,0));}
+#ui-root .sk-teaser .seal{grid-column:1;grid-row:1/3;align-self:center;
+  width:calc(var(--u)*3.1);height:calc(var(--u)*3.1);
+  background:${seal} no-repeat center/contain;
+  filter:drop-shadow(0 2px 3px rgba(60,40,10,.45));}
+#ui-root .sk-teaser h3{grid-column:2;font-family:var(--serif);font-size:calc(var(--u)*.94);
+  letter-spacing:.34em;color:${T.goldInk};text-transform:uppercase;}
+#ui-root .sk-teaser .tx{grid-column:2;font-family:var(--serif);font-style:italic;
+  font-size:calc(var(--u)*.9);color:${T.inkSoft};line-height:1.42;
+  margin-top:calc(var(--u)*.2);}
+#ui-root .sk-teaser .tx b{font-style:normal;color:${T.goldInk};font-weight:700;}
+
+/* ---- band rule: a tapered hairline + centre rhombus at every rarity band, so a
+       ten-row panel has rhythm instead of ten identical 78 px stripes ---- */
+#ui-root .sk-gdiv{position:relative;height:10px;
+  margin:calc(var(--u)*.46) calc(var(--u)*1.5) calc(var(--u)*.6);
+  background:${brule} no-repeat center/100% 10px;}
+#ui-root .sk-gdiv::after{content:"";position:absolute;left:50%;top:0;
+  width:calc(var(--u)*.72);height:calc(var(--u)*.72);margin-left:calc(var(--u)*-.36);
+  transform:translateY(calc(var(--u)*-.06));
+  background:${dia} no-repeat center/contain;
+  filter:drop-shadow(0 1px 0 rgba(255,255,255,.6));}
 
 /* ================= upgrade rows ================= */
 #ui-root .sk-fam{margin:calc(var(--u)*.5) 0 calc(var(--u)*.3);display:flex;align-items:center;gap:calc(var(--u)*.5);}
 #ui-root .sk-fam .d{width:9px;height:9px;background:${diaInk} no-repeat center/contain;}
-#ui-root .sk-fam h4{font-family:var(--serif);font-size:calc(var(--u)*.86);letter-spacing:.3em;
-  color:${T.goldDeep};text-transform:uppercase;}
+#ui-root .sk-fam h4{font-family:var(--serif);font-size:calc(var(--u)*.94);letter-spacing:.3em;
+  color:${T.goldInk};text-transform:uppercase;}
 #ui-root .sk-fam .ln{flex:1 1 auto;height:1px;background:linear-gradient(90deg,rgba(74,64,52,.35),rgba(74,64,52,0));}
 #ui-root .sk-up{position:relative;display:grid;grid-template-columns:calc(var(--u)*2.3) 1fr auto;
   gap:0 calc(var(--u)*.62);align-items:center;padding:calc(var(--u)*.48) calc(var(--u)*.62);
@@ -552,14 +811,17 @@ export function uiCss() {
 #ui-root .sk-up.fam-shake .g{background:radial-gradient(120% 120% at 30% 20%,#C77A86,#7E3A4C);}
 #ui-root .sk-up.fam-tender .g{background:radial-gradient(120% 120% at 30% 20%,#7F9A5C,#3E5C34);}
 #ui-root .sk-up.fam-grove .g{background:radial-gradient(120% 120% at 30% 20%,#6E86B4,#33456E);}
-#ui-root .sk-up h3{grid-column:2;grid-row:1;font-family:var(--serif);font-size:calc(var(--u)*.92);letter-spacing:.05em;color:#332B22;}
-#ui-root .sk-up .fv{grid-column:2/4;grid-row:2;font-family:var(--serif);font-style:italic;font-size:calc(var(--u)*.72);
+#ui-root .sk-up h3{grid-column:2;grid-row:1;font-family:var(--serif);font-size:calc(var(--u)*.96);letter-spacing:.05em;color:#332B22;}
+#ui-root .sk-up .fv{grid-column:2;grid-row:2;font-family:var(--serif);font-style:italic;font-size:var(--t-sec);
   color:var(--ink-soft);line-height:1.35;margin-top:calc(var(--u)*.1);}
-#ui-root .sk-up .cost{grid-column:3;grid-row:1;text-align:right;white-space:nowrap;}
-#ui-root .sk-up .cost .v{font-family:var(--serif);font-size:calc(var(--u)*.92);color:#4A3C22;}
-#ui-root .sk-up.buy .cost .v{color:#7A5A10;}
-#ui-root .sk-up.poor .cost .v{color:${T.no};}
-#ui-root .sk-up.own .cost .v{color:${T.ok};}
+#ui-root .sk-up .sk-buy{grid-column:3;grid-row:1/3;min-width:134px;min-height:34px;}
+#ui-root .sk-up.buy .sk-buy{animation:sk-afford 2.2s ease-in-out infinite;}
+#ui-root .sk-up.poor .sk-buy{
+  background:linear-gradient(180deg,rgba(230,216,184,.95),rgba(196,180,146,.92));
+  border-color:rgba(110,84,30,.65);
+  box-shadow:0 2px 5px rgba(60,44,26,.3) inset,0 1px 0 rgba(255,255,255,.55);}
+#ui-root .sk-up.poor .sk-buy .v{color:#6E3225;}
+#ui-root .sk-up.poor .sk-buy .x{color:#5A4B36;background:rgba(255,253,246,.55);border-color:rgba(74,64,52,.4);}
 
 /* ================= centred overlay ================= */
 #ui-root .sk-scrim{position:absolute;inset:0;display:grid;place-items:center;pointer-events:auto;
@@ -601,11 +863,18 @@ export function uiCss() {
   border-top:1px solid rgba(60,46,26,.4);display:flex;flex-direction:column;justify-content:center;gap:calc(var(--u)*.12);}
 #ui-root .sk-rc .nameplate .jp{font-family:var(--serif);font-size:calc(var(--u)*.86);color:#332B22;
   letter-spacing:.04em;text-align:center;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;}
-#ui-root .sk-rc .nameplate .en{font-size:calc(var(--u)*.62);color:var(--ink-faint);letter-spacing:.12em;
+#ui-root .sk-rc .nameplate .en{font-size:calc(var(--u)*.66);color:var(--ink-faint);letter-spacing:.1em;
   text-align:center;text-transform:uppercase;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;}
 #ui-root .sk-stars{display:flex;justify-content:center;gap:1px;height:calc(var(--u)*.86);}
 #ui-root .sk-stars i{width:calc(var(--u)*.8);height:calc(var(--u)*.8);background:${star} no-repeat center/contain;}
 #ui-root .sk-stars i.off{background-image:${starOff};}
+/* on parchment the cream star vanishes — use the outlined gold cut, and at a
+   size a player can actually count: .84u = 11.1 px at 1080p (u = 13.26 px).
+   The r2 review measured the old .64u row (~8.5 px, no outline) as unreadable. */
+#ui-root .sk-stars.ink{height:calc(var(--u)*.9);gap:0;}
+#ui-root .sk-stars.ink i{width:calc(var(--u)*.84);height:calc(var(--u)*.84);background-image:${starInk};
+  filter:drop-shadow(0 1px 1px rgba(60,44,14,.42));}
+#ui-root .sk-stars.ink i.off{background-image:${starInkOff};filter:none;}
 #ui-root .sk-rc .shine{position:absolute;inset:0;pointer-events:none;opacity:0;
   background:linear-gradient(102deg,rgba(255,255,255,0) 40%,rgba(255,255,255,.82) 50%,rgba(255,255,255,0) 60%);
   background-size:250% 100%;background-position:200% 0;}
@@ -645,13 +914,15 @@ export function uiCss() {
 #ui-root .sk-row{display:flex;align-items:center;justify-content:space-between;gap:calc(var(--u)*.8);
   padding:calc(var(--u)*.5) 0;border-bottom:1px dashed rgba(74,64,52,.22);}
 #ui-root .sk-row .lbl{font-family:var(--serif);font-size:calc(var(--u)*.9);color:#332B22;letter-spacing:.06em;}
-#ui-root .sk-row .sub{font-size:calc(var(--u)*.7);color:var(--ink-faint);margin-top:2px;}
+#ui-root .sk-row .sub{font-size:var(--t-sec);color:var(--ink-faint);margin-top:2px;}
 #ui-root textarea.sk-io{width:100%;height:calc(var(--u)*6.2);resize:none;font-family:ui-monospace,Menlo,Consolas,monospace;
   font-size:calc(var(--u)*.68);line-height:1.5;color:#4A3F30;padding:calc(var(--u)*.5);
   background:rgba(255,253,246,.72);border:1px solid rgba(74,64,52,.35);border-radius:2px;
   box-shadow:0 1px 3px rgba(60,44,26,.16) inset;}
 #ui-root input.sk-in{font:inherit;font-size:calc(var(--u)*.8);padding:calc(var(--u)*.3) calc(var(--u)*.55);
-  background:rgba(255,253,246,.8);border:1px solid rgba(74,64,52,.35);border-radius:2px;color:#4A3F30;width:calc(var(--u)*10);}
+  background:linear-gradient(180deg,rgba(246,240,226,.9),rgba(255,253,246,.85));
+  border:1px solid rgba(74,64,52,.42);border-radius:2px;color:#4A3F30;width:calc(var(--u)*10);
+  box-shadow:0 2px 4px rgba(60,44,26,.16) inset,0 1px 0 rgba(255,255,255,.6);}
 
 /* ================= stage-up set piece ================= */
 #ui-root .sk-stageup{position:absolute;inset:0;display:grid;place-items:center;pointer-events:none;z-index:6;
@@ -727,14 +998,24 @@ export function uiCss() {
   box-shadow:0 0 calc(var(--u)*.8) rgba(255,216,120,.95);}
 #ui-root .sk-golden span{font-family:var(--serif);font-size:calc(var(--u)*.82);letter-spacing:.16em;color:#FFEFC4;}
 
-#ui-root .sk-bulk{display:flex;gap:2px;}
-#ui-root .sk-bulk button{font-size:calc(var(--u)*.68);letter-spacing:.1em;padding:calc(var(--u)*.2) calc(var(--u)*.5);
-  border:1px solid rgba(74,64,52,.32);border-radius:2px;color:var(--ink-soft);
-  background:linear-gradient(180deg,rgba(255,252,244,.7),rgba(226,214,192,.55));
-  transition:background .14s ease,color .14s ease,border-color .14s ease;}
-#ui-root .sk-bulk button:hover{border-color:rgba(74,64,52,.6);color:var(--ink);}
-#ui-root .sk-bulk button.on{background:linear-gradient(180deg,${T.goldHi},${T.goldLo});color:#2E2318;
-  border-color:#7A5A18;box-shadow:0 1px 0 rgba(255,255,255,.55) inset;font-weight:700;}
+/* gold segmented control — one bevelled shell, inset parchment segments, the
+   active segment on the §7 gold gradient.  Replaces four flat 1-px rectangles. */
+#ui-root .sk-seg{display:flex;border-radius:4px;overflow:hidden;
+  border:1px solid rgba(74,64,52,.62);
+  background:linear-gradient(180deg,rgba(206,192,166,.85),rgba(234,224,204,.7));
+  box-shadow:0 2px 5px rgba(60,44,26,.26) inset,0 1px 0 rgba(255,255,255,.6),
+             0 1px 3px rgba(50,36,20,.2);}
+#ui-root .sk-seg button{position:relative;font-size:var(--t-sec);letter-spacing:.08em;
+  padding:calc(var(--u)*.28) calc(var(--u)*.66);color:${T.inkSoft};font-weight:600;
+  transition:background .14s ease,color .14s ease,box-shadow .14s ease;}
+#ui-root .sk-seg button+button{border-left:1px solid rgba(74,64,52,.3);
+  box-shadow:-1px 0 0 rgba(255,255,255,.4);}
+#ui-root .sk-seg button:hover{color:${T.ink};background:rgba(255,252,240,.5);}
+#ui-root .sk-seg button.on{background:linear-gradient(180deg,${T.goldHi} 0%,#E3C270 42%,${T.goldLo} 100%);
+  color:#2E2318;font-weight:700;
+  box-shadow:0 1px 0 rgba(255,255,255,.66) inset,0 -3px 6px rgba(120,84,16,.34) inset;}
+#ui-root .sk-seg button.on::after{content:"";position:absolute;left:0;right:0;top:0;height:44%;
+  background:linear-gradient(180deg,rgba(255,253,235,.5),rgba(255,253,235,0));pointer-events:none;}
 
 #ui-root .sk-detail{margin-top:calc(var(--u)*.8);padding:calc(var(--u)*.6) calc(var(--u)*1.0);
   text-align:center;min-height:calc(var(--u)*4.4);
@@ -745,7 +1026,7 @@ export function uiCss() {
 #ui-root .sk-legend{display:flex;gap:calc(var(--u)*1.0);justify-content:center;flex-wrap:wrap;
   margin-top:calc(var(--u)*.7);}
 #ui-root .sk-legend>span{display:flex;align-items:center;gap:calc(var(--u)*.3);
-  font-size:calc(var(--u)*.74);color:#5A4D3C;letter-spacing:.12em;}
+  font-size:var(--t-sec);color:#544733;letter-spacing:.1em;}
 #ui-root .sk-legend i{width:calc(var(--u)*.52);height:calc(var(--u)*.52);border-radius:99px;
   border:1px solid rgba(74,64,52,.45);}
 #ui-root .sk-legend .sk-kanji{font-size:calc(var(--u)*.86);color:#332B22;}
@@ -754,8 +1035,10 @@ export function uiCss() {
   margin-top:calc(var(--u)*.4);}
 #ui-root .sk-ach{display:flex;align-items:center;gap:calc(var(--u)*.4);min-width:0;
   padding:calc(var(--u)*.24) calc(var(--u)*.45);border-radius:2px;
-  border:1px solid rgba(74,64,52,.16);background:rgba(255,252,244,.4);
-  font-size:calc(var(--u)*.7);color:var(--ink-faint);}
+  border:1px solid rgba(74,64,52,.22);
+  background:linear-gradient(180deg,rgba(255,252,244,.55),rgba(226,214,192,.42));
+  box-shadow:0 1px 0 rgba(255,255,255,.5) inset,0 1px 2px rgba(60,44,26,.1);
+  font-size:var(--t-sec);color:var(--ink-faint);}
 #ui-root .sk-ach span{white-space:nowrap;overflow:hidden;text-overflow:ellipsis;}
 #ui-root .sk-ach i{width:calc(var(--u)*.66);height:calc(var(--u)*.66);border-radius:99px;flex:0 0 auto;
   background:rgba(74,64,52,.18);}

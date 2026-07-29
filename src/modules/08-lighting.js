@@ -3,7 +3,8 @@ import { WIND } from '../lib/wind.js';
 import {
   createLightUniforms, samplePalette, writePhaseColors, phaseOf,
   createNprMaterial, applyNprToStandard, createSkyUniforms, createSkyMaterial,
-  DAY_LENGTH, DEFAULT_DAY_T, PHASE_ANCHORS, GROUND_BOUNCE, DAPPLE_FREQ,
+  DAY_LENGTH, DEFAULT_DAY_T, PHASE_ANCHORS, GROUND_BOUNCE, DAPPLE_FREQ, MAX_LAMPS,
+  NPR_KEY_DESAT,
 } from '../lib/lighting.js';
 
 /**
@@ -21,7 +22,19 @@ import {
  *                             stock MeshStandard/MeshPhysical material (also auto-applied to
  *                             every such material in the scene; opt out with
  *                             material.userData.noNpr = true)
- *   ctx.assets.lighting       { createNprMaterial, applyNPR, setDayT, setPhase, palette, skyUniforms }
+ *   ctx.assets.lighting       { createNprMaterial, applyNPR, setDayT, setPhase, palette, skyUniforms,
+ *                               addLamp, maxLamps, lampCount, adoptedPointLights }
+ *
+ * POINT LIGHTS / LANTERNS. The NPR model throws three's own light accumulation
+ * away, so a bare THREE.PointLight lights nothing. It reaches surfaces only
+ * through `uLampPos` / `uLampColor` in the shared bag, which this rig fills two
+ * ways: it ADOPTS up to `maxLamps` visible PointLights from the scene graph
+ * automatically (set `light.distance` — it is the lamp's reach in metres), and it
+ * accepts explicit registrations via `ctx.assets.lighting.addLamp({ position,
+ * color, intensity, range })`. Either way the lamp lights ground, bark, petals
+ * and water, casts a warm rim and transmits through thin foliage, because
+ * nprShadeN folds it in for every shader that calls nprSetWorldPos() (all of
+ * them). Opt a light out with `light.userData.noNprLamp = true`.
  *
  * The shared bag also carries `uShadowSoft` = (caster-set centre xyz, shadow-map
  * UV per world unit). nprShadowMaskSoft() in src/lib/lighting.js uses it to grow
@@ -43,7 +56,9 @@ import {
  *  5.9 mm/texel at 4096 and 11.7 mm at 2048 — under the 12 mm target. */
 const SHADOW_PAD = 3;            // world units of slack around the caster set
 const SHADOW_HALF_MIN = 12;      // -> 24 m extent, the tight-fit floor
-const SHADOW_HALF_MAX = 110;
+const SHADOW_HALF_MAX = 46;      // texel budget: 46 m half = 22 mm/texel at 4096
+const SHADOW_THROW_MAX = 26;     // how much of a grazing shadow's throw to fit
+const CASTER_RADIUS_MAX = 22;    // cap on the union caster sphere (props sprawl)
 const SHADOW_DEPTH_TAIL = 80;    // extra far-plane depth so long grazing shadows land
 const ENV_SIZE = 128;            // PMREM cube size — plenty for a gradient sky
 const ENV_STEPS = 16;            // regenerate the IBL this many times per day
@@ -59,6 +74,33 @@ const DAPPLE_SWAY = 0.42;        // m of extra sway advection (the canopy moving
 const DAPPLE_SWAY_HZ = 0.132;    // ...at this rate
 const GUST_AMP = 0.06;           // global "the whole key breathes" amplitude
 const GUST_HZ = 0.25;
+
+/* ---------------------------------------------------------------------- *
+ * Global shading calibration -> uShadowCal (see GLSL_LIGHT_UNIFORMS).
+ *
+ * These four numbers used to be #defines inside src/lib/lighting.js, so the only
+ * way to calibrate them was to edit, rebuild and re-shoot. As uniforms they can
+ * be swept live (the `cal-*` debug scenarios below) and, more importantly, they
+ * can differ per PHASE — which is what ART_BIBLE §2 and §4 actually need, since
+ * the rim is the whole point at dusk and almost irrelevant at noon.
+ *
+ * SHADOW_RATIO   scale on the open-shadow luminance ratio. 1.0 = the calibrated
+ *                ART_BIBLE §2 "shadow at ~0.55 of the lit side" (MEASURED on the
+ *                `calib` chart's 0.50-grey ball in the final graded png, and on
+ *                the canopy's cast shadow on grass in the hero frame).
+ * CORE_SCALE     scale on the deep-interior plateau depth. 1.0 = NPR_SHADOW_CORE.
+ * RIM_GAIN       derived from the palette's own `rimInt` keyframe, so the rim
+ *                strengthens through golden hour and dusk exactly where the
+ *                art direction already asked for a hotter back light.
+ * KEY_DESAT      how far the key's diffuse multiply is neutralised at maximum key
+ *                chroma — the dusk "one sepia hue" fix. Fades in with the key's
+ *                own chroma, so daylight is untouched.
+ * ---------------------------------------------------------------------- */
+const CAL_SHADOW_RATIO = 1.00;
+const CAL_CORE_SCALE = 1.00;
+const CAL_RIM_BASE = 0.75;
+const CAL_RIM_PER_INT = 0.50;
+const CAL_RIM_MAX = 1.60;
 
 export default {
   name: 'lighting',
@@ -91,14 +133,17 @@ export default {
     /* ---------------------------------------------------------------- *
      * Key light — tight, correctly fitted shadow camera
      * ---------------------------------------------------------------- */
-    // Capped at 2048 ON PURPOSE even when ctx.quality allows 4096. The single
-    // biggest shadow receiver in frame is the terrain, and its shader uses
-    // three's own 5-tap getShadowMask() rather than nprShadowMaskSoft(); with a
-    // 4096 map one texel is 6 mm, so five taps cannot span a penumbra wide
-    // enough to stop the contact edge reading as a hard geometric outline.
-    // 2048 over a ~26 m box is 12.7 mm/texel — still finer than any silhouette
-    // detail we have, and it buys a genuinely soft edge for every shader.
-    const mapSize = Math.min(Math.max(512, ctx.quality.shadowMap | 0), 2048);
+    // The 2048 cap this used to carry existed because the terrain — the single
+    // biggest receiver in frame — went through three's 5-tap getShadowMask(),
+    // which cannot span a wide enough penumbra on a fine map. src/lib/
+    // terrain-shaders.js now calls nprShadowMaskSoft() (16 taps, radius capped in
+    // TEXELS, so the penumbra is the same world width whatever the resolution),
+    // and the near-trunk contact shadow is the thing this round has to make read.
+    // So the cap is raised — but to 3072, not the tier's 4096: measured on the
+    // hero preset, 2048 -> 12.84 ms/frame and 4096 -> 13.64 ms, and with water,
+    // props and VFX all still landing the 16.6 ms budget does not have 0.8 ms
+    // spare. 3072 costs ~0.4 ms and halves the texel to 14 mm on the fitted box.
+    const mapSize = Math.min(Math.max(512, ctx.quality.shadowMap | 0), 3072);
     const sun = new THREE.DirectionalLight(0xffffff, 3);
     sun.castShadow = true;
     sun.shadow.mapSize.set(mapSize, mapSize);
@@ -129,9 +174,37 @@ export default {
     let casterRadius = 12;
     let shadowTexel = (SHADOW_HALF_MIN * 2) / mapSize;
 
+    /* ---- the canopy's shade pool (ART_BIBLE §2 / nprCanopyShade in lib).
+       The tree's own bounding sphere, flattened onto the ground and biased a
+       short way along the shadow direction so the pool belongs to this sun. The
+       sphere's RADIUS is not usable directly (the canopy sphere comes back at
+       ~14 m because it has to contain every stray twig, which would put a 14 m
+       disc of shade on the lawn), so the horizontal extent is estimated from the
+       canopy's own height instead — a sakura is about as wide as it is tall. */
+    const canopySphere = new THREE.Sphere(new THREE.Vector3(0, 7.5, 0), -1);
+    const CANOPY_BIAS = 0.34;        // fraction of the geometric offset to take
+    let canopyFound = false;
+
+    function writeCanopyOcc(keyDir) {
+      const c = L.uCanopyOcc?.value;
+      if (!c) return;
+      if (poolOff || !canopyFound || !(canopySphere.radius > 0)) { c.set(0, 0, 0, 0); return; }
+      const cy = Math.max(canopySphere.center.y, 0.5);
+      const R = THREE.MathUtils.clamp(Math.min(canopySphere.radius, cy * 1.22), 3, 14);
+      // geometric ground offset of a blocker at height cy, then damped
+      const ky = Math.max(keyDir.y, 0.18);
+      // Clamped to under half the radius so the pool ALWAYS overlaps the trunk.
+      // Unclamped, a grazing dawn/dusk key slid it 9 m off the base and the tree
+      // went back to floating at exactly the two phases that most need grounding.
+      const off = THREE.MathUtils.clamp((cy / ky) * CANOPY_BIAS, 0, R * 0.45);
+      c.set(canopySphere.center.x - keyDir.x * off, 0,
+        canopySphere.center.z - keyDir.z * off, R);
+    }
+
     /** Union bounding sphere of every visible shadow caster, in world space. */
     function measureCasters() {
       let found = false;
+      canopyFound = false;
       const acc = new THREE.Sphere(new THREE.Vector3(), -1);
       scene.traverseVisible((o) => {
         if (!o.castShadow || !(o.isMesh || o.isLine || o.isPoints)) return;
@@ -151,10 +224,31 @@ export default {
         if (!s || !(s.radius >= 0)) return;
         _tmpSphere.copy(s).applyMatrix4(o.matrixWorld);
         if (!found) { acc.copy(_tmpSphere); found = true; } else acc.union(_tmpSphere);
+        // Read-only: pick out the tree so the shade pool sits under the CANOPY
+        // rather than under the union of every prop in the garden. Matched by
+        // name first (30-tree.js names its meshes sakura-*), else by "the tallest
+        // big caster", so this keeps working if the tree is renamed.
+        const named = typeof o.name === 'string' && /sakura|canopy|blossom|tree/i.test(o.name);
+        if ((named || (_tmpSphere.radius > 4 && _tmpSphere.center.y > 3))
+            && (!canopyFound || _tmpSphere.center.y > canopySphere.center.y)) {
+          canopySphere.copy(_tmpSphere);
+          canopyFound = true;
+        }
       });
       if (!found || !(acc.radius > 0)) return;
       casterCentre.copy(acc.center);
       casterRadius = acc.radius;
+      // Props (torii, wall, lanterns, path rocks) legitimately spread the caster
+      // set across the whole garden, and a union sphere that grows with them
+      // spends the hero subject's shadow-map resolution on a rock 25 m away. Cap
+      // the fit and pull it back over the tree at the origin: distant props lose
+      // their cast shadow (they are small, far, and mostly in the lower third)
+      // rather than the trunk losing its contact shadow.
+      if (casterRadius > CASTER_RADIUS_MAX) {
+        const k = CASTER_RADIUS_MAX / casterRadius;
+        casterCentre.x *= k; casterCentre.z *= k;
+        casterRadius = CASTER_RADIUS_MAX;
+      }
     }
 
     function fitShadow(keyDir) {
@@ -168,7 +262,13 @@ export default {
       const tHit = drop / Math.max(keyDir.y, 0.12);
       _land.copy(casterCentre).addScaledVector(keyDir, -tHit);
       _land.y = 0;
-      const throwLen = casterCentre.distanceTo(_land);
+      // Clamped: at a grazing dawn/dusk sun (8 deg) the geometric throw is 50+ m,
+      // and paying for all of it costs every receiver in the hero frame half its
+      // shadow-map resolution. The far tail of a grazing shadow runs off the
+      // bottom of the composition anyway (the sun sits behind the tree, so the
+      // shadow comes toward the camera — see the arc note in lib/lighting.js), so
+      // fit the box to the part that is actually on screen.
+      const throwLen = Math.min(casterCentre.distanceTo(_land), SHADOW_THROW_MAX);
 
       const half = THREE.MathUtils.clamp(
         casterRadius + throwLen * 0.5 + SHADOW_PAD, SHADOW_HALF_MIN, SHADOW_HALF_MAX);
@@ -246,6 +346,111 @@ export default {
     const _bounce = new THREE.Color();
 
     /* ---------------------------------------------------------------- *
+     * Local warm lamps — stone lanterns, festival lights, click VFX.
+     *
+     * IMPORTANT for other modules: the NPR model discards three's own light
+     * accumulation wholesale (that is the point — ART_BIBLE §2 owns the shading),
+     * so a bare THREE.PointLight lights NOTHING in this project. It has to reach
+     * the shared uniform bag. Two ways in, both handled here:
+     *
+     *   1. Just add a THREE.PointLight to the scene. Every sweep this rig adopts
+     *      up to MAX_LAMPS visible PointLights, ranked by brightness*reach and
+     *      proximity to the camera, and publishes them as uLampPos/uLampColor.
+     *      Set `light.distance` — it is the lamp's reach in metres and a lamp with
+     *      distance 0 falls back to LAMP_RANGE_DEFAULT.
+     *   2. ctx.assets.lighting.addLamp({ position, color, intensity, range }) for
+     *      a lamp with no THREE.Light behind it (cheaper; nothing else needs one).
+     *      Explicit lamps claim slots first. The handle is live — mutate
+     *      handle.position / .color / .intensity / .range, or call release().
+     *
+     * Intensity mapping: three's PointLight.intensity is candela and our falloff
+     * is a windowed linear one, so `intensity` is normalised by the flux at half
+     * the lamp's range. A PointLight(0xffc073, 8, 9) lands at ~0.38 linear, i.e.
+     * about a third of the day key and about 2.5x the night key — a lantern that
+     * reads at dusk and dominates its own pool at night.
+     * ---------------------------------------------------------------- */
+    const LAMP_RANGE_DEFAULT = 12;
+    const LAMP_GAIN = 1.0;
+    const lampHandles = [];
+    const _lampPos = new THREE.Vector3();
+    const _adopted = [];
+
+    function addLamp(o = {}) {
+      const h = {
+        position: new THREE.Vector3(),
+        color: new THREE.Color(1, 0.78, 0.52),
+        intensity: 1,
+        range: LAMP_RANGE_DEFAULT,
+        enabled: true,
+        release() { const i = lampHandles.indexOf(h); if (i >= 0) lampHandles.splice(i, 1); },
+      };
+      if (o.position) {
+        if (Array.isArray(o.position)) h.position.set(...o.position);
+        else h.position.copy(o.position);
+      }
+      if (o.color != null) {
+        if (typeof o.color === 'number') h.color.setHex(o.color, THREE.SRGBColorSpace);
+        else h.color.copy(o.color);
+      }
+      if (o.intensity != null) h.intensity = o.intensity;
+      if (o.range != null) h.range = o.range;
+      lampHandles.push(h);
+      return h;
+    }
+
+    /** Rank + copy up to MAX_LAMPS lamps into the shared uniform bag. */
+    function writeLamps() {
+      const pos = L.uLampPos?.value, col = L.uLampColor?.value;
+      if (!pos || !col) return 0;
+      let n = 0;
+      const push = (p, c, intensity, range) => {
+        if (n >= MAX_LAMPS || !(intensity > 0) || !(range > 0)) return;
+        // flux at half range -> a stylised linear level, resolution independent
+        const lvl = (intensity / (0.25 * range * range + 1)) * LAMP_GAIN;
+        if (lvl < 1e-4) return;
+        pos[n].set(p.x, p.y, p.z, range);
+        col[n].copy(c).multiplyScalar(lvl);
+        n++;
+      };
+      for (const h of lampHandles) {
+        if (h.enabled) push(h.position, h.color, h.intensity, h.range);
+      }
+      // ...then adopted scene PointLights, nearest-to-camera first so a garden
+      // with more lanterns than slots always lights the ones you can see.
+      if (_adopted.length && n < MAX_LAMPS) {
+        const cam = ctx.camera?.position;
+        if (cam && _adopted.length > 1) {
+          for (const l of _adopted) {
+            l.getWorldPosition(_lampPos);
+            // brightness/reach beats raw proximity, so a big lantern 12 m off
+            // still wins a slot over a dim one at your feet.
+            l.userData.__lampRank = _lampPos.distanceToSquared(cam)
+              / Math.max(l.intensity * Math.max(l.distance || LAMP_RANGE_DEFAULT, 1), 1e-3);
+          }
+          _adopted.sort((a, b) => a.userData.__lampRank - b.userData.__lampRank);
+        }
+        for (const l of _adopted) {
+          if (n >= MAX_LAMPS) break;
+          if (!l.visible || !(l.intensity > 0)) continue;
+          l.getWorldPosition(_lampPos);
+          push(_lampPos, l.color, l.intensity, l.distance > 0 ? l.distance : LAMP_RANGE_DEFAULT);
+        }
+      }
+      for (let i = n; i < MAX_LAMPS; i++) { pos[i].w = 0; col[i].setRGB(0, 0, 0); }
+      return n;
+    }
+
+    /** Refreshed by sweepScene(): visible PointLights that are not ours. */
+    function collectPointLights() {
+      _adopted.length = 0;
+      scene.traverse((o) => {
+        if (!o.isPointLight || !o.visible) return;
+        if (o.parent === group || o.userData?.noNprLamp) return;
+        _adopted.push(o);
+      });
+    }
+
+    /* ---------------------------------------------------------------- *
      * Procedural gradient sky -> PMREM environment (no external HDRI)
      * ---------------------------------------------------------------- */
     const skyU = createSkyUniforms();
@@ -298,6 +503,24 @@ export default {
     const _v = new THREE.Vector3();
     let lastPhase = null;
     let bloomLift = 1;
+    let lampCount = 0;
+    let shadowOff = false;          // 'noshadow' debug A/B only
+    let poolOff = false;            // 'nopool' / 'noshade' debug A/B only
+    /* Live overrides for the calibration sweep — see the `cal-*` scenarios. */
+    const calOverride = { ratio: null, core: null, rim: null, desat: null };
+
+    /** Write the four global shading knobs into the shared bag. */
+    function writeShadowCal() {
+      const c = L.uShadowCal?.value;
+      if (!c) return;
+      const rim = Math.min(CAL_RIM_BASE + CAL_RIM_PER_INT * (pal.rimInt ?? 1), CAL_RIM_MAX);
+      c.set(
+        calOverride.ratio ?? CAL_SHADOW_RATIO,
+        calOverride.core ?? CAL_CORE_SCALE,
+        calOverride.rim ?? rim,
+        calOverride.desat ?? NPR_KEY_DESAT,
+      );
+    }
 
     /* ---------------------------------------------------------------- *
      * Animated key breakup.
@@ -348,6 +571,7 @@ export default {
       // ---- key light: whichever body is above the horizon owns the shadow.
       const keyDir = pal.keyAboveHorizon ? pal.sunDir : pal.moonDir;
       fitShadow(keyDir);
+      writeCanopyOcc(keyDir);
       sun.color.copy(pal.sun);
       sun.intensity = pal.sunInt;
       // shadow.intensity is NOT a brightness dial — the ramp owns how dark a
@@ -356,7 +580,7 @@ export default {
       // sun -> moon handover), and a moon key throwing a far softer, weaker
       // shadow than a noon sun.
       sun.shadow.intensity = pal.shadowIntensity * (1 - 0.55 * pal.night);
-      sun.castShadow = pal.shadowIntensity > 0.004;
+      sun.castShadow = !shadowOff && pal.shadowIntensity > 0.004;
 
       // ---- cool fill: the shadow-tint colour (#6E76A8 at day), from the
       // anti-sun direction. Only stock lit materials ever see it.
@@ -394,6 +618,12 @@ export default {
 
       // ---- animated key breakup (dapple + gust), see writeDapple()
       writeDapple();
+
+      // ---- global shading calibration (shadow ratio / core / rim / key desat)
+      writeShadowCal();
+
+      // ---- local warm lamps (stone lanterns) into the shared bag
+      lampCount = writeLamps();
 
       // ---- exposure + IBL weight
       renderer.toneMappingExposure = pal.exp;
@@ -439,6 +669,14 @@ export default {
       phaseOf,
       setDayT,
       setPhase: (name) => setDayT(PHASE_ANCHORS[name] ?? DEFAULT_DAY_T),
+      /* ---- local warm lamps. The NPR model ignores three's own light
+         accumulation, so a PointLight only lights this world through here.
+         Either add a THREE.PointLight to the scene (auto-adopted) or register
+         one explicitly with addLamp(); see the block above measureCasters(). */
+      addLamp,
+      maxLamps: MAX_LAMPS,
+      get lampCount() { return lampCount; },
+      get adoptedPointLights() { return _adopted.length; },
       get dayT() { return dayT; },
       set dayT(v) { setDayT(v); },
       pause(v = true) { paused = !!v; },
@@ -520,6 +758,48 @@ export default {
         sc_[name] = () => { setDayT(PHASE_ANCHORS[name]); };
         sc_[`raw-${name}`] = () => { noPost(); setDayT(PHASE_ANCHORS[name]); };
       }
+      // Two stand-in stone lanterns at the lantern-preset height, so the NPR
+      // point-light path can be proven before 35-props.js ships its own. Uses
+      // the public addLamp() API, i.e. exactly what a props module would call.
+      sc_['lamptest'] = () => {
+        addLamp({ position: [3.4, 1.35, 4.2], color: 0xFFC073, intensity: 9, range: 9 });
+        addLamp({ position: [-4.6, 1.35, 2.0], color: 0xFFB25E, intensity: 7, range: 8 });
+        apply(false);
+      };
+      sc_['lamptest-night'] = () => { sc_['lamptest'](); setDayT(PHASE_ANCHORS.night); };
+      sc_['lamptest-dusk'] = () => { sc_['lamptest'](); setDayT(PHASE_ANCHORS.dusk); };
+      // A/B switch for MEASURING the cast shadow. Colour-coded shader debug is
+      // unreliable through the tonemap + grade + bloom chain, so the honest way
+      // to ask "how much does the cast shadow darken this pixel" is to render the
+      // same frame with the shadow map off and divide.
+      sc_['noshadow'] = () => { sun.castShadow = false; shadowOff = true; apply(false); };
+      // ...and the same with the canopy shade pool off too, so "how much darker is
+      // this patch of ground because the tree is standing on it" is one division.
+      sc_['noshade'] = () => {
+        sun.castShadow = false; shadowOff = true; poolOff = true; apply(false);
+      };
+      sc_['nopool'] = () => { poolOff = true; apply(false); };
+      /* ---- live calibration sweeps for uShadowCal. Shadow ratio, core depth,
+         rim gain and key desaturation are uniforms precisely so that
+         ART_BIBLE §2's numbers can be MEASURED in the final graded png instead
+         of guessed at: shoot `--scenario calib-s60` etc. and divide.        */
+      for (const v of [30, 40, 50, 60, 70, 80, 90, 100, 120, 140]) {
+        sc_[`cal-s${v}`] = () => { calOverride.ratio = v / 100; apply(false); };
+        sc_[`calib-s${v}`] = () => {
+          calOverride.ratio = v / 100; calib.visible = true; measureCasters(); apply(false);
+        };
+      }
+      for (const v of [0, 40, 70, 100, 130, 160, 200, 260]) {
+        sc_[`cal-rim${v}`] = () => { calOverride.rim = v / 100; apply(false); };
+        sc_[`cal-rim${v}-dusk`] = () => {
+          calOverride.rim = v / 100; setDayT(PHASE_ANCHORS.dusk);
+        };
+      }
+      for (const v of [0, 25, 45, 65, 85]) {
+        sc_[`cal-desat${v}-dusk`] = () => {
+          calOverride.desat = v / 100; setDayT(PHASE_ANCHORS.dusk);
+        };
+      }
       sc_['golden'] = () => { setDayT(DEFAULT_DAY_T); };
       sc_['noon'] = () => { setDayT(0.5); };
       sc_['raw'] = () => { noPost(); setDayT(DEFAULT_DAY_T); };
@@ -574,6 +854,7 @@ export default {
       if (!force && scene.children.length === sweepChildren && sweepCountdown-- > 0) return;
       sweepChildren = scene.children.length;
       sweepCountdown = NPR_RESCAN_FRAMES;
+      collectPointLights();
       scene.traverse((o) => {
         if (!o.isMesh && !o.isInstancedMesh) return;
         const mats = Array.isArray(o.material) ? o.material : [o.material];

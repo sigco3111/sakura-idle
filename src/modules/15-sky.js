@@ -12,14 +12,19 @@ import {
  *
  * What the rest of the scene can use (published on ctx.assets.sky):
  *   uniforms   the whole sky uniform bag (shared by reference — read, never replace)
- *   colors     { zenith, mid, horizon, haze, fog, cloudLit, cloudDark, sun, moon }
+ *   colors     { zenith, mid, horizon, haze, hazeWarm, fog, cloudLit, cloudDark, sun, moon }
  *              live THREE.Color objects in LINEAR space, re-lerped every frame from
  *              the ART_BIBLE palette rows. Water/props can tint reflections with these.
- *   noiseA/B   the baked tiling fbm textures (R = height, GB = ∂H, A = warp/detail)
+ *   noiseA/B/C the baked tiling noise (R = height, GB = ∂H, A = warp/detail). C is the
+ *              cumulus field: a billow fbm whose GB gradient is taken from a BLURRED
+ *              copy, so a relief normal built from it follows the big lobes and not
+ *              the finest wrinkles (that is what stops clouds reading as foil).
  *   gradScale  decode scale for the GB gradient channels
  *   u          current 0..1 position in the day cycle
  *   phase      last `time:phase` payload
  *   sunDir     the direction the sky believes the sun is in (shared with lighting if present)
+ *   moonDir    the shading moon direction (08-lighting's, when present). NOTE the moon
+ *              DISC is drawn along uniforms.uMoonRender instead — see placeMoonDisc().
  *   nightMix   0 day … 1 night
  *   sample(dir) CPU evaluation of the sky gradient — cheap ambient/reflection lookup
  */
@@ -32,6 +37,7 @@ const KEYS = SKY_KEYS.map((k) => ({
   u: k.u,
   col: {
     zenith: C(k.zenith), mid: C(k.mid), horizon: C(k.horizon), haze: C(k.haze),
+    hazeWarm: C(k.hazeWarm ?? k.haze),
     sun: C(k.sun), glow: C(k.glow), fog: C(k.fog),
     cloudLit: C(k.cloudLit), cloudDark: C(k.cloudDark),
     cloudAmb: C(k.cloudAmb), cloudRim: C(k.cloudRim),
@@ -47,34 +53,51 @@ const KEYS = SKY_KEYS.map((k) => ({
   cov: k.cov,
 }));
 
-/* per-layer cloud constants: x = lowest / nearest … w = cirrus
+/* ── per-layer cloud constants: x = lowest / nearest … w = cirrus ──────────
  *
- * The slab now uses a real 1/sin(elevation) ray length (see cloudLayer), so uv
- * per unit angle scales with hgt on its own — which is physically right: a
- * higher deck is further away, so its features subtend a smaller angle. The
- * scale therefore stays roughly CONSTANT across layers instead of shrinking
- * with height; shrinking it fought the perspective and flattened the deck. */
-const CLOUD_H = [1.00, 1.75, 2.90, 6.20];
-const CLOUD_S = [0.200, 0.140, 0.098, 0.052];
-const CLOUD_V = [0.0210, 0.0165, 0.0125, 0.0085];
-const CLOUD_P = [0.72, 0.58, 0.38, 0.10];
-const CLOUD_B = [0.28, 0.23, 0.17, 0.09];
-const CLOUD_W = [0.135, 0.110, 0.085, 0.055];
-const CLOUD_T = [1.00, 1.10, 1.28, 1.95];   // uv stretch along the wind (cirrus streaks)
-const CLOUD_A = [1.00, 0.82, 0.52, 0.26];   // per-layer opacity
-const COV_BASE = [0.575, 0.622, 0.672, 0.748];
-/* High-sky budget. The upper third of the frame must read as saturated sky, not
- * as a uniform cirrus smear (§8.2 / §8.11): above ~25° elevation each layer's
- * coverage threshold is RAISED (less of the noise field crosses it) and its
- * opacity scaled down, hardest on the cirrus deck. */
-const CLOUD_ZC = [0.030, 0.080, 0.150, 0.240];
-const CLOUD_ZA = [0.90, 0.72, 0.46, 0.30];
+ * The deck is a pow-compressed cloud-plane projection (see cloudLayer in
+ * sky-shaders.js), so the two shape knobs are:
+ *
+ *   CLOUD_KF  the projection's horizon floor. LOW kf = the plane is far and its
+ *             features crowd hard into the last few degrees (cirrus); HIGH kf =
+ *             a near, low deck whose masses stay large right down to the ridge
+ *             line, which is where the hero frame actually looks (its visible
+ *             sky is only elevations ~6-20°).
+ *   CLOUD_PW  radial de-compression exponent. 1.0 = raw perspective (and raw
+ *             perspective at 6-20° elevation is exactly what shredded the old
+ *             masses into horizontal filaments); ~0.55 restores enough vertical
+ *             extent for a convex top and a flat base to be visible.
+ *
+ * CLOUD_S is then chosen so one mass ≈ 8-12° of arc: with kf 0.30 / pw 0.55 the
+ * plane radius runs 1.80 (at 3°) → 1.21 (at 24°), so scale 1.05 puts ~1.7 mass
+ * generations across the hero's visible sky band. */
+const CLOUD_KF = [0.300, 0.220, 0.150, 0.090];
+const CLOUD_S = [1.05, 1.55, 2.60, 3.60];
+const CLOUD_PW = [0.55, 0.58, 0.62, 0.72];
+const CLOUD_V = [0.0135, 0.0115, 0.0090, 0.0062];
+const CLOUD_B = [1.60, 1.40, 0.95, 0.45];   // relief strength (domed vs flat)
+const CLOUD_W = [0.150, 0.130, 0.100, 0.070];
+const CLOUD_D = [0.075, 0.090, 0.130, 0.180];   // fine edge nibble
+const CLOUD_T = [1.00, 1.10, 1.35, 2.10];   // uv stretch along the wind (streaks)
+const CLOUD_A = [1.00, 0.62, 0.36, 0.22];   // per-layer opacity
+const CLOUD_AER = [0.55, 0.52, 0.46, 0.40]; // how far the deck melts into haze
+const CLOUD_RIM = [1.00, 0.90, 0.72, 0.55];
+/* Coverage. Deliberately HIGH for a cumulus field: fewer, more separate,
+ * fully-opaque masses read as cumulus, whereas a low threshold produces a
+ * connected sheet whose only visible structure is its own thin filaments. */
+const COV_BASE = [0.605, 0.668, 0.712, 0.762];
+/* High-sky budget: above ~38° each layer's threshold is raised and its opacity
+ * scaled down so the saturated zenith blue keeps the top of the frame (§8.2).
+ * Much gentler than before — the old budget deleted the cumulus decks outright
+ * everywhere above 27° and left the cirrus smear as the only cloud in frame. */
+const CLOUD_ZC = [0.035, 0.060, 0.100, 0.145];
+const CLOUD_ZA = [0.90, 0.80, 0.62, 0.46];
 
 /* Per-band minimum haze fraction. The exponential law alone leaves the nearest
  * band at f≈0.24 at 122 m, which is not enough to kill its chroma — a fully
  * saturated tree line silhouetted against a cool sky is the single most
  * depth-destroying thing in the frame. */
-const FOG_FLOOR = [0.30, 0.48, 0.64];
+const FOG_FLOOR = [0.24, 0.44, 0.62];
 
 /* Per-band albedo VALUE. Distant hills must be a genuinely darker plane than the
  * sky they sit against, and each band must be a step lighter than the one in
@@ -82,8 +105,44 @@ const FOG_FLOOR = [0.30, 0.48, 0.64];
  * the whole horizon inside a 3/255 band, i.e. no depth ordering at all. */
 const HILL_VALUE = [0.72, 0.80, 0.88];
 
-/* Strength of the mist deck tucked into each range's foot. */
-const MIST_AMT = [0.44, 0.38, 0.26];
+/* Strength of the mist deck tucked into each range's foot.
+ *
+ * MEASURED (round-2 critic): 0.18 on the nearest band put a 0.205 mix toward
+ * skyRadiance across the 60 screen rows immediately above the grass field, i.e.
+ * a soft pale bar sitting on the horizon. The nearest band's foot is the one
+ * place a mist deck must stay almost invisible, because it is the join with the
+ * playable ground. 0.08 keeps the horizontal variation without the bar. */
+const MIST_AMT = [0.08, 0.26, 0.20];
+
+/* Turning 08-lighting's clock into this module's cycle position.
+ *
+ * MEASURED: `time:phase` arrives at most once (the rig emits on phase CHANGE and
+ * order 8 runs before order 15 subscribes), so in shot mode the sky never
+ * received one at all — it fell back to inferring the cycle from the sun's
+ * elevation, which cannot tell morning from evening and rendered every dawn with
+ * the dusk palette. The rig's own palette IS the authoritative clock.
+ *
+ * REGRESSION FIXED HERE (round 1 critic, "the day sky has been pushed to
+ * magenta"): this used to re-derive the phase from a HARDCODED COPY of
+ * lib/lighting.js's PHASE_BOUNDS. Lighting later moved the end of `day` from
+ * 0.625 to 0.690 so that DEFAULT_DAY_T = 0.665 would land inside day, and the
+ * copy here was never updated — so the default frame, whose sun sits at 39 deg
+ * elevation and whose rig reports `day` t=0.97, was being painted at cycle
+ * u=0.721: a full golden-hour palette (horizon #F5C690, haze #FED097, Mie 1.50).
+ * A 39 deg sun under a sunset gradient is what produced the magenta zenith, the
+ * acid horizon band and the warm hills the critic measured. `palette.phase` +
+ * `palette.phaseT` are published every frame by the rig, so read those and never
+ * duplicate its bounds again. `uFromDayT` survives only as a fallback for a rig
+ * that publishes dayT but no phase. */
+const LIGHT_BOUNDS = [['dawn', 0.085, 0.200], ['day', 0.200, 0.690], ['dusk', 0.690, 0.815]];
+function uFromDayT(t) {
+  const x = ((t % 1) + 1) % 1;
+  for (const [name, a, b] of LIGHT_BOUNDS) {
+    if (x >= a && x < b) return phaseToU(name, (x - a) / (b - a));
+  }
+  const nt = x >= 0.815 ? (x - 0.815) / 0.27 : (x + 0.185) / 0.27;
+  return phaseToU('night', Math.min(1, Math.max(0, nt)));
+}
 
 /* ------------------------------------------------------------------ hills -- */
 /**
@@ -170,10 +229,11 @@ export default {
 
     /* ---------- baked procedural noise (no network, deterministic) -------- */
     const N = (ctx.quality.tier === 'low' || ctx.quality.tier === 'medium') ? 256 : 512;
-    const { texA, texB, gradScale } = makeSkyNoiseTextures(THREE, N);
-    disposables.push(texA, texB);
+    const { texA, texB, texC, gradScale } = makeSkyNoiseTextures(THREE, N);
+    disposables.push(texA, texB, texC);
     ctx.assets.textures.skyNoiseA = texA;
     ctx.assets.textures.skyNoiseB = texB;
+    ctx.assets.textures.skyNoiseC = texC;
 
     /* ---------- shared lighting uniforms, with local fallbacks ----------- */
     const L = ctx.assets.lightUniforms || {};
@@ -192,6 +252,7 @@ export default {
     // live palette colours — published so water/props can match the sky
     const colors = {
       zenith: C(0x4e86d4), mid: C(0x8fbbe8), horizon: C(0xcfe0f2), haze: C(0xdfeaf6),
+      hazeWarm: C(0xffe8c6),
       sun: C(0xffebcb), glow: C(0xfff0dc), fog: C(0xbcd3ea),
       cloudLit: C(0xfffaf2), cloudDark: C(0x9aa8cc), cloudAmb: C(0xb4c8e8), cloudRim: C(0xfff4e2),
       hillLit: C(0x8fa8b8), hillDark: C(0x556880), tree: C(0x4a6060),
@@ -206,6 +267,7 @@ export default {
       uMid: { value: colors.mid },
       uHorizon: { value: colors.horizon },
       uHaze: { value: colors.haze },
+      uHazeWarm: { value: colors.hazeWarm },
       uHazeAmt: { value: 0.46 },
       uHazeH: { value: 0.055 },
       uZenithPow: { value: 0.42 },   // exponent on elevation, <1 → blue owns the top
@@ -222,7 +284,8 @@ export default {
     const uni = {
       uNoiseA: { value: texA },
       uNoiseB: { value: texB },
-      uGradScale: { value: new THREE.Vector2(gradScale[0], gradScale[1]) },
+      uNoiseC: { value: texC },
+      uGradScale: { value: new THREE.Vector3(gradScale[0], gradScale[1], gradScale[2]) },
       uTime: { value: 0 },
 
       uMoonDir, uFogColor, uShadowTint,
@@ -231,6 +294,8 @@ export default {
       ...gradU,
 
       uGroundFade: { value: 1.0 },
+      /* radians per vertical pixel; refreshed every frame from the live camera */
+      uPxRad: { value: 0.0012 },
 
       uSunTint: { value: colors.sun },
       uSunSize: { value: 0.019 },
@@ -239,14 +304,17 @@ export default {
       uCovL: { value: new THREE.Vector4(...COV_BASE) },
       uScaleL: { value: new THREE.Vector4(...CLOUD_S) },
       uSpeedL: { value: new THREE.Vector4(...CLOUD_V) },
-      uHeightL: { value: new THREE.Vector4(...CLOUD_H) },
-      uPuffL: { value: new THREE.Vector4(...CLOUD_P) },
+      uKfL: { value: new THREE.Vector4(...CLOUD_KF) },
+      uPwL: { value: new THREE.Vector4(...CLOUD_PW) },
       uBumpL: { value: new THREE.Vector4(...CLOUD_B) },
       uWarpL: { value: new THREE.Vector4(...CLOUD_W) },
+      uDetL: { value: new THREE.Vector4(...CLOUD_D) },
       uStretchL: { value: new THREE.Vector4(...CLOUD_T) },
       uAmtL: { value: new THREE.Vector4(...CLOUD_A) },
       uZenCovL: { value: new THREE.Vector4(...CLOUD_ZC) },
       uZenAmtL: { value: new THREE.Vector4(...CLOUD_ZA) },
+      uAerL: { value: new THREE.Vector4(...CLOUD_AER) },
+      uRimL: { value: new THREE.Vector4(...CLOUD_RIM) },
       uCloudLit: { value: colors.cloudLit },
       uCloudDark: { value: colors.cloudDark },
       uCloudAmb: { value: colors.cloudAmb },
@@ -254,10 +322,25 @@ export default {
       uCloudAmt: { value: 1.0 },
       uCloudRimAmt: { value: 1.0 },
 
+      uMoonRender: { value: new THREE.Vector3(0.42, 0.30, 0.60).normalize() },
       uStars: { value: 0.0 },
-      uMilky: { value: 0.19 },
+      /* MEASURED: 0.30 lifted the upper-40 % of the night hero frame from
+       * lumP50 0.096 to 0.280 — the band alone can add 0.4 LINEAR against a
+       * night sky whose own radiance is ~0.02, so it whites out the sky long
+       * before it reads as a galaxy. 0.17 keeps the band clearly visible while
+       * the base value stays on the 0.10 spec (ART_BIBLE §3 night zenith). */
+      /* 0.12, not 0.17: with the star field now carrying real magnitudes the
+       * band no longer has to be bright to be seen, and at 0.17 the round-2
+       * critic read it as "soft grey cloud smudges" rather than as a galaxy. */
+      uMilky: { value: 0.12 },
       uMoonCol: { value: colors.moon },
-      uMoonSize: { value: 0.030 },
+      /* 0.0175 rad ≈ 30 px radius at the hero fov, 26 px at pond — the
+       * prescription's 26 px, and small enough that the limb reads as a limb.
+       * At 0.030 it was a 44-52 px soft ball. */
+      uMoonSize: { value: 0.0175 },
+      /* peak linear radiance multiplier on uMoonCol; tuned so the highland disc
+       * lands on display L ≈ 0.93 and the maria on ≈ 0.86 after ACES + grade */
+      uMoonBright: { value: 3.3 },
       uDither: { value: 0.0125 },
     };
 
@@ -284,23 +367,51 @@ export default {
 
     /* -------------------- distant hills — three bands -------------------- */
     const uCamPos = { value: new THREE.Vector3() };
+    /* ── why every baseY is at or below the valley floor's own plane ─────────
+     *
+     * BLOCKING BUG FIXED HERE (round-2 critic: "a ~60 px desaturated grey-cyan
+     * stripe edge to edge across the grass field in every daylight frame").
+     *
+     * A band is a ring "curtain" of radius R whose bottom edge sits at baseY.
+     * The far valley floor is a disc at y = -0.55. For any view ray descending
+     * at angle θ the floor is hit at t = (camY + 0.55)/θ, so the floor is NEARER
+     * than the curtain — and therefore occludes it — exactly when
+     * t < D, i.e. when the curtain's world height there falls below -0.55.
+     * The curtain's visible lower edge is thus pinned to the floor's plane by
+     * construction, at the curtain's OWN distance, whenever baseY <= -0.55: the
+     * join is seamless and both sides carry the same aerial haze.
+     *
+     * With baseY = 2.2 (the old value) the curtain stopped 2.75 units ABOVE the
+     * floor, so between its bottom edge and the floor's grazing line the far
+     * floor showed through — MEASURED at 163-226 m, sandwiched between the
+     * curtain at 141 m above it and the playable terrain at 103 m below it.
+     * A farther, hazier, paler strip between two nearer surfaces is a
+     * saturation trough that dips AND recovers, which no distance fog can do:
+     * that was the stripe. Raycast at gameplay x=400 confirmed it exactly —
+     * y 560-624 hills-0-0 @141 m, y 632-648 valley-floor @201-163 m, y>=656
+     * ground @103 m.
+     *
+     * Bands 1 and 2 get the same treatment for the same reason one range back:
+     * band 1's old base (y=5) projected ABOVE band 0's ridge minima, so a
+     * 14-row sliver of 330-470 m floor showed in band 0's deepest valleys.
+     * Band 2's base only has to clear band 1's ridge minima (~y 17 at 480 m
+     * from the highest shipped camera), so 4.0 is both hidden and keeps its
+     * card from growing pointlessly tall. */
     const BANDS = [
-      // baseY sits just under the valley floor: a tall skirt would read as a
-      // flat painted stripe, so each band only shows its ridge above the land.
       { // nearest — tree-lined crest
-        radius: 122, segments: 1024, rows: 8, baseY: 2.2, hMin: 5.0, hMax: 21.0,
+        radius: 122, segments: 1024, rows: 8, baseY: -1.0, hMin: 5.0, hMax: 21.0,
         ridgeBase: 20, ridgeOct: 4, treeAmp: 0.055, radiusJitter: 0.11,
         treeAmt: 1.0, ridgeFreq: 22.0, litMix: 0.0, seed: 91,
         phases: [0.0, 0.53], radMul: [1.0, 1.16], hMul: [1.0, 0.72],
       },
       { // middle
-        radius: 252, segments: 640, rows: 7, baseY: 5.0, hMin: 15.0, hMax: 44.0,
+        radius: 252, segments: 640, rows: 7, baseY: -1.0, hMin: 15.0, hMax: 44.0,
         ridgeBase: 14, ridgeOct: 4, treeAmp: 0.018, radiusJitter: 0.10,
         treeAmt: 0.24, ridgeFreq: 16.0, litMix: 0.34, seed: 517,
         phases: [0.19, 0.74], radMul: [1.0, 1.12], hMul: [1.0, 0.78],
       },
       { // farthest — reaches the sky's own value almost completely
-        radius: 432, segments: 512, rows: 6, baseY: 9.0, hMin: 30.0, hMax: 82.0,
+        radius: 432, segments: 512, rows: 6, baseY: 4.0, hMin: 30.0, hMax: 82.0,
         ridgeBase: 10, ridgeOct: 4, treeAmp: 0.0, radiusJitter: 0.08,
         treeAmt: 0.0, ridgeFreq: 11.0, litMix: 0.62, seed: 1223,
         phases: [0.41, 0.88], radMul: [1.0, 1.07], hMul: [1.0, 0.82],
@@ -405,6 +516,8 @@ export default {
       covBias: 0.0,
       night: 0.0,
       override: null,               // scenario lock
+      sunMul: 1.0,                  // isolation switches (sky-sun-dim / sky-sun-off)
+      sunSizeMul: 1.0,
     };
 
     function evalPalette(u) {
@@ -431,13 +544,13 @@ export default {
       gradU.uMieAmt.value = lp(n0.mieAmt, n1.mieAmt);
       uAerialK.value = lp(n0.aerialK, n1.aerialK);
       uGroundAerial.value = lp(n0.gAer, n1.gAer);
-      uni.uSunSize.value = lp(n0.sunSize, n1.sunSize);
-      uni.uSunI.value = lp(n0.sunI, n1.sunI);
+      uni.uSunSize.value = lp(n0.sunSize, n1.sunSize) * state.sunSizeMul;
+      uni.uSunI.value = lp(n0.sunI, n1.sunI) * state.sunMul;
       const palStars = lp(n0.stars, n1.stars);
 
       for (let c = 0; c < 4; c++) {
         const v = COV_BASE[c] + (lp(k0.cov[c], k1.cov[c]) - 0.50) + state.covBias;
-        uni.uCovL.value.setComponent(c, Math.min(0.995, Math.max(0.20, v)));
+        uni.uCovL.value.setComponent(c, Math.min(0.93, Math.max(0.34, v)));
       }
       uni.uCloudAmt.value = state.cloudAmt;
 
@@ -489,6 +602,40 @@ export default {
       }
     }
 
+    /* ── where the moon DISC goes ──────────────────────────────────────────
+     * 08-lighting sets its moon key to the sun's exact antipode, so at the night
+     * anchor the moon sits at ~48 deg elevation / 254 deg azimuth. Every shipped
+     * camera preset tops out around 20 deg of elevation, so the disc was always
+     * rendered off the top of the frame — which is why the night frame had a
+     * FULL MOON banner and no moon. The azimuth is kept exactly (the moon stays
+     * behind the tree, where the settled backlight decision wants it) and only
+     * the elevation is compressed into 3-14 deg, i.e. into the visible band. The
+     * SHADING key stays on uMoonDir, so nothing else in the scene moves; the
+     * cost is that the disc sits lower than its own light direction, which is a
+     * trade every painted night sky makes and no viewer can measure. */
+    const _mr = new THREE.Vector3();
+    /* -34 deg of azimuth as well as the elevation squash. Measured on the night
+     * hero frame: the un-rotated antipode projects to (1489, 238), which is
+     * underneath the TENDERS panel — the disc rendered correctly and the player
+     * still could not see it. -34 deg puts it at (470, 240), clear of both the
+     * top-left HUD block (ends x 390) and the panel, just outside the canopy's
+     * upper-left silhouette. The azimuth still advances with the rig's clock, so
+     * the moon travels across the night rather than sitting on a mark. */
+    const MOON_AZ = -34 * Math.PI / 180;
+    const MOON_CA = Math.cos(MOON_AZ), MOON_SA = Math.sin(MOON_AZ);
+    function placeMoonDisc() {
+      const md = uMoonDir.value;
+      const hz = Math.hypot(md.x, md.z);
+      const y = Math.min(1, Math.max(0, md.y));
+      const yr = 0.055 + 0.190 * Math.pow(y, 0.75);
+      const c = Math.sqrt(Math.max(1e-4, 1 - yr * yr));
+      if (hz > 1e-5) {
+        const dx = md.x / hz, dz = md.z / hz;
+        _mr.set((dx * MOON_CA - dz * MOON_SA) * c, yr, (dx * MOON_SA + dz * MOON_CA) * c);
+      } else _mr.set(c, yr, 0);
+      uni.uMoonRender.value.copy(_mr).normalize();
+    }
+
     /* Sun / moon placement when 08-lighting is not driving them. */
     const AZ = new THREE.Vector2(-0.62, -0.48).normalize();
     function placeCelestials(u) {
@@ -524,6 +671,7 @@ export default {
 
     evalPalette(state.u);
     placeCelestials(state.u);
+    placeMoonDisc();
 
     /* ------------------------------ events ------------------------------- */
     const offPhase = ctx.bus.on('time:phase', (p) => {
@@ -553,8 +701,24 @@ export default {
       S['sky-clear'] = lock(phaseToU('day', 0.35), { phase: 'day', t: 0.35, covBias: 0.14, cloudAmt: 0.85 });
       S['sky-overcast'] = lock(phaseToU('dusk', 0.30), { phase: 'dusk', t: 0.30, covBias: -0.11 });
       S['sky-release'] = () => { state.override = null; };
+      /* measurement helpers: the falling petals read as bright specks all over
+       * the frame, so any "how many stars are there" count has to be taken with
+       * them off. Chaining other modules' scenarios by NAME (never by importing
+       * them) keeps this inside this file. */
+      S['sky-night-stars'] = () => { S['night']?.(); S['petals-off']?.(); };
+      S['sky-night-raw'] = () => { S['night']?.(); S['petals-off']?.(); S['postfx-off']?.(); };
+      S['sky-day-raw'] = () => { S['postfx-off']?.(); S['petals-off']?.(); };
       /* isolation switches — used to attribute a sky artefact to the right layer */
       S['sky-noclouds'] = () => { state.cloudAmt = 0.0; uni.uCloudAmt.value = 0.0; };
+      /* A/B pair for "is the deck brighter or darker than the sky behind it".
+       * Shoot `dusk` and `sky-dusk-nc` at the same warm and diff the two PNGs:
+       * every pixel where they differ is cloud, and the second frame IS the sky
+       * radiance behind it. That is the only honest way to measure the §2
+       * backlit-cloud requirement through a bloom + grade chain. */
+      S['sky-dusk-nc'] = () => { S['dusk']?.(); state.cloudAmt = 0.0; uni.uCloudAmt.value = 0.0; };
+      S['sky-petals-off'] = () => { S['petals-off']?.(); };
+      S['sky-sun-dim'] = () => { state.sunMul = 0.08; evalPalette(state.u); };
+      S['sky-sun-off'] = () => { state.sunMul = 0.0; evalPalette(state.u); };
       S['sky-hide'] = () => { group.visible = false; };
       for (let i = 0; i < 4; i++) {
         S['sky-layer' + i] = () => {
@@ -570,6 +734,7 @@ export default {
       colors,
       noiseA: texA,
       noiseB: texB,
+      noiseC: texC,
       gradScale,
       get u() { return state.u; },
       get phase() { return state.phase; },
@@ -603,10 +768,23 @@ export default {
         uni.uTime.value = time;
         dome.position.copy(ctx.camera.position);
         uCamPos.value.copy(ctx.camera.position);
+        /* the cloud shader's alpha feather is authored in screen pixels, so it
+         * needs the live angular pixel size — fov and height both change */
+        const camH = Math.max(1, ctx.size?.h || 1080);
+        const fovR = (ctx.camera.fov || 40) * Math.PI / 180;
+        uni.uPxRad.value = 2 * Math.tan(fovR * 0.5) / camH;
 
-        // If lighting never emitted a phase but does own the sun, follow the sun
-        // so the sky can never disagree with the key light.
-        if (!state.phase && !state.override && !owned.uSunDir) {
+        /* Authoritative clock first: the lighting rig publishes the phase NAME
+         * and the progress inside it, which (unlike the sun's elevation) knows
+         * whether a low sun is rising or setting — and, unlike a local copy of
+         * its phase bounds, cannot drift out of step with the rig. */
+        const pal = ctx.assets.lightRig?.palette;
+        const dayT = pal?.dayT;
+        if (!state.override && pal && typeof pal.phaseT === 'number' && pal.phase) {
+          state.u = phaseToU(pal.phase, pal.phaseT);
+        } else if (!state.override && typeof dayT === 'number') {
+          state.u = uFromDayT(dayT);
+        } else if (!state.phase && !state.override && !owned.uSunDir) {
           const el = uSunDir.value.y;
           const nm = owned.uNightMix ? 0 : uNightMix.value;
           let u;
@@ -621,6 +799,7 @@ export default {
           acc = 0;
           evalPalette(state.u);
           placeCelestials(state.u);
+          placeMoonDisc();
         }
       },
 

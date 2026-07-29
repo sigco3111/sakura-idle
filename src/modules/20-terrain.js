@@ -134,15 +134,30 @@ function distToPath(x, z) {
  * ------------------------------------------------------------------ */
 /**
  * A lower tier must be the SAME SCENE with fewer instances — never a different
- * one. So `grassR`, the material layers and the scatter families stay; only the
- * counts move, and the grass shader widens each surviving blade
- * (`uWidthComp`) so the sward still covers the ground at 18 k blades.
+ * one. The material layers and every scatter family stay at every tier; only the
+ * counts move, the grass shader widens each surviving blade (`uWidthComp`), and
+ * the shading treats a survivor as the several blades it stands in for.
+ *
+ * `grassR` shrinks FASTER than the blade budget on purpose. ctx.quality.grass
+ * drops 260 k -> 18 k from ultra to low (14x); spreading 18 k blades over the
+ * ultra radius gave 0.5 clumps/m^2 — a bald lime plane with a few dark spikes on
+ * it, an LOD tier that changes the ART, not the fidelity. Covering less GROUND
+ * at a similar per-m^2 density keeps the sward reading as a sward, and the ground
+ * shader's own meadow octaves carry the field beyond the blade radius.
+ *
+ *   blades/m^2 —  ultra 16.9 · high 13.2 · medium 9.9 · low 4.96
+ *   (plus `coreFrac` below, which concentrates a small budget on the knoll)
  */
 const TIER = {
-  ultra: { grid: 257, macro: 768, detail: 512, grassR: 70, chunks: 7, scatter: 1.0 },
-  high: { grid: 225, macro: 640, detail: 512, grassR: 58, chunks: 7, scatter: 0.85 },
-  medium: { grid: 161, macro: 512, detail: 256, grassR: 46, chunks: 5, scatter: 0.62 },
-  low: { grid: 129, macro: 448, detail: 256, grassR: 38, chunks: 5, scatter: 0.52 },
+  // grassR raised 70 -> 80 / 58 -> 66 at the top two tiers: the worst 200x30 band
+  // in the bottom half of the hero frame (luminance sd 0.015) sat at 60-90 m, i.e.
+  // just PAST where the blades stopped, so the only thing carrying it was the
+  // ground texture's own octaves. Blade density drops 16.9 -> 12.9 per m^2, which
+  // `uWidthComp` compensates for.
+  ultra: { grid: 257, macro: 768, detail: 512, grassR: 80, chunks: 7, scatter: 1.0 },
+  high: { grid: 225, macro: 640, detail: 512, grassR: 66, chunks: 7, scatter: 0.85 },
+  medium: { grid: 161, macro: 512, detail: 256, grassR: 44, chunks: 6, scatter: 0.70 },
+  low: { grid: 129, macro: 448, detail: 256, grassR: 34, chunks: 5, scatter: 0.62 },
 };
 /** blades per m^2 the look was authored at (high: 140 000 over r = 58). */
 const REF_BLADE_DENSITY = 140000 / (Math.PI * 58 * 58);
@@ -267,6 +282,38 @@ function buildCardGeometry(n, tilt, w, h, lift = 0) {
   return g;
 }
 
+/**
+ * Poisson scatter with a distance-graded keep probability, plus an optional
+ * sparse outer annulus.
+ *
+ * ART_BIBLE §5: scatter density "falls off with distance, never to zero". The
+ * measured failure was the opposite in both directions at once — constant blade
+ * density edge to edge, and clover/flowers/petals that simply STOPPED at r = 32-36
+ * leaving everything beyond as bare ground texture (high 5). This grades 1.0 at
+ * 4 m down to `floorD` at 60 m and keeps going to `radius`, so no band of the
+ * frame is ever empty.
+ *
+ * The radii are deliberately NOT scaled by the grass budget: a clover card is 6
+ * triangles, so the low tier can afford the same FOOTPRINT at a lower density,
+ * which is the difference between "same place, less detail" and "balder place".
+ */
+function gradedScatter({ radius, minDist, count, seed, inner = 0, floorD = 0.25,
+  farRadius = 0, farMinDist = 0, farCount = 0 }) {
+  const keep = makeRng(seed ^ 0x51de37);
+  const grade = (pts) => pts.filter(([x, z]) => {
+    const k = 1 - (1 - floorD) * sstep(4, 60, Math.hypot(x, z));
+    return keep.next() < k;
+  });
+  const out = grade(scatterDisc({ radius, minDist, count, seed, inner }));
+  if (farRadius > radius && farCount > 0) {
+    out.push(...scatterDisc({
+      radius: farRadius, inner: radius * 0.92, minDist: farMinDist, count: farCount,
+      seed: seed ^ 0x9f11,
+    }));
+  }
+  return out;
+}
+
 /** An irregular rock: an icosphere pushed around by low-frequency noise. */
 function buildRockGeometry(detail = 1, seed = 3) {
   const g = new THREE.IcosahedronGeometry(0.5, detail);
@@ -308,7 +355,7 @@ export default {
       aniso,
       seed: 4211,
     });
-    const sprites = makeSpriteTextures(ctx.quality?.tier === 'low' ? 64 : 128);
+    const sprites = makeSpriteTextures(128);   // 4 tiny canvases; not worth a tier
     for (const t of Object.values(tex)) disposables.push(t);
     for (const t of Object.values(sprites)) { t.anisotropy = aniso; disposables.push(t); }
     ctx.assets.textures.groundMacro = tex.macro;
@@ -319,6 +366,14 @@ export default {
     /* ---------------- ground ---------------- */
     const uPetalAmt = { value: 0.42 };
     const uCamPos = { value: new THREE.Vector3() };
+    /* Contact-occlusion slots: vec4(worldX, worldZ, footprintRadius, strength).
+     * Slot 0 is the tree's root flare (filled below); slots 1.. are filled from
+     * ctx.assets.props on the first frame, because 35-props boots at order 35. */
+    const CONTACT_N = 10;
+    const uContact = {
+      value: Array.from({ length: CONTACT_N }, () => new THREE.Vector4(0, 0, 0, 0)),
+    };
+    uContact.value[0].set(0, 0, 1.55, 1.0);
 
     const groundMat = new THREE.ShaderMaterial({
       uniforms: {
@@ -329,9 +384,9 @@ export default {
         uDetailN: { value: tex.detailN },
         uMacroXf: { value: new THREE.Vector2(1 / (2 * (R_TERRAIN + 4)), 0.5) },
         uDetailTile: { value: new THREE.Vector2(1 / 2.6, 1 / 21.0) },
-        uGrassBase: { value: C(0x39602F) },
-        uGrassTip: { value: C(0x8FB463) },
-        uGrassDry: { value: C(0xA3985C) },
+        uGrassBase: { value: C(0x33612E) },
+        uGrassTip: { value: C(0x8AB65C) },
+        uGrassDry: { value: C(0x9AA35E) },
         uEarth: { value: C(0x8B6C4C) },
         uEarthDark: { value: C(0x5A4634) },
         uMoss: { value: C(0x5C7A3E) },
@@ -341,6 +396,10 @@ export default {
         uPetalHi: { value: C(0xFFD9E6) },
         uPetalAmt,
         uBump: { value: 0.55 },
+        // the ground texture is the sward FLOOR inside this radius and stands in
+        // for whole blades outside it — see `sward` in GROUND_FRAG.
+        uGrassR: { value: tier.grassR },
+        uContact,
         ...L,
       },
       vertexShader: GROUND_VERT,
@@ -366,6 +425,13 @@ export default {
     // more of it, or `--q low` reads as a bald lime plane with spikes on it.
     const widthComp = THREE.MathUtils.clamp(
       Math.sqrt(REF_BLADE_DENSITY / (grassBlades / (Math.PI * grassR * grassR))), 1.0, 1.9);
+    // ...and spend a bigger share of a small budget on the ground the camera is
+    // actually pointed at. At `--q low` the flat 18 % core reservation left the
+    // r < 13 knoll — the whole lower half of the hero and bark frames — at 6
+    // blades/m^2 against high's 47, which is what made the low tier read as a
+    // different, balder place rather than the same place at lower fidelity.
+    const coreFrac = THREE.MathUtils.clamp(
+      0.18 * Math.pow(140000 / Math.max(grassBlades, 1), 0.55), 0.12, 0.55);
     // ...and shade it like the several blades it stands in for (see GRASS_FRAG).
     const tipBias = THREE.MathUtils.clamp((widthComp - 1.0) / 0.9, 0, 1);
     const rng = makeRng(90210);
@@ -385,10 +451,11 @@ export default {
     let placed = 0;
     const tmpN = new THREE.Vector3();
     for (let c = 0; c < clumpCount * 4 && placed < grassBlades; c++) {
-      // radial density: concentrated on the knoll, thinning outward, never zero
-      // 18 % of the blades are reserved for the r < 13 core so the `bark` and
-      // `hero` close-ups stay thick no matter how far the meadow reaches
-      const rr = rng.next() < 0.18
+      // radial density: concentrated on the knoll, thinning outward, never zero.
+      // `coreFrac` of the blades are reserved for the r < 13 core so the `bark`
+      // and `hero` close-ups stay thick no matter how far the meadow reaches or
+      // how small the budget is.
+      const rr = rng.next() < coreFrac
         ? 13 * Math.sqrt(rng.next())
         : grassR * Math.pow(rng.next(), 0.72);
       const ang = rng.next() * Math.PI * 2;
@@ -413,6 +480,19 @@ export default {
       const bare = Math.min(1, Math.max(0, slope * 6.5 + nF * 0.55 + nM * 0.45 - 0.34));
       if (rng.next() < bare * 0.85) continue;
 
+      /* ---- clumped drop-out (prescription 3a) --------------------------
+       * The clump centres were already radially random, so there is no literal
+       * lattice in the data — but the field had a CONSTANT density and a
+       * constant top edge, and at a grazing angle a constant-density field of
+       * near-identical vertical blades reads as countable rows receding to the
+       * horizon. What kills that read is coarse structure: a ~5 m noise field
+       * that drops 20-25 % of clumps in spatially COHERENT patches and makes the
+       * survivors taller or shorter together, so the sward has open ground,
+       * dense tufts and a broken skyline instead of one even pile.           */
+      const patch = fbm3(cx * 0.185 + 51.3, 3.7, cz * 0.185, 3);
+      const p01 = Math.min(1, Math.max(0, patch * 0.5 + 0.5));
+      if (rng.next() > Math.min(1, 0.30 + 1.20 * p01)) continue;
+
       // clump archetype: mown sward / tall seed-head tuft / short sparse
       // At a low blade budget the tall-wispy archetype is what reads as
       // "scattered dark needles", so it gives way to the ordinary sward.
@@ -431,7 +511,9 @@ export default {
       // uncut meadow: tufts get taller and coarser the further they are from the
       // tended ground around the tree, so one blade covers more of the far field
       const wildness = sstep(18, 58, rr);
-      clumpH *= (1 + rng.range(-0.12, 0.16)) * (1 + 0.55 * wildness);
+      // the same patch field drives HEIGHT, so the sward's skyline is broken in
+      // coherent swells rather than being one flat top edge
+      clumpH *= (1 + rng.range(-0.12, 0.16)) * (1 + 0.55 * wildness) * (1 + 0.50 * patch);
       spread *= 1 + 0.75 * wildness;
       // one lean direction per clump so tufts are not a field of vertical needles
       const leanBias = rng.range(0.65, 1.55);
@@ -459,7 +541,7 @@ export default {
       uniforms: {
         ...THREE.UniformsUtils.merge([THREE.UniformsLib.lights]),
         uCamPos,
-        uFade: { value: new THREE.Vector3(20, 76, 0.58) },
+        uFade: { value: new THREE.Vector3(20, 88, 0.55) },
         // (nearFadeStart, nearFadeEnd, strength) — see GRASS_VERT. Without this
         // the 'canopy' preset (eye at y = 1.2, i.e. inside the sward) is 60 %
         // occluded by blades 60-140 px wide.
@@ -467,10 +549,14 @@ export default {
         uWidthComp: { value: widthComp },
         uBend: { value: 0.85 },
         uGrow: { value: 1 },
-        uBaseCol: { value: C(0x3A5C31) },
-        uMidCol: { value: C(0x5C8340) },
-        uTipCol: { value: C(0x9CBE68) },
-        uDryCol: { value: C(0xC2B478) },
+        // (base, tip) blend of the blade's shading normal toward +Y. See the note
+        // in GRASS_VERT: a vertical card cannot collect the same key as the ground
+        // it stands in, so without this the sward is always darker than its floor.
+        uUpBias: { value: new THREE.Vector2(0.30, 0.66) },
+        uBaseCol: { value: C(0x2E5A2C) },
+        uMidCol: { value: C(0x4C8038) },
+        uTipCol: { value: C(0x93C059) },
+        uDryCol: { value: C(0xB8BE7E) },
         uTipBias: { value: tipBias },
         ...L,
         ...WU,
@@ -556,8 +642,12 @@ export default {
     const pathStoneMat = mkStoneMat(0.62, 1.9);
     const pebbleMat = mkStoneMat(0.26, 3.4);
 
-    const rockGeo = buildRockGeometry(ctx.quality?.tier === 'low' ? 0 : 1, 3.1);
-    const slabGeo = buildRockGeometry(ctx.quality?.tier === 'low' ? 0 : 1, 7.7);
+    // detail 0 is a bare icosahedron: 20 flat facets, i.e. ART_BIBLE §8 tell 5
+    // ("visible low-poly faceting on organic shapes") on every pebble at the low
+    // tier. 80 triangles x ~300 instances is 24 k — nothing — so every tier gets
+    // the same rock SHAPE and only the counts move.
+    const rockGeo = buildRockGeometry(1, 3.1);
+    const slabGeo = buildRockGeometry(1, 7.7);
     disposables.push(rockGeo, slabGeo);
 
     /* ---------------- the mossy stone path ---------------- */
@@ -608,8 +698,10 @@ export default {
     group.add(pathStones);
 
     /* ---------------- pebbles + boulders ---------------- */
-    const pebblePts = scatterDisc({
-      radius: grassR * 0.92, minDist: 1.9, count: Math.round(300 * tier.scatter), seed: 21,
+    const pebblePts = gradedScatter({
+      radius: 42, minDist: 1.10, count: Math.round(1150 * tier.scatter), seed: 21,
+      floorD: 0.40, farRadius: 86, farMinDist: 2.9,
+      farCount: Math.round(820 * tier.scatter),
     }).filter(([x, z]) => Math.hypot(x - POND.x, z - POND.z) > POND.radius * 0.72);
     const boulderPts = scatterDisc({
       radius: 32, minDist: 6.5, count: Math.round(20 * tier.scatter), seed: 87, inner: 5.5,
@@ -658,9 +750,10 @@ export default {
       shadowHue: 0.68,
     });
     disposables.push(cloverGeo, cloverMat);
-    const cloverPts = scatterDisc({
-      radius: Math.min(36, grassR * 0.62), minDist: 0.95,
-      count: Math.round(700 * tier.scatter), seed: 33,
+    const cloverPts = gradedScatter({
+      radius: 32, minDist: 0.60, count: Math.round(2400 * tier.scatter), seed: 33,
+      floorD: 0.34, farRadius: 84, farMinDist: 2.1,
+      farCount: Math.round(1900 * tier.scatter),
     });
     const clover = new THREE.InstancedMesh(cloverGeo, cloverMat, Math.max(1, cloverPts.length));
     clover.name = 'clover';
@@ -696,9 +789,10 @@ export default {
     /* ---------------- wildflowers (warm white + pale yellow) ---------------- */
     const flowerGeo = buildCardGeometry(2, 0.10, 0.085, 0.085, 0.055);
     const flowerMeshes = [];
-    const flowerPts = scatterDisc({
-      radius: Math.min(32, grassR * 0.55), minDist: 1.15,
-      count: Math.round(460 * tier.scatter), seed: 44,
+    const flowerPts = gradedScatter({
+      radius: 30, minDist: 0.72, count: Math.round(1600 * tier.scatter), seed: 44,
+      floorD: 0.32, farRadius: 80, farMinDist: 2.4,
+      farCount: Math.round(1350 * tier.scatter),
     });
     [['flowerWhite', 0], ['flowerYellow', 1]].forEach(([key, parity]) => {
       const mat = createNprMaterial({
@@ -750,8 +844,10 @@ export default {
       alphaTest: 0.40, side: THREE.DoubleSide, shadowHue: 0.30, shadowChroma: 1.0,
     });
     disposables.push(petalGeo, petalMat);
-    const petalPts = scatterDisc({
+    const petalPts = gradedScatter({
       radius: 17, minDist: 0.235, count: Math.round(3400 * tier.scatter), seed: 55,
+      floorD: 1.0, farRadius: 52, farMinDist: 0.92,
+      farCount: Math.round(1700 * tier.scatter),
     });
     const petals = new THREE.InstancedMesh(petalGeo, petalMat, Math.max(1, petalPts.length));
     petals.name = 'fallen-petals';
@@ -771,7 +867,10 @@ export default {
       const ordered = petalPts
         .filter(([x, z]) => Math.hypot(x - POND.x, z - POND.z) > POND.radius * 0.78)
         .map(([x, z]) => [x, z, Math.hypot(x, z)])
-        .filter((p) => prng.next() < Math.max(0.03, 1.30 - p[2] / 9.5))
+        // 0.03 -> 0.16 floor: the carpet still thickens hard under the canopy,
+        // but a petal decal every few metres survives out to the far ring so the
+        // mid-ground is never bare ground texture (high 5).
+        .filter((p) => prng.next() < Math.max(0.16, 1.30 - p[2] / 9.5))
         .sort((a, b) => a[2] - b[2]);
       let i = 0;
       for (const [x, z] of ordered) {
@@ -824,7 +923,10 @@ export default {
     let petalTarget = uPetalAmt.value;
     const offStage = ctx.bus.on('bloom:stage', (p) => {
       const st = Math.min(5, Math.max(0, p?.stage ?? 2));
-      petalTarget = 0.10 + 0.17 * st;                 // 0.10 .. 0.95
+      // Bloom stage 1 is the FIRST-RUN state now, so it must already show a
+      // scatter of fallen petals around the trunk — a brand-new save that opens
+      // on bare grass reads as a different (and duller) game.
+      petalTarget = 0.13 + 0.164 * st;                // 0.13 .. 0.95
     });
 
     const sc = window.__game?.scenarios;
@@ -833,11 +935,40 @@ export default {
       sc['petal-bare'] = () => { petalTarget = 0.06; uPetalAmt.value = 0.06; };
     }
 
+    /* ---------------- contact footings ---------------- *
+     * 35-props boots at order 35, after us, so its footing positions can only be
+     * read once a frame has started. Done once, then never again. */
+    let contactsWired = false;
+    function wireContacts() {
+      contactsWired = true;
+      const P = ctx.assets.props;
+      if (!P) return;
+      let s = 1;
+      const put = (x, z, r, w) => {
+        if (s >= CONTACT_N) return;
+        uContact.value[s++].set(x, z, r, w);
+      };
+      for (const l of P.lanterns ?? []) {
+        const p = l?.position;
+        if (p) put(p.x, p.z, 0.38 * (l.scale ?? 1), 0.85);
+      }
+      const t = P.torii?.position;
+      if (t) {
+        const w = (P.torii.width ?? 3.4) * 0.5;
+        const c = Math.cos(P.torii.rotationY ?? 0), sn = Math.sin(P.torii.rotationY ?? 0);
+        put(t.x + c * w, t.z - sn * w, 0.30, 0.9);
+        put(t.x - c * w, t.z + sn * w, 0.30, 0.9);
+      }
+      const b = P.basin?.position;
+      if (b) put(b.x, b.z, 0.55, 0.8);
+    }
+
     /* ---------------- frame update ---------------- */
     const camPos = uCamPos.value;
     return {
       object3D: group,
       update(dt) {
+        if (!contactsWired) wireContacts();
         if (ctx.camera) camPos.copy(ctx.camera.position);
         const a = Math.min(1, dt * 1.6);
         uPetalAmt.value += (petalTarget - uPetalAmt.value) * a;

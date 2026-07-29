@@ -39,12 +39,26 @@ const SEED = 0xC5A11;
 /* ------------------------------------------------------------------ *
  * Bloom-stage response curves (GAME_DESIGN.md "Bloom stages")
  * ------------------------------------------------------------------ */
+/**
+ * Stage 1 (蕾 Budding) is now the FIRST-RUN state, so it has to be a deliberate,
+ * attractive look and not a way-station: swelling pink buds over the whole crown
+ * plus a genuine scattering of open blossom. Stage 0 (冬芽 Winter Bud) is the
+ * post-prestige reset — bare, cool, but never a dead brown skeleton.
+ */
 const STAGE = {
-  coverage: [0.090, 0.245, 0.530, 1.000, 1.000, 1.000],
-  budMix: [1.000, 0.620, 0.230, 0.045, 0.020, 0.000],
+  /* Coverage runs PAST 1.0 at stages 4-5 on purpose. ~15 % of the cards are
+   * seeded with a growth order above 1.0 (see `order` below), so stages 4 and 5
+   * add card COUNT at constant card SIZE — which is how a real canopy thickens.
+   * MEASURED r2: stages 3, 4 and 5 were geometrically identical and the mass had
+   * smoothed into "one cauliflower"; growing the card scale instead (the obvious
+   * alternative) is exactly what produces that. */
+  coverage: [0.125, 0.330, 0.590, 1.000, 1.115, 1.235],
+  budMix: [1.000, 0.560, 0.210, 0.045, 0.020, 0.000],
   lumin: [0.000, 0.000, 0.000, 0.015, 0.105, 0.195],
   gold: [0.000, 0.000, 0.000, 0.000, 0.045, 0.360],
-  bare: [1.000, 0.480, 0.130, 0.000, 0.000, 0.000],
+  // "bare" greys + cools the bark. 1.0 at stage 0 used to crush it to near
+  // black; the shader tint it drives is much lighter now (see TRUNK_FRAG).
+  bare: [1.000, 0.300, 0.080, 0.000, 0.000, 0.000],
   moss: [0.520, 0.700, 0.860, 0.940, 0.940, 0.900],
 };
 const stageAt = (arr, s) => {
@@ -59,7 +73,15 @@ const stageAt = (arr, s) => {
 
 const V = (x, y, z) => new THREE.Vector3(x, y, z);
 
-function buildSkeleton() {
+/**
+ * @param {number} groundY terrain height at the trunk, WORLD metres. The tree
+ *   group carries a yaw only (no translation), so local y === world y and every
+ *   root / flare height below is measured from this. MEASURED: with the roots
+ *   authored at y = 0.18..0.52 and the terrain summit at y = 1.27, all six
+ *   surface roots and 62 % of the flare were BURIED — which is the whole reason
+ *   the trunk read as a straight lathe cone plunging into the grass.
+ */
+function buildSkeleton(groundY = 0) {
   const rng = makeRng(SEED);
   const branches = [];
   let maxDist = 1;
@@ -113,15 +135,25 @@ function buildSkeleton() {
     droop: 0, gnarl: 0.085, dist0: 0,
   });
 
-  /* ---- surface roots: what makes the base read as ANCIENT ---------- */
-  const rootAz = [0.35, 1.32, 2.30, 3.25, 4.15, 5.32];
-  for (let i = 0; i < rootAz.length; i++) {
-    const az = rootAz[i] + rng.range(-0.14, 0.14);
+  /* ---- buttress roots (ART_BIBLE §5 "visible root flare") -----------
+   * Six lobes at DELIBERATELY unequal angular spacing (no two gaps within 0.06
+   * rad of each other), each starting just above the terrain so it is actually
+   * visible, and each diving far enough below it that its tapered end is always
+   * underground — a root that surfaces again shows a tip and reads as a stick.
+   * radius 0.47..0.74 = 35..55 % of the trunk's 1.34 base radius.            */
+  const rootGaps = [0.72, 1.34, 0.86, 1.52, 0.98, 1.86];   // sums to 2*pi*1.0
+  const gapNorm = (Math.PI * 2) / rootGaps.reduce((a, b) => a + b, 0);
+  let rootAz = 0.42;
+  for (let i = 0; i < rootGaps.length; i++) {
+    rootAz += rootGaps[i] * gapNorm;
+    const az = rootAz;
+    const len = rng.range(1.15, 2.35);
     grow({
-      start: V(Math.cos(az) * 0.42, rng.range(0.18, 0.52), Math.sin(az) * 0.42),
-      dir: V(Math.cos(az), rng.range(-0.34, -0.14), Math.sin(az)),
-      len: rng.range(1.7, 3.1), r0: rng.range(0.40, 0.56), r1: 0.085,
-      level: -1, segs: 8, droop: 0.10, gnarl: 0.14, dist0: 0, rigid: true,
+      start: V(Math.cos(az) * 0.50, groundY + rng.range(0.10, 0.40), Math.sin(az) * 0.50),
+      // steep enough that the end sits >= 0.45 m under the surface over `len`
+      dir: V(Math.cos(az), -(0.34 + 0.55 / len), Math.sin(az)),
+      len, r0: 1.34 * rng.range(0.35, 0.55), r1: 0.10,
+      level: -1, segs: 8, droop: 0.16, gnarl: 0.16, dist0: 0, rigid: true,
     });
   }
 
@@ -140,7 +172,12 @@ function buildSkeleton() {
   }
 
   /** Minimum tip radius per level (metres). Index by branch level. */
-  const MIN_R = { 1: 0.075, 2: 0.042, 3: 0.026, 4: 0.0165 };
+  // Measured r8: at 0.042 a level-2 secondary is an 8 cm bar that, once the tip
+  // taper gave it a point, read as a bright straw SPIKE inside the crown (17 k
+  // warm pixels in the crown bbox). The taper plus the sub-pixel aerial dissolve
+  // in TRUNK_FRAG now cover the thin-line case that MIN_R was inflated to avoid,
+  // so these come back down toward real sakura twig gauges.
+  const MIN_R = { 1: 0.062, 2: 0.030, 3: 0.019, 4: 0.0125, 5: 0.0085 };
 
   const LEVELS = [
     // level 1 — primary limbs
@@ -151,7 +188,16 @@ function buildSkeleton() {
     { kids: 4, lenF: [0.46, 0.66], tilt: [0.42, 0.82], droop: 0.145, gnarl: 0.215, segs: 8, rF: [0.48, 0.66] },
     // level 4 — drooping twigs (sakura hangs)
     { kids: 4, lenF: [0.28, 0.50], tilt: [0.34, 1.05], droop: 0.520, gnarl: 0.46, segs: 6, rF: [0.36, 0.54] },
+    /* level 5 — the TIP SPRAY. ART_BIBLE §5: "every silhouette edge should have
+     * something breaking it up." The reference frame (shots/pause-check) had
+     * fine tapering twigs breaking the crown outline and the round-2 build had
+     * lost them, so the outline read smoother and more synthetic than the
+     * reference. 3-5 twigs per parent tip, diverging 15-35 deg (0.26-0.61 rad)
+     * at 20-30 % of the parent's length, exactly as prescribed. They also hide
+     * the parent's own tapered end, which is what read as a chisel cut.      */
+    { kids: 3, lenF: [0.20, 0.30], tilt: [0.26, 0.61], droop: 0.74, gnarl: 0.58, segs: 4, rF: [0.30, 0.50] },
   ];
+  const MAX_LEVEL = 5;
 
   const AXIS = new THREE.Vector3();
   const OUT = new THREE.Vector3();
@@ -159,10 +205,13 @@ function buildSkeleton() {
   function spawnChildren(parent, level, parentLen) {
     const L = LEVELS[level - 1];
     if (!L) return;
-    const kids = L.kids + (rng.next() < 0.42 ? 1 : 0);
-    // stagger attachment heights so nothing reads as a Y-fork repeat
+    const kids = L.kids + (rng.next() < 0.42 ? 1 : 0) + (level === 5 ? 1 : 0);
+    // stagger attachment heights so nothing reads as a Y-fork repeat. Level 5 is
+    // a TIP spray, so its twigs cluster in the outer third of the parent.
     for (let k = 0; k < kids; k++) {
-      const t = 0.26 + (k / Math.max(1, kids)) * 0.64 + rng.range(-0.08, 0.09);
+      const t = level === 5
+        ? 0.62 + (k / Math.max(1, kids)) * 0.36 + rng.range(-0.05, 0.04)
+        : 0.26 + (k / Math.max(1, kids)) * 0.64 + rng.range(-0.08, 0.09);
       const at = attach(parent, t);
       // outward = away from the trunk axis, so the crown opens up
       OUT.set(at.p.x, 0, at.p.z);
@@ -172,9 +221,11 @@ function buildSkeleton() {
       AXIS.set(Math.cos(az), rng.range(-0.25, 0.25), Math.sin(az)).normalize();
       const tilt = rng.range(L.tilt[0], L.tilt[1]);
       const d = at.tan.clone().applyAxisAngle(AXIS, tilt);
-      // bias out and up, so limbs reach for the sky instead of collapsing inward
-      d.addScaledVector(OUT, rng.range(0.30, 0.62));
-      d.y += rng.range(0.18, 0.56) * (level <= 2 ? 1 : 0.62);
+      // bias out and up, so limbs reach for the sky instead of collapsing inward.
+      // A level-5 tip twig keeps its parent's heading (the prescribed 15-35 deg
+      // divergence IS the whole shape), so it barely gets the outward bias.
+      d.addScaledVector(OUT, level === 5 ? rng.range(0.04, 0.14) : rng.range(0.30, 0.62));
+      d.y += rng.range(0.18, 0.56) * (level <= 2 ? 1 : (level === 5 ? 0.16 : 0.62));
       d.normalize();
       const len = parentLen * rng.range(L.lenF[0], L.lenF[1]);
       // MIN_R: a twig thinner than ~26 mm rasterises as a 1-px dashed line of
@@ -188,7 +239,7 @@ function buildSkeleton() {
         level, segs: L.segs, droop: L.droop, gnarl: L.gnarl, dist0: at.dist,
       });
       child.junction = true;
-      if (level < 4) spawnChildren(child, level + 1, len);
+      if (level < MAX_LEVEL) spawnChildren(child, level + 1, len);
     }
   }
 
@@ -226,31 +277,90 @@ function buildSkeleton() {
  * 2. Tube geometry
  * ================================================================== */
 
-const SIDES = { '-1': 7, 0: 22, 1: 14, 2: 10, 3: 8, 4: 6 };
+const SIDES = { '-1': 8, 0: 24, 1: 14, 2: 10, 3: 8, 4: 6, 5: 5 };
 
-function buildWoodGeometry(skel, detail) {
+function buildWoodGeometry(skel, detail, groundY = 0) {
   const pos = [], nor = [], uvs = [], tan = [], sti = [], pha = [], cav = [], rad = [];
   const idx = [];
   const flareRng = makeRng(SEED ^ 0x5b1);
-  // root buttresses: a handful of angular lobes on the lowest 1.9 units
+  // root buttresses: a handful of angular lobes on the flare, at unequal spacing
   const lobes = [];
-  for (let i = 0; i < 7; i++) {
-    lobes.push({ th: (i / 7) * Math.PI * 2 + flareRng.range(-0.30, 0.30), amp: flareRng.range(0.20, 0.50) });
+  {
+    let th = 0.9;
+    const gaps = [0.78, 1.42, 0.92, 1.66, 1.04, 1.24, 1.94];
+    const gn = (Math.PI * 2) / gaps.reduce((a, b) => a + b, 0);
+    for (let i = 0; i < gaps.length; i++) {
+      th += gaps[i] * gn;
+      lobes.push({ th, amp: flareRng.range(0.22, 0.56) });
+    }
   }
-  const FLARE_H = 2.05;
+  /* Flare geometry, measured from the TERRAIN not from the trunk's own origin.
+   * ART_BIBLE §5 wants a visible flare; the prescription wants the contact
+   * radius at 1.55-1.75x the breast-height radius over a pow(...,2.2) curve.
+   * The natural taper already supplies 1.18x of that between y = groundY + 1.4
+   * and the contact, so FLARE_K = 0.40 lands the total at ~1.65x. */
+  const FLARE_H = 1.80;
+  const FLARE_K = 0.40;
 
   const N0 = new THREE.Vector3(), B0 = new THREE.Vector3(), T0 = new THREE.Vector3();
   const prevT = new THREE.Vector3(), rotAxis = new THREE.Vector3();
   const p = new THREE.Vector3(), dir = new THREE.Vector3();
 
   for (const br of skel.branches) {
-    const sides = Math.max(4, Math.round(SIDES[br.level] * detail));
+    // A twig has to stay a ROUND tube at every tier. Dropping it to 4 sides
+    // (what detail 0.62 used to do) turns it into a flat ribbon that renders
+    // edge-on as a hard tan sliver — an LOD tier that changes the ART, not the
+    // fidelity. Sides floor at 5 for anything level >= 3 and the ring stride is
+    // gone: the outer wood is a rounding error in the triangle budget.
+    const sides = Math.max(br.level >= 3 ? 5 : 6, Math.round(SIDES[br.level] * detail));
     const pts = br.pts;
-    const stride = br.level >= 3 && detail < 0.85 ? 2 : 1;
+    const stride = 1;
     const ring = [];
     for (let i = 0; i < pts.length; i += stride) ring.push(pts[i]);
     if (ring[ring.length - 1] !== pts[pts.length - 1]) ring.push(pts[pts.length - 1]);
     if (ring.length < 2) continue;
+
+    /* ---- pointed tip -------------------------------------------------
+     * A tube that simply STOPS shows the far wall of its own interior as a
+     * flat pale ellipse: every free branch end read as a sawn log, which was
+     * the loudest "unfinished asset" tell in the crown. Two extrapolated rings
+     * plus an apex fan turn each end into a point — what real wood does — for
+     * 2*(sides+1)+1 vertices per branch. MIN_R can stay where it is (it is
+     * what keeps mid twigs off the sub-pixel sliver regime); only the last
+     * ~2 radii of length taper away.                                         */
+    let capped = false;
+    {
+      const a = ring[ring.length - 1], b = ring[ring.length - 2];
+      const ed = a.p.clone().sub(b.p);
+      if (ed.lengthSq() > 1e-12) {
+        ed.normalize();
+        const r0e = a.r;
+        /* MEASURED r2: a straight 4-radius cone plus a 1.3-radius apex is a
+         * 5.3-radius SPEAR, and on the thick level-1/2 wood that is an 80 cm
+         * pale spike sticking out of the crown — the "angular flat polygon"
+         * ends the critic named. A rounded ogive r = r0*sqrt(1-(s/S)^2) over
+         * S radii reads as wood that ran out instead: no straight edge, no flat
+         * facet, and the tangent goes vertical at the tip so the apex fan is
+         * hidden. Thick wood gets a short blunt stub (real limbs end in a stub
+         * or a break), fine wood a longer needle.
+         *
+         * The end is also bent, by a fixed fraction of the last segment's own
+         * curvature, so no tip silhouette is a straight line.                */
+        const S = br.level <= 2 ? 2.05 : 3.30;
+        const bend = new THREE.Vector3(
+          flareRng.range(-0.16, 0.16), flareRng.range(-0.20, 0.06), flareRng.range(-0.16, 0.16));
+        for (let ti = 1; ti <= 4; ti++) {
+          const s = S * (ti / 4.15);
+          ring.push({
+            p: a.p.clone().addScaledVector(ed, r0e * s)
+              .addScaledVector(bend, r0e * s * (ti / 4)),
+            r: r0e * Math.sqrt(Math.max(0.0025, 1 - (s / S) ** 2)),
+            dist: a.dist + r0e * s,
+          });
+        }
+        capped = true;
+      }
+    }
 
     // ---- parallel-transport frame -----------------------------------
     T0.copy(ring[1].p).sub(ring[0].p).normalize();
@@ -261,7 +371,14 @@ function buildWoodGeometry(skel, detail) {
     prevT.copy(T0);
 
     const rMid = ring[Math.floor(ring.length / 2)].r;
-    const uRepeat = Math.max(1, Math.round(2 * Math.PI * rMid * 0.45));
+    /* Per-branch UV randomisation. Every branch used to sample the SAME stretch
+     * of the bark map at the same u phase, so the whole tree read as a bundle of
+     * identically striped planks. An integer u repeat is still required (the map
+     * has to wrap round the tube), but the PHASE and the v origin are free, and
+     * the u repeat itself can be nudged one tile either way. */
+    const uRepeat = Math.max(1, Math.round(2 * Math.PI * rMid * 0.45 * flareRng.range(0.80, 1.35)));
+    const uPhase = flareRng.next();
+    const vPhase = flareRng.range(0, 12);
     const start = pos.length / 3;
 
     for (let i = 0; i < ring.length; i++) {
@@ -291,15 +408,30 @@ function buildWoodGeometry(skel, detail) {
         const ang = (k / sides) * Math.PI * 2;
         dir.copy(N0).multiplyScalar(Math.cos(ang)).addScaledVector(B0, Math.sin(ang));
         let r = a.r;
-        if (br.level === 0 && a.p.y < FLARE_H) {
-          const fall = Math.pow(1 - THREE.MathUtils.clamp(a.p.y / FLARE_H, 0, 1), 1.75);
+        if (br.level === 0) {
+          // pow(1 - h/1.8, 2.2), h measured from the TERRAIN surface
+          const hAbove = (a.p.y - groundY) / FLARE_H;
+          const fall = Math.pow(1 - THREE.MathUtils.clamp(hAbove, 0, 1), 2.2);
           const az = Math.atan2(dir.z, dir.x);
-          let f = 1 + 0.30 * fall;
+          let f = 1 + FLARE_K * fall;
           for (const lo of lobes) {
             const cd = Math.cos(az - lo.th);
             if (cd > 0) f += lo.amp * Math.pow(cd, 4.0) * fall;
           }
           r *= f;
+        }
+        /* Silhouette perturbation. The trunk's left and right edges were both
+         * perfectly straight lines (measured over 680 px in the bark preset),
+         * which is the single loudest "lathe-turned primitive" tell. +-7 % of
+         * low-frequency noise around the circumference AND along the height
+         * gives roughly one direction change per 1.5 m of height, i.e. 4-5 over
+         * the visible trunk, on both edges independently. Level 1 gets half of
+         * it so the big limbs are not straight tubes either. */
+        if (br.level <= 1) {
+          const wob = noise3(dir.x * 1.35 + 7.1, a.p.y * 0.62, dir.z * 1.35)
+            * 0.62
+            + noise3(dir.x * 3.1, a.p.y * 1.55 + 3.3, dir.z * 3.1) * 0.38;
+          r *= 1 + wob * (br.level === 0 ? 0.07 : 0.035);
         }
         p.copy(a.p).addScaledVector(dir, r);
         pos.push(p.x, p.y, p.z);
@@ -308,7 +440,7 @@ function buildWoodGeometry(skel, detail) {
         tan.push(-N0.x * Math.sin(ang) + B0.x * Math.cos(ang),
           -N0.y * Math.sin(ang) + B0.y * Math.cos(ang),
           -N0.z * Math.sin(ang) + B0.z * Math.cos(ang));
-        uvs.push((k / sides) * uRepeat, a.dist * 0.42);
+        uvs.push((k / sides) * uRepeat + uPhase, a.dist * 0.42 + vPhase);
         sti.push(stiff);
         pha.push(br.phase);
         cav.push(jc);
@@ -317,6 +449,25 @@ function buildWoodGeometry(skel, detail) {
     }
 
     const cols = sides + 1;
+
+    // apex vertex closing the tapered tip (see `capped` above)
+    let apex = -1;
+    if (capped) {
+      const a = ring[ring.length - 1], b = ring[ring.length - 2];
+      T0.copy(a.p).sub(b.p);
+      if (T0.lengthSq() < 1e-12) T0.set(0, 1, 0); else T0.normalize();
+      p.copy(a.p).addScaledVector(T0, a.r * 1.30);
+      apex = pos.length / 3;
+      pos.push(p.x, p.y, p.z);
+      nor.push(T0.x, T0.y, T0.z);
+      tan.push(N0.x, N0.y, N0.z);
+      uvs.push(0.5 * uRepeat + uPhase, a.dist * 0.42 + vPhase);
+      sti.push(br.rigid ? 0 : THREE.MathUtils.clamp(a.dist / skel.maxDist, 0, 1));
+      pha.push(br.phase);
+      cav.push(1.0);
+      rad.push(a.r * 0.4);
+    }
+
     for (let i = 0; i < ring.length - 1; i++) {
       for (let k = 0; k < sides; k++) {
         const a = start + i * cols + k;
@@ -325,6 +476,10 @@ function buildWoodGeometry(skel, detail) {
         const d = c + 1;
         idx.push(a, c, b, b, c, d);
       }
+    }
+    if (apex >= 0) {
+      const lastRow = start + (ring.length - 1) * cols;
+      for (let k = 0; k < sides; k++) idx.push(lastRow + k, apex, lastRow + k + 1);
     }
   }
 
@@ -395,15 +550,19 @@ export default {
     const q = ctx.quality ?? {};
     const tier = q.tier ?? 'high';
 
-    const DETAIL = { ultra: 1.0, high: 1.0, medium: 0.78, low: 0.62 }[tier] ?? 0.85;
-    const CARDS = { ultra: 4300, high: 3100, medium: 2000, low: 1350 }[tier] ?? 2600;
+    // Tier = fewer INSTANCES, never a coarser silhouette. The wood is ~4 % of
+    // the frame's triangles, so its detail barely moves between tiers.
+    const DETAIL = { ultra: 1.0, high: 1.0, medium: 0.92, low: 0.84 }[tier] ?? 0.90;
+    const CARDS = { ultra: 4300, high: 3100, medium: 2200, low: 1600 }[tier] ?? 2600;
     const BARK_SIZE = { ultra: 1024, high: 768, medium: 512, low: 384 }[tier] ?? 768;
     const ATLAS_SIZE = { ultra: 2048, high: 2048, medium: 1024, low: 1024 }[tier] ?? 2048;
     const CARD_RES = tier === 'low' || tier === 'medium' ? 2 : 3;
     // A lower tier is the SAME TREE with fewer, bigger blossom clusters — never
     // a bare skeleton. Card area scales as 1/count so canopy COVERAGE is a
     // tier-invariant, which is what the eye actually reads.
-    const CARD_SCALE = THREE.MathUtils.clamp(Math.sqrt(3100 / CARDS), 1.0, 1.62);
+    // Total card AREA (count * scale^2) is the tier invariant, because coverage
+    // is what the eye reads. 4300*0.849^2 = 3100 = 1600*1.392^2.
+    const CARD_SCALE = THREE.MathUtils.clamp(Math.sqrt(3100 / CARDS), 0.84, 1.55);
 
     /* ---- textures ------------------------------------------------- */
     const bark = buildBarkTextures({ size: BARK_SIZE, seed: SEED });
@@ -414,9 +573,13 @@ export default {
     ctx.assets.textures.treeBarkNormal = bark.normal;
     ctx.assets.textures.sakuraBlossom = atlas;
 
-    /* ---- skeleton + wood ------------------------------------------ */
-    const skel = buildSkeleton();
-    const woodGeo = buildWoodGeometry(skel, DETAIL);
+    /* ---- skeleton + wood ------------------------------------------ *
+     * The ground is NOT at y = 0 (20-terrain's knoll summit is ~1.27), and the
+     * tree group carries a yaw only, so local y === world y. Every root, the
+     * flare curve and the soil blend are measured from this number. */
+    const GROUND_Y = ctx.assets.terrain?.heightAt?.(0, 0) ?? 0;
+    const skel = buildSkeleton(GROUND_Y);
+    const woodGeo = buildWoodGeometry(skel, DETAIL, GROUND_Y);
 
     const col = (hex) => new THREE.Color().setHex(hex, THREE.SRGBColorSpace);
     const trunkUniforms = {
@@ -431,14 +594,37 @@ export default {
       uDetailScale: { value: 4.3 },
       uMossDir: { value: new THREE.Vector3(-0.32, 0.14, -1.0).normalize() },
       uWindAmp: { value: 0.92 },
-      // Young sakura twig wood: warm red-grey, far lighter than trunk bark, and
-      // thin enough that light wraps right around it.
-      uTwigCol: { value: col(0x8B6A58) },
+      // Young sakura twig wood: warm red-grey. MEASURED: at #7E5F52 (display
+      // L 0.404) plus the twig's own rim/translucency/shadow-lift boosts the
+      // rendered twigs came out at L 0.736 — brighter than the blossoms. Wood is
+      // the darkest mass in a sakura crown; #5E463C (L 0.293) plus the trimmed
+      // boosts lands the rendered twig at <= 0.40.
+      uTwigCol: { value: col(0x5E463C) },
+      // ART_BIBLE §5 root flare: the earth the buttresses dissolve into.
+      uSoilCol: { value: col(0x4E3D2E) },
+      // filled in below from ctx.assets.terrain (the ground is NOT at y = 0).
+      uGroundY: { value: 0 },
       // pixels per world unit at 1 m — lets the fragment shader know when a twig
       // has collapsed to a 1-px line and must dissolve into the haze instead of
       // rasterising as a hard near-black dash.
       uPxScale: { value: 1600 },
+      // A twig inside the crown is surrounded on all sides by backlit blossom,
+      // and blossom bounce is by far the strongest light reaching it — far more
+      // than the sky. Without this the outer wood renders as hard dark dashes
+      // against L 0.89 petals: "dirt on the lens". Filled in below once the
+      // crown bounds are known (shared BY REFERENCE with the canopy material).
+      uCanopyCentre: { value: new THREE.Vector3(0, 8, 0) },
+      uCanopyR: { value: 8 },
+      uBlossomCol: { value: col(0xE9A8BE) },
+      // Measured r2: at 0.95 the twigs came back as CREAM slivers — 59 k warm
+      // pale pixels inside the crown bbox against 8 k before, i.e. the dark
+      // "dirt on the lens" dashes were traded for straw. 0.34 puts outer wood at
+      // roughly 0.7 of the surrounding petal luminance, which is where a twig
+      // inside a backlit crown belongs: present, soft, never a hard edge.
+      uBlossomAmt: { value: 0.11 },
+      uCoverage: { value: 1 },
     };
+    trunkUniforms.uGroundY.value = GROUND_Y;
 
     // A ShaderMaterial with lights:true MUST carry the whole UniformsLib.lights
     // block — the renderer writes its own light state into those objects and
@@ -506,6 +692,15 @@ export default {
     cCentre.divideScalar(Math.max(1, all.length));
     let cRadius = 1;
     for (const a of all) cRadius = Math.max(cRadius, a.p.distanceTo(cCentre));
+    // Hand the crown volume to both shaders. BUG FIX: this has to be the WORLD
+    // centre. cCentre is in the tree's LOCAL space and the group carries a 2.55
+    // rad yaw, so the canopy shader has been comparing a world vWorldPos against
+    // a local centre — a 3.7 m xz error on an 8.7 m radius, which skewed every
+    // vShell / vCrownT reading (and therefore the whole interior) to one side.
+    group.updateMatrix();
+    const cCentreW0 = cCentre.clone().applyMatrix4(group.matrix);
+    trunkUniforms.uCanopyCentre.value.copy(cCentreW0);
+    trunkUniforms.uCanopyR.value = cRadius;
 
     /* ---- instances ------------------------------------------------ */
     const cardGeo = buildCardGeometry(CARD_RES);
@@ -523,16 +718,64 @@ export default {
     // painted from two of them reads as one pale mass; the mid and deep values
     // are what give the crown a readable inside.
     const TINTS = [col(0xFFF2F6), col(0xFFD9E6), col(0xFFB6CE), col(0xEE8CAF), col(0xC25F86)];
+
+    /* ---- the tint is a RATIO, not a multiplier ------------------------ *
+     * THE bug behind the dead maroon patches. The atlas is already painted from
+     * these five values, so multiplying an authored #C25F86 petal core by an
+     * instance tint of #C25F86 SQUARES the pink: linear (0.541,0.115,0.238)^2 =
+     * (0.293,0.013,0.057), luminance 0.076 — a fifth of the palette's own deep
+     * value, and after the interior occlusion terms it measured L 0.01-0.047 in
+     * the graded frame (blocker 1).
+     *
+     * So the shader takes VALUE from the atlas and CHROMA from here (see the
+     * albedo block in CANOPY_FRAG): the tint below IS the card's colour, and the
+     * texture only supplies a scalar value ratio about TINT_REF plus a minority
+     * share of its own chroma. TINT_VALSPREAD compresses the palette's value
+     * spread so the deepest tint lands ON #C25F86 rather than two stops under it:
+     * compressed lumas 0.875 / 0.786 / 0.660 / 0.544 / 0.432 against a 0.786 ref.
+     */
+    const TINT_REF = col(0xFFD9E6);
+    const TINT_VALSPREAD = 0.62;
+    const lin = (c) => 0.2126 * c.r + 0.7152 * c.g + 0.0722 * c.b;
+    const REF_L = lin(TINT_REF);
+    /** the palette hue at its compressed value — the card's colour outright. */
+    const TINT_RATIO = TINTS.map((c) => {
+      const l = Math.max(1e-5, lin(c));
+      const target = REF_L + TINT_VALSPREAD * (l - REF_L);
+      const k = target / l;
+      return new THREE.Vector3(c.r * k, c.g * k, c.b * k);
+    });
     /** cumulative pick weights per layer, outer -> inner */
+    // MEASURED: with the outer layer weighted 13/32/34/16/5 across those five
+    // values, 79 % of the shell was painted from the top three (lightest) ones —
+    // which is the arithmetic behind "the canopy reads as a uniformly pale pink
+    // mass". Re-weighted so the mid and shadow values carry the shell and the
+    // light values are the accents they are meant to be.
+    // MEASURED r4: with 12 % of the OUTER shell drawing #C25F86 (the palette's
+    // deep INTERIOR value), a dozen shell clusters per frame sat as dark plum
+    // islands directly against the sky — a value that only makes sense with a
+    // metre of blossom in front of it. The deep value is now reserved for the
+    // layers that are actually inside the mass; the shell's spread runs
+    // #FFF2F6 -> #EE8CAF, which is still 0.94 -> 0.40 in display L.
+    /* MEASURED r2: `mid` still drew 14 % of its cards from #C25F86 and `inner`
+     * 48 %, and because the mid layer sits only 0.20-0.22 inside the shell those
+     * cards were VISIBLE from outside as large saturated dark-magenta patches —
+     * they read as bruises or mould, not as shadowed blossom (blocker 2b). The
+     * prescription is explicit: #EE8CAF is the shadow value and #C25F86 is
+     * reserved for the innermost ~10 % of cluster depth. So the deep value is
+     * gone from outer and mid entirely and is a minority even in `inner`; the
+     * interior's darkness now comes from the shader's occlusion ladder (which is
+     * gated on real crown depth) rather than from a painted-on albedo. */
     const TINT_CDF = {
-      outer: [0.13, 0.45, 0.79, 0.95, 1.00],
-      mid: [0.04, 0.22, 0.55, 0.86, 1.00],
-      inner: [0.00, 0.05, 0.24, 0.61, 1.00],
+      outer: [0.09, 0.32, 0.72, 1.00, 1.00],
+      mid: [0.03, 0.18, 0.56, 1.00, 1.00],
+      inner: [0.00, 0.05, 0.26, 0.86, 1.00],
     };
     // a small per-cluster temperature swing: real blossom varies warm (young,
     // yellow-pink) to cool (older, blue-pink) across one tree.
     const WARM = new THREE.Vector3(1.035, 0.982, 0.955);
     const COOL = new THREE.Vector3(0.962, 0.986, 1.048);
+    const TC = new THREE.Color();
 
     const mat4 = new THREE.Matrix4();
     const qt = new THREE.Quaternion(), qRoll = new THREE.Quaternion();
@@ -547,7 +790,11 @@ export default {
       // The crown must read as a VOLUME: interior cards are pulled toward the
       // crown centre rather than just pushed a little way down their own branch,
       // because the mid-height interior has almost no twigs to hang off.
-      { key: 'inner', frac: 0.16, push: [-0.30, 0.10], ao: [0.28, 0.54], size: [0.95, 1.62], jitter: 0.95, lerpIn: [0.28, 0.66] },
+      // ...but spread across the WHOLE radius range, not parked at one depth.
+      // lerpIn 0.28-0.66 put every interior card in a shell around the crown
+      // centre, which rendered as a single flat grey-mauve ball hanging in the
+      // middle of the canopy. 0.08-0.64 fills the volume instead.
+      { key: 'inner', frac: 0.16, push: [-0.30, 0.10], ao: [0.28, 0.58], size: [0.88, 1.48], jitter: 1.05, lerpIn: [0.08, 0.64] },
     ];
 
     let w = 0;
@@ -570,8 +817,8 @@ export default {
         // dome. ART_BIBLE §5: "every silhouette edge should have something
         // breaking it up." Only the outer/mid layers throw them — an interior
         // card flung outward would leave a hole in the middle of the crown.
-        const stray = Ly.key !== 'inner' && rng.next() < 0.105;
-        if (stray) pp.addScaledVector(out, rng.range(0.45, 2.15))
+        const stray = Ly.key !== 'inner' && rng.next() < 0.135;
+        if (stray) pp.addScaledVector(out, rng.range(0.55, 2.60))
           .addScaledVector(jit.set(rng.gauss(0, 0.55), rng.gauss(0, 0.75), rng.gauss(0, 0.55)), 1);
 
         // face outward, tilted by the host twig, plus a healthy random wobble
@@ -592,12 +839,19 @@ export default {
         mat4.compose(pp, qt, scl);
         inst.setMatrixAt(w, mat4);
 
-        // growth order: the crown fills from the outside in and from the top
-        // down, which is how a real tree opens (light reaches the tips first)
+        // Growth order: the crown still fills from the outside in and the top
+        // down (light reaches the tips first), but the DOMINANT term is now
+        // random. The old formula was 74 % deterministic, so at stage 0-1
+        // coverage the only sites whose order cleared the front were the
+        // outer-top ones — every early blossom landed in a single blob on one
+        // side of the crown. Stage 1 is the first thing a new player sees, so
+        // its blossoms have to be SCATTERED over the whole canopy.
         const heightT = THREE.MathUtils.clamp((pp.y - (cCentre.y - cRadius)) / (2 * cRadius), 0, 1);
         const radialT = THREE.MathUtils.clamp(pp.distanceTo(cCentre) / cRadius, 0, 1);
-        const order = THREE.MathUtils.clamp(
-          0.80 - radialT * 0.52 - heightT * 0.26 + rng.range(-0.18, 0.18), 0.0, 0.99);
+        let order = THREE.MathUtils.clamp(
+          rng.next() * 0.74 + (1 - (radialT * 0.60 + heightT * 0.40)) * 0.40, 0.0, 0.99);
+        // the stage 4/5 reserve: these cards only open once coverage passes 1.0
+        if (rng.next() < 0.155) order = 1.00 + rng.next() * 0.215;
 
         aInst[w * 4 + 0] = a.phase;
         aInst[w * 4 + 1] = THREE.MathUtils.clamp(a.stiff * 1.06, 0, 1);
@@ -615,18 +869,34 @@ export default {
         aInst2[w * 4 + 2] = size;
         aInst2[w * 4 + 3] = rng.next();
 
-        // tint: bright on the outside, deep in the interior, always coherent
+        // Tint: bright on the outside, deep in the interior, always coherent —
+        // and now SPATIALLY COHERENT. A purely per-card random walk over the
+        // five palette values averages out at hero distance and the crown reads
+        // as one pale mass (ART_BIBLE §8 tell 5). A low-frequency field over the
+        // crown pushes whole handfuls of neighbouring clusters up or down the
+        // palette together, so the canopy resolves into readable light and
+        // shadowed masses instead of noise.
+        const patch = noise3(pp.x * 0.30 + 13.7, pp.y * 0.30, pp.z * 0.30 + 5.1) * 0.62
+          + noise3(pp.x * 0.86, pp.y * 0.86 + 21.3, pp.z * 0.86) * 0.26;
         const cdf = TINT_CDF[Ly.key] ?? TINT_CDF.mid;
-        const u = rng.next();
+        const u = THREE.MathUtils.clamp(rng.next() * 0.62 + (patch * 0.5 + 0.5) * 0.38, 0, 0.999);
         let ti = 0; while (ti < 4 && u > cdf[ti]) ti++;
-        const c = TINTS[ti];
-        const j2 = rng.range(0.86, 1.09);
-        const tw = rng.range(-1, 1);                       // -1 cool .. +1 warm
+        const c = TINT_RATIO[ti];
+        // value jitter: +-0.06 display L on a ~0.80 L palette value is +-7.5 %.
+        const j2 = (1 + THREE.MathUtils.clamp(rng.gauss(0, 0.038) + patch * 0.030, -0.10, 0.10));
+        // hue jitter +-10 deg, plus a temperature swing carried by the same
+        // low-frequency patch field so neighbours agree (real blossom runs warm
+        // yellow-pink to cool blue-pink in patches across one tree).
+        const tw = THREE.MathUtils.clamp(rng.range(-0.7, 0.7) + patch * 0.8, -1, 1);
         const hx = tw > 0 ? WARM : COOL;
-        const k = Math.abs(tw);
-        aTint[w * 3 + 0] = c.r * j2 * (1 + (hx.x - 1) * k);
-        aTint[w * 3 + 1] = c.g * j2 * (1 + (hx.y - 1) * k);
-        aTint[w * 3 + 2] = c.b * j2 * (1 + (hx.z - 1) * k);
+        const k = Math.abs(tw) * 0.55;
+        TC.setRGB(c.x * j2 * (1 + (hx.x - 1) * k),
+          c.y * j2 * (1 + (hx.y - 1) * k),
+          c.z * j2 * (1 + (hx.z - 1) * k), THREE.LinearSRGBColorSpace);
+        TC.offsetHSL(rng.range(-10, 10) / 360, 0, 0);
+        aTint[w * 3 + 0] = TC.r;
+        aTint[w * 3 + 1] = TC.g;
+        aTint[w * 3 + 2] = TC.b;
       }
     }
     inst.count = w;
@@ -636,6 +906,15 @@ export default {
 
     const canopyUniforms = {
       uAtlas: { value: atlas },
+      // the atlas's dominant painted value; see TINT_RATIO above.
+      uTintRef: { value: new THREE.Vector3(TINT_REF.r, TINT_REF.g, TINT_REF.b) },
+      // ART_BIBLE §2 "#FFE7EE": the colour light takes bleeding through a petal.
+      uTransCol: { value: col(0xFFE7EE) },
+      uTransAmt: { value: 0.30 },
+      // Floor on the interior value ladder, as a fraction of the card's own
+      // palette albedo. 0.48 keeps the deepest interior ON #C25F86 rather than
+      // two stops under it.
+      uDeepClamp: { value: 0.56 },
       uTranslucency: { value: 0.50 },
       uThickness: { value: 0.52 },
       uAlphaTest: { value: 0.42 },
@@ -643,15 +922,23 @@ export default {
       uLuminCol: { value: col(0xFFC9DC) },
       uGold: { value: 0 },
       uGoldCol: { value: col(0xE8C56A) },
-      uThroughGlow: { value: 0.40 },
+      // DECISION: the backlit translucent canopy is the signature look, so this
+      // is the single most important number in the file. 0.40 -> 0.66.
+      uThroughGlow: { value: 0.38 },
       uGlowCol: { value: col(0xFFC3D6) },
-      uCoverage: { value: 1 },
+      // Extra warm halo where the key grazes the outer shell from behind.
+      uSunHalo: { value: 0.40 },
+      uHaloCol: { value: col(0xFFE7EE) },
+      // These three are the SAME uniform objects the trunk material holds, so
+      // the wood's blossom-bounce term and the canopy always agree on where the
+      // crown is and how much of it has opened.
+      uCoverage: trunkUniforms.uCoverage,
       uBudMix: { value: STAGE.budMix[3] },
-      uCanopyCentre: { value: cCentre.clone() },
+      uCanopyCentre: trunkUniforms.uCanopyCentre,
       // BUG FIX: CANOPY_COMMON has always declared uCanopyR and nobody supplied
       // it, so vCrownT/vShell were computed against a zero radius (div by ~0)
       // and the crown had no usable volume coordinates at all.
-      uCanopyR: { value: cRadius },
+      uCanopyR: trunkUniforms.uCanopyR,
       // The BEAUTY camera position, shared by reference with the depth material
       // so the shadow pass billboards the cards exactly as the beauty pass does.
       // (`cameraPosition` would be the light's position during the shadow pass.)
@@ -660,13 +947,57 @@ export default {
       // less blend toward the crown's own sphere normal => individual clusters
       // keep more of their own facing, which is where cluster-to-cluster
       // value variation comes from.
-      uNormalBlend: { value: 0.44 },
+      // 0.44 -> 0.62: the more each card shades along the CROWN's own outward
+      // normal, the more the whole mass reads as one lit sphere with a dark side,
+      // which is where a canopy's sense of volume actually comes from. Individual
+      // cluster facing still carries 38 % so the surface is not a smooth ball.
+      uNormalBlend: { value: 0.62 },
+      // Headroom. The atlas is authored bright, the key is warm and the post
+      // chain lifts hard; measured, the crown's whole luminance histogram was
+      // piling up at p25 0.87 / p95 0.95, i.e. clipping into one flat value.
+      // Scaling the albedo is the only lever that survives an exposure lift.
+      uAlbedoScale: { value: 0.88 },
+      // Optical depth per crown RADIUS of blossom. 1.55 => one radius of crown
+      // between a cluster and the key leaves 21 % of the transmission, two radii
+      // leave 4.5 %. This is the knob that turns a uniformly glowing cloud into a
+      // backlit mass with a blazing rim.
+      uOpticalDepth: { value: 1.55 },
+      // Linear-luminance floor for the deepest crown interior. #C25F86 sits at
+      // ~0.155 linear luma, so this keeps the darkest blossom ON the palette's
+      // deep-interior value instead of below it.
+      // MEASURED: 0.150 linear prints at display L 0.40 through the ACES + grade
+      // chain when it is reached; the reason it was not reached is documented at
+      // the floor itself (the old 3.0x multiplier cap). 0.185 lands the darkest
+      // authored blossom (#C25F86, display L 0.467) at 0.44-0.46 with headroom.
+      // A/B MEASURED this round. The darkest surviving blossom cluster in the hero
+      // frame (x 1057-1105 y 500-560) prints at display L 0.538 with this at 0.245
+      // and L 0.841 with it at 0.900, so the floor does own those pixels. 0.265
+      // lands that cluster at ~0.55 — just above ART_BIBLE's deepest authored
+      // blossom #C25F86 (L 0.467) and above the prescribed 0.42 floor — while
+      // leaving the crown a real value ladder (best 90x90 block sd 0.223). Going
+      // higher to chase the last anti-aliased edge pixels below 0.40 would take the
+      // whole deep value out of the palette, which is the opposite failure.
+      uDeepFloor: { value: 0.265 },
       uInterior: { value: 1.0 },
       // Measured r3: the shadow-side crown came out rgb(150,103,120), HSL sat
       // 0.18 — grey mauve, the muddy midtone ART_BIBLE §8 tell 9 forbids. Cutting
       // green harder than red/blue walks the albedo down the palette's own
       // #FFB6CE -> #EE8CAF -> #C25F86 line instead of desaturating it.
-      uDeepTint: { value: new THREE.Vector3(0.83, 0.43, 0.57) },
+      // 0.43 on green cut the interior 2.3 stops below the palette's deep value and
+      // turned it aubergine. 0.60 walks the albedo down #FFB6CE -> #EE8CAF ->
+      // #C25F86 without leaving the palette.
+      // r3: (0.88,0.60,0.70) walked the interior below #C25F86's own saturation
+      // (measured 0.60 HSL against the palette value's 0.45), which is what made
+      // the interior read as a bruise. This lands ON the palette.
+      uDeepTint: { value: new THREE.Vector3(0.90, 0.69, 0.77) },
+      // Measured r0 of this round: the crown's shaded interior came out
+      // rgb(116,76,95), HSL sat 0.21 — grey mauve, the muddy midtone
+      // ART_BIBLE §8 tell 9 forbids. uDeepTint alone cannot win, because the
+      // blue sky ambient is added AFTER it. uChromaFix re-imposes the palette's
+      // own #C25F86 hue on the interior at whatever luminance the shading
+      // arrived at, so value structure survives and the chroma comes back.
+      uDeepCol: { value: col(0xC25F86) },
+      uChromaFix: { value: 0.36 },
       uFlutter: { value: 0.035 },
       uWindAmp: { value: 1.05 },
     };
@@ -678,6 +1009,12 @@ export default {
       lights: true,
       side: THREE.DoubleSide,
     });
+    // NOT setting alphaToCoverage. It would be the right instrument for ART_BIBLE
+    // §8.8 on an alpha-TESTED silhouette, but this shader writes alpha 1.0 (the
+    // post chain owns the buffer's alpha) so coverage would always be full, and
+    // 90-postfx allocates its targets without `samples`, so there is no multisample
+    // buffer for coverage to dither into. Fixing the cutout edge properly is the
+    // post chain's resolve, which is prescribed to that module this round.
     canopyMat.userData.noNpr = true;
 
     const canopyDepthMat = new THREE.ShaderMaterial({
@@ -791,6 +1128,16 @@ export default {
       if (!sc) return;
       for (let s = 0; s <= 5; s++) {
         sc[`stage${s}`] = () => { stage = s; stageTarget = s; stageT = s; writeStage(s); };
+        // ...and the same stage with the post chain, petals and click VFX out of
+        // the way. Judging the canopy's own value structure THROUGH a bloom +
+        // grade + DOF chain that another module is actively retuning is how two
+        // earlier rounds talked themselves into a regression; this is the
+        // ground-truth view. One --scenario flag is all shot.mjs accepts, so the
+        // stage and the clean-up have to travel together.
+        sc[`tree-raw${s}`] = () => {
+          sc['postfx-off']?.(); sc['petals-off']?.(); sc['vfx-off']?.();
+          stage = s; stageTarget = s; stageT = s; writeStage(s);
+        };
       }
       sc.treeCalm = () => { WIND.uniforms.uWindStrength.value = 0.25; };
       sc.treeGust = () => { WIND.uniforms.uWindStrength.value = 1.9; };

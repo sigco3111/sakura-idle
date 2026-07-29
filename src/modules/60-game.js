@@ -30,6 +30,25 @@ import * as E from '../lib/economy.js';
 const STEP = 1 / E.TUNING.SIM_HZ;
 const clamp = (v, a, b) => (v < a ? a : v > b ? b : v);
 
+/**
+ * Semantic game moment → the id 70-audio's SFX table actually synthesises.
+ * Unknown ids fall through audio's `default: break`, so the old semantic names
+ * ('buy', 'milestone', 'prestige', …) were silent: buying — the entire loop of
+ * a clicker — made no sound at all. Two moments are deliberately absent
+ * (`stage-up`, `golden-catch`): 45-vfx already emits 'stageup' / 'golden' from
+ * its own set pieces, and emitting them here as well double-triggers them.
+ */
+const SFX_ID = {
+  buy: 'purchase',
+  milestone: 'achievement',
+  'buy-upgrade': 'upgrade',
+  constellation: 'achievement',
+  codex: 'achievement',
+  achievement: 'achievement',
+  'storm-start': 'storm',
+  prestige: 'stageup',
+};
+
 export default {
   name: 'game',
   order: 60,
@@ -37,6 +56,12 @@ export default {
   async setup(ctx) {
     const bus = ctx.bus;
     const persist = !ctx.shotMode && typeof localStorage !== 'undefined';
+
+    /** One sound, once, under a name 70-audio can synthesise. */
+    function snd(id, gain = 1) {
+      const mapped = SFX_ID[id];
+      if (mapped) bus.emit('sfx', { id: mapped, gain, tag: id });
+    }
 
     /* ---------------------------------------------------------------- *
      * state
@@ -118,7 +143,26 @@ export default {
     /* ---------------------------------------------------------------- *
      * clicking
      * ---------------------------------------------------------------- */
+    /**
+     * Re-entrancy latch. `shake()` broadcasts `tree:clicked` so VFX/audio can
+     * react to a Space-bar or auto shake, and this module ALSO listens to
+     * `tree:clicked` (that is how a click on the trunk mesh becomes income).
+     * Without a latch the broadcast walks straight back into shake() and the
+     * click pays twice — one shake used to net 2 petals while the HUD read
+     * "1 / shake", and it fired two bursts and two overlapping click sounds.
+     * The `__fromGame` tag on the emitted event is the first line of defence;
+     * this latch is the second, so no third-party echo of `tree:clicked` can
+     * ever reintroduce the double-pay.
+     */
+    let inShake = false;
+
     function shake(point, opts = {}) {
+      if (inShake) return { amount: 0, crit: false, reentrant: true };
+      inShake = true;
+      try { return shakeOnce(point, opts); } finally { inShake = false; }
+    }
+
+    function shakeOnce(point, opts = {}) {
       const d = derived();
       const auto = !!opts.auto;
       const power = auto ? (d.grove.autoFull ? 1 : 0.5) : 1;
@@ -141,7 +185,12 @@ export default {
 
       const p = point || treePoint();
       if (opts.emitTreeClick !== false) {
-        bus.emit('tree:clicked', { point: p.clone ? p.clone() : p, worldNormal: null, power: crit ? 2 : 1 });
+        // __fromGame: this is the game telling the world a shake happened, NOT
+        // a fresh click to be scored. Our own listener skips it.
+        bus.emit('tree:clicked', {
+          point: p.clone ? p.clone() : p, worldNormal: null,
+          power: crit ? 2 : 1, __fromGame: true,
+        });
       }
       bus.emit('petals:gain', { amount, point: p, crit });
       bus.emit('petals:burst', {
@@ -149,7 +198,11 @@ export default {
         count: Math.round((crit ? 46 : 14) * (twice ? 1.4 : 1) * (auto ? 0.5 : 1)),
         power: crit ? 1.8 : twice ? 1.25 : 1,
       });
-      bus.emit('sfx', { id: crit ? 'shake-crit' : 'shake', gain: crit ? 1 : 0.7 });
+      // No `sfx` for the shake itself. 70-audio already derives BOTH sounds
+      // from events that exist exactly once per shake — the leaf-rustle/tok
+      // from `tree:clicked` and the crit chime from `petals:gain.crit`. Adding
+      // an `sfx` on top layered a second rustle a few ms late on every click,
+      // which is the comb-filtered "phasing" the review heard.
       pushState();
       return { amount, crit };
     }
@@ -196,7 +249,7 @@ export default {
       invalidate();
       const crossed = E.MILESTONES.some((m) => before < m && state.tenders[id] >= m);
       bus.emit('upgrade:bought', { id, level: state.tenders[id], tier: 'tender', count: n, milestone: crossed });
-      bus.emit('sfx', { id: crossed ? 'milestone' : 'buy', gain: crossed ? 1 : 0.8 });
+      snd(crossed ? 'milestone' : 'buy', crossed ? 1 : 0.8);
       if (crossed) {
         bus.emit('petals:burst', { point: treePoint(), count: 60, power: 1.4 });
         bus.emit('game:toast', {
@@ -222,7 +275,7 @@ export default {
       state.stats.upgrades = Object.keys(state.upgrades).length;
       invalidate();
       bus.emit('upgrade:bought', { id, level: 1, tier: u.family });
-      bus.emit('sfx', { id: 'buy-upgrade', gain: 0.9 });
+      snd('buy-upgrade', 0.9);
       bus.emit('game:toast', { kind: 'upgrade', title: u.name, body: u.flavour, rarity: 3 });
       checkUnlocks();
       pushState(true);
@@ -241,7 +294,7 @@ export default {
       state.nodes[id] = 1;
       invalidate();
       bus.emit('upgrade:bought', { id, level: 1, tier: 'constellation' });
-      bus.emit('sfx', { id: 'constellation', gain: 1 });
+      snd('constellation', 1);
       bus.emit('game:toast', { kind: 'node', title: `${n.branchName} · ${n.name}`, body: n.flavour, rarity: 5 });
       pushState(true);
       return true;
@@ -254,7 +307,7 @@ export default {
       state.heartwood[id] = 1;
       invalidate();
       bus.emit('upgrade:bought', { id, level: 1, tier: 'heartwood' });
-      bus.emit('sfx', { id: 'buy-upgrade', gain: 1 });
+      snd('buy-upgrade', 1);
       bus.emit('game:toast', { kind: 'heartwood', title: h.name, body: h.flavour, rarity: 5 });
       pushState(true);
       return true;
@@ -263,9 +316,17 @@ export default {
     /* ---------------------------------------------------------------- *
      * bloom stages
      * ---------------------------------------------------------------- */
+    /**
+     * Recompute the bloom stage from total-petals-this-season and push it.
+     *
+     * `state.stageFloor` is passed on EVERY derive (see economy.stageFor). A
+     * fresh save floors at 1 蕾 Budding, so no recompute — boot, offline, import,
+     * scenario rebuild — can ever snap a new player back to bare branches. After
+     * a Season turn the floor drops to 0 and stage 0 is reachable again.
+     */
     function applyStage(quiet = false) {
       const d = derived();
-      const s = E.stageFor(state.totalThisSeason, d.grove.bloomThreshold);
+      const s = E.stageFor(state.totalThisSeason, d.grove.bloomThreshold, state.stageFloor | 0);
       if (s === state.stage) return null;
       const up = s > state.stage;
       const from = state.stage;
@@ -279,7 +340,7 @@ export default {
         if (!quiet) {
           bus.emit('game:stageup', { stage: s, name: info.name, kanji: info.kanji, blurb: info.blurb, blossoms });
           bus.emit('petals:burst', { point: treePoint(), count: 220, power: 2.4 });
-          bus.emit('sfx', { id: 'stage-up', gain: 1 });
+          // 45-vfx's stageUp set piece emits 'stageup' itself — one only.
         }
       }
       invalidate();
@@ -342,7 +403,7 @@ export default {
         if (!quiet) {
           bus.emit('game:codex', { id: c.id, ...c });
           bus.emit('game:toast', { kind: 'codex', title: `${c.kanji} ${c.name}`, body: c.desc, rarity: c.rarity });
-          bus.emit('sfx', { id: 'codex', gain: 1 });
+          snd('codex', 1);
         }
       }
       for (const a of E.ACHIEVEMENTS) {
@@ -352,7 +413,7 @@ export default {
         changed = true;
         if (!quiet) {
           bus.emit('game:toast', { kind: 'achievement', title: a.name, body: a.desc, rarity: a.secret ? 5 : 4 });
-          bus.emit('sfx', { id: 'achievement', gain: 0.9 });
+          snd('achievement', 0.9);
         }
       }
       return changed;
@@ -385,7 +446,7 @@ export default {
       setLive();
       bus.emit('game:event', { id: 'storm', active: true, dur: timers.storm, remain: timers.storm, mult: d.grove.stormMult });
       bus.emit('petals:burst', { point: treePoint(), count: 300, power: 2.6 });
-      bus.emit('sfx', { id: 'storm-start', gain: 1 });
+      snd('storm-start', 1);
       bus.emit('game:toast', {
         kind: 'event', title: '花嵐  Petal Storm', rarity: 5,
         body: `The hillside is in the air. ×${E.format(d.grove.stormMult)} for ${Math.round(timers.storm)} seconds.`,
@@ -398,14 +459,14 @@ export default {
       if (windBase !== null) { WIND.uniforms.uWindStrength.value = windBase; windBase = null; }
       setLive();
       bus.emit('game:event', { id: 'storm', active: false, remain: 0 });
-      bus.emit('sfx', { id: 'storm-end', gain: 0.6 });
+      snd('storm-end', 0.6);
     }
 
     function startRain() {
       timers.rain = E.TUNING.RAIN_DURATION;
       setLive();
       bus.emit('game:event', { id: 'rain', active: true, dur: timers.rain, remain: timers.rain });
-      bus.emit('sfx', { id: 'rain-start', gain: 0.7 });
+      snd('rain-start', 0.7);
       bus.emit('game:toast', { kind: 'event', title: '春雨  Spring Rain', body: 'The fall slows to a drift. +10% while it lasts.', rarity: 3 });
     }
 
@@ -415,7 +476,7 @@ export default {
       const ttl = E.TUNING.GOLDEN_TTL * d.grove.goldTtl;
       golden = { id: goldenSeq++, ttl };
       bus.emit('game:golden', { id: golden.id, ttl, seed: Math.floor(rand() * 1e9) });
-      bus.emit('sfx', { id: 'golden-appear', gain: 0.8 });
+      snd('golden-appear', 0.8);
     }
 
     function rollBoon() {
@@ -441,12 +502,24 @@ export default {
       }
       setLive();
       bus.emit('game:toast', { kind: 'boon', title: `${b.kanji}  ${b.name}`, body: b.desc, rarity: 5 });
-      bus.emit('sfx', { id: 'golden-catch', gain: 1 });
+      snd('golden-catch', 1);
     }
 
-    function catchGolden(id) {
-      if (!golden || (id !== undefined && id !== golden.id)) return false;
-      const gid = golden.id;
+    /**
+     * A caught Golden Petal pays out here and nowhere else.
+     *
+     * Guarded by frame, not by the logical petal, because the visible petal and
+     * the logical one are owned by different modules: 45-vfx renders its own
+     * drifting mesh on its own schedule and reports the catch as `vfx:golden`
+     * {kind:'caught'}, while `world:click` on a mesh tagged `userData.goldenId`
+     * is the other route in. Whichever arrives first pays; anything else in the
+     * same frame is the same catch seen twice.
+     */
+    let goldenPaidFrame = -1;
+
+    function grantGolden(gid) {
+      if (goldenPaidFrame === ctx.frame) return false;
+      goldenPaidFrame = ctx.frame;
       const d = derived();
       state.stats.golden += 1;
       const boons = [rollBoon()];
@@ -462,6 +535,11 @@ export default {
       checkUnlocks();
       pushState(true);
       return true;
+    }
+
+    function catchGolden(id) {
+      if (!golden || (id !== undefined && id !== golden.id)) return false;
+      return grantGolden(golden.id);
     }
 
     /* ---------------------------------------------------------------- *
@@ -484,7 +562,10 @@ export default {
       state.season += 1;
       state.petals = 0;
       state.totalThisSeason = 0;
-      state.stage = 0;
+      // Turning the Season is the ONE thing that unlocks the bare-wood look:
+      // drop the first-run Budding floor, then reset to 0 冬芽 Winter Bud.
+      state.stageFloor = E.POST_PRESTIGE_STAGE;
+      state.stage = E.POST_PRESTIGE_STAGE;
       for (const id of E.TENDER_IDS) state.tenders[id] = 0;
       const kept = {};
       if (keepFirst) for (const id in state.upgrades) if (/^up_[a-z]+_1$/.test(id)) kept[id] = 1;
@@ -506,9 +587,9 @@ export default {
       golden = null;
       setLive();
 
-      bus.emit('bloom:stage', { stage: 0 });
+      bus.emit('bloom:stage', { stage: state.stage });   // 0 — the bare-wood reset
       bus.emit('game:prestige', { season: state.season, gain, essence: state.essence, essenceEarned: state.essenceEarned });
-      bus.emit('sfx', { id: 'prestige', gain: 1 });
+      snd('prestige', 1);
       bus.emit('petals:burst', { point: treePoint(), count: 320, power: 3 });
       checkUnlocks();
       save();
@@ -541,7 +622,9 @@ export default {
       if (windBase !== null) { WIND.uniforms.uWindStrength.value = windBase; windBase = null; }
       invalidate(); setLive();
       if (persist) { try { localStorage.removeItem(E.SAVE_KEY); } catch { /* ignore */ } }
-      bus.emit('bloom:stage', { stage: 0 });
+      // A hard reset IS a fresh save, so it opens budded (stage 1), not bare.
+      // Emitting a literal 0 here used to strip the canopy off a brand-new game.
+      bus.emit('bloom:stage', { stage: state.stage });
       bus.emit('game:reset', {});
       pushState(true);
       return true;
@@ -579,7 +662,7 @@ export default {
       const before = state.stage;
       if (gained > 0) credit(gained);
       const stages = [];
-      const after = E.stageFor(state.totalThisSeason, derived().grove.bloomThreshold);
+      const after = E.stageFor(state.totalThisSeason, derived().grove.bloomThreshold, state.stageFloor | 0);
       if (after > before) {
         for (let i = before + 1; i <= after; i++) stages.push(E.BLOOM_STAGES[i]);
       }
@@ -737,9 +820,19 @@ export default {
       let o = e?.hit?.object;
       while (o) {
         const gid = o.userData?.goldenId;
-        if (gid !== undefined) { catchGolden(gid); return; }
+        if (gid !== undefined) { grantGolden(gid); return; }
         o = o.parent;
       }
+    }));
+
+    /* 45-vfx flies its OWN golden-petal mesh on its own schedule and does not
+     * tag it with `userData.goldenId`, so the world:click route above never
+     * fires for it — the headline mechanic looked right and paid nothing. Trust
+     * its catch report; grantGolden() is frame-guarded, so if the tag is ever
+     * added the two routes still pay exactly one boon. */
+    offs.push(bus.on('vfx:golden', (e) => {
+      if (e?.kind !== 'caught') return;
+      grantGolden(golden ? golden.id : 0);
     }));
 
     offs.push(bus.on('time:phase', (e) => {
@@ -834,6 +927,12 @@ export default {
       get golden() { return golden ? { ...golden } : null; },
       get phase() { return phase; },
       get bloom() { return E.BLOOM_STAGES[state.stage]; },
+      /**
+       * Lowest stage this save can fall to. 1 蕾 Budding on a first run (the tree
+       * never reads as dead), 0 冬芽 Winter Bud once a Season has been turned.
+       * UI: use this to decide whether to describe stage 0 as reachable.
+       */
+      get bloomFloor() { return state.stageFloor | 0; },
       nextBloom() {
         const d = derived();
         if (state.stage >= 5) return null;
@@ -901,6 +1000,10 @@ export default {
      * boot: offline, first stage push, debug scenarios
      * ---------------------------------------------------------------- */
     if (!ctx.shotMode) applyOffline();
+    // Re-derive before the first push so a save written by an older build (or one
+    // whose Constellation threshold discount changed) agrees with stageFor(),
+    // and so the first-run floor is applied. Quiet: no set piece on boot.
+    applyStage(true);
     checkUnlocks(true);
     invalidate();
     bus.emit('bloom:stage', { stage: state.stage });
@@ -927,8 +1030,41 @@ export default {
         pushState(true);
       };
 
-      /** A brand-new save — nothing bought, stage 0. */
+      /**
+       * A brand-new save: nothing bought, no currency, and stage 1 蕾 Budding —
+       * the first-run floor. This is literally what a new player boots into, so
+       * it is the scenario the marketing/critic shots should use.
+       */
       sc.fresh = () => rebuild(() => {});
+
+      /**
+       * Straight after a Season turn: stage 0 冬芽 Winter Bud (bare wood), the
+       * only state in which that look is reachable. Essence has been earned and
+       * mostly spent, Blossoms and Codex survived, the grove is empty again
+       * except for the Constellation's starting Sprites.
+       */
+      sc.prestiged = () => rebuild((s) => {
+        s.season = 2;
+        s.stageFloor = 0;                 // earned: this player has turned a Season
+        s.stage = 0;
+        s.petals = 0;
+        s.totalThisSeason = 0;
+        s.totalAllTime = 1.9e8;
+        s.essenceEarned = 41;
+        s.essence = 5;                    // 36 spent on the nine nodes below
+        for (const id of ['wind1', 'wind2', 'wind3', 'water1', 'water2',
+          'moon1', 'moon2', 'stone1', 'blossom1']) s.nodes[id] = 1;
+        s.blossoms = 4;
+        s.heartwood.hw_prod1 = 1;         // 3 Blossoms spent
+        for (const id of ['somei', 'shidare', 'yama', 'oshima']) s.codex[id] = 1;
+        s.stats.clicks = 2600; s.stats.crits = 141; s.stats.storms = 5;
+        s.stats.golden = 3; s.stats.bestBank = 3.1e7; s.stats.playTime = 7400;
+        s.stats.seasonTime = 4; s.stats.seasonClicks = 0; s.stats.maxTender = 68;
+        s.stats.bestSeasonTotal = 1.2e8;
+        // 'Following Wind' (wind3) grants 15 starting Sprites — the rebuild()
+        // path does not run prestige(), so grant them here to match.
+        s.tenders.sprite = 15;
+      });
 
       /** Mid-game: ~25 minutes in. Stage 3, real Tender spread, panels populated. */
       sc.rich = () => rebuild((s) => {
@@ -939,6 +1075,7 @@ export default {
           'up_gatherer_3', 'up_miko_1', 'up_miko_2', 'up_lantern_1', 'up_koi_1']) s.upgrades[id] = 1;
         s.heartwood.hw_prod1 = 1;
         s.season = 1;
+        s.stageFloor = 0;                  // has turned a Season — floor earned away
         s.essence = 22;
         s.essenceEarned = 31;              // 9 spent on the four branch roots below
         for (const id of ['wind1', 'water1', 'moon1', 'stone1', 'blossom1']) s.nodes[id] = 1;
@@ -961,6 +1098,7 @@ export default {
         for (const h of E.HEARTWOOD_LIST) s.heartwood[h.id] = 1;
         for (const n of E.CONSTELLATION) if (n.tier <= 3) s.nodes[n.id] = 1;
         s.season = 9;
+        s.stageFloor = 0;
         s.essence = 640;
         s.essenceEarned = 851;   // 211 spent on the 20 nodes above
         s.blossoms = 96;

@@ -296,12 +296,99 @@ export function bar(cls = 'sk-bar', sheen = true) {
   return { root, fill, set: (f) => setW(fill, Math.max(0, Math.min(1, f)) * 100) };
 }
 
-export function stars(n, of = 5) {
-  const row = h('div.sk-stars');
+export function stars(n, of = 5, ink = false) {
+  const row = h('div.sk-stars' + (ink ? '.ink' : ''));
   for (let i = 0; i < of; i++) row.append(h('i', { class: i < n ? '' : 'off' }));
   return row;
 }
 
 export function goldBtn(label, onclick, opts = {}) {
   return h('button.sk-btn' + (opts.cls ? '.' + opts.cls : ''), { onclick, title: opts.title }, label);
+}
+
+/* ------------------------------------------------------------------ *
+ * Rarity — GAME_DESIGN's ten Tenders map onto Genshin's 3/4/5★ bands.
+ * ------------------------------------------------------------------ */
+export const TENDER_RARITY = [3, 3, 3, 3, 4, 4, 4, 5, 5, 5];
+export const rarityOf = (i) => TENDER_RARITY[i] ?? (i >= 7 ? 5 : i >= 4 ? 4 : 3);
+
+/**
+ * Tapered hairline that breaks a long card list into bands. Ten identical rows
+ * read as a spreadsheet; the rule + the extra gap it carries give the panel
+ * rhythm. Placed at the rarity transitions so the grouping means something.
+ */
+export function groupRule() { return h('div.sk-gdiv'); }
+
+/**
+ * The next-unlock row, as a SEALED SCROLL — dimmed parchment, a gold wax-seal
+ * medallion, and the requirement in the game's voice. The previous grey
+ * diagonal-hatched version read as a disabled HTML fieldset (ART_BIBLE §8.10).
+ * Returns the row plus the `need` span the caller keeps up to date.
+ */
+export function sealedRow() {
+  const need = h('b.num', '40');
+  const root = h('div.sk-teaser',
+    h('div.seal'),
+    h('h3', '封 sealed'),
+    h('div.tx', 'Hold ', need, ' petals at once and another pair of hands steps out of the grove.'),
+  );
+  return { root, need };
+}
+
+/**
+ * The purchase button (ART_BIBLE §7): gold vertical gradient, inner top
+ * highlight, 1 px darker border, drop shadow, hover lift + glow, press-in.
+ * `stopPropagation` matters — the row itself is also clickable and a bubbled
+ * click would buy twice.
+ */
+export function buyBtn(onclick, title) {
+  const v = h('span.v.num', '0');
+  const x = h('span.x.num', '×1');
+  const root = h('button.sk-buy', {
+    onclick: (e) => { e.stopPropagation(); onclick(e); },
+    title: title ?? null,
+  }, h('span.gl'), v, x);
+  return {
+    root, v, x,
+    /** `badge` is shown verbatim in the pill — '×10' for bulk, a kanji for currency. */
+    set(cost, badge) {
+      setText(v, cost);
+      setText(x, badge);
+    },
+  };
+}
+
+/** Gold segmented control — one bevelled shell, N inset segments, no flat rects. */
+export function segmented(items, onpick) {
+  const btns = new Map();
+  const root = h('div.sk-seg');
+  for (const [label, val] of items) {
+    const b = h('button', { onclick: (e) => { e.stopPropagation(); onpick(val); } }, label);
+    btns.set(val, b);
+    root.append(b);
+  }
+  return { root, btns, set(v) { for (const [k, b] of btns) setClass(b, 'on', k === v); } };
+}
+
+/**
+ * Bloom-progression capsule: a 10 px track carrying the whole 0 → 1e13 run in
+ * log space, one tick per stage threshold (gold once passed), and a glowing head
+ * on the fill. `thresholds` are absolute petal counts, ascending, > 0.
+ */
+export function stageCapsule(thresholds) {
+  const fill = h('i');
+  const ticks = thresholds.map(() => h('u'));
+  const root = h('div.sk-sbar', fill, ticks);
+  const top = Math.log10(Math.max(10, thresholds[thresholds.length - 1] || 1e13));
+  ticks.forEach((t, i) => { t.style.left = ((Math.log10(Math.max(10, thresholds[i])) / top) * 100).toFixed(2) + '%'; });
+  return {
+    root,
+    /** total = petals earned this season. Returns the 0..1 position used. */
+    set(total) {
+      const f = Math.max(0, Math.min(1, Math.log10(Math.max(1, total)) / top));
+      setW(fill, f * 100);
+      ticks.forEach((t, i) => setClass(t, 'done', total >= thresholds[i]));
+      return f;
+    },
+  };
 }

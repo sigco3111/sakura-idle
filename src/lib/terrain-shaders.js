@@ -100,6 +100,15 @@ uniform vec3  uPetalLo;
 uniform vec3  uPetalHi;
 uniform float uPetalAmt;       // 0..1, driven by bloom:stage
 uniform float uBump;
+uniform float uGrassR;         // radius the instanced blades cover
+/* Contact occlusion. xy = world xz of a footing, z = its footprint radius,
+ * w = strength (0 disables the slot). Slot 0 is the tree's root flare; the rest
+ * are filled from ctx.assets.props once 35-props has booted. ART_BIBLE §2 asks
+ * for "a weak ambient-occlusion-driven darkening under props" and the round-2
+ * review measured the trunk contact at 0.64 of open ground falling off over 5 m
+ * — a haze, not a contact. This is the tight version. */
+#define GROUND_CONTACTS 10
+uniform vec4 uContact[GROUND_CONTACTS];
 
 ${GLSL_NOISE}
 ${FRAG_SHADOW_PARS}
@@ -143,10 +152,26 @@ void main(){
   /* ---- per-layer albedo -------------------------------------------- */
   // ART_BIBLE §3: grass is lighter + yellower where the sun has bleached the
   // fibre tips, cooler and darker down in the sward.
-  float bleach = clamp( fibre * 1.18 - 0.24 + hi * 0.16, 0.0, 1.0 );
+  //
+  // ...but WITHIN the instanced-blade radius this texture is the sward FLOOR, not
+  // the sward. MEASURED r0: the ground between blades printed at L 0.332 against
+  // blades at L 0.355, so the blades did not separate from it at all (blocker 2).
+  // Looking down into grass you see the shaded base value; the bright bleached
+  // tips are the job of the instanced geometry. Beyond the blade radius the
+  // texture stands in for whole blades again and gets its bleach back.
+  float sward = 1.0 - smoothstep( uGrassR * 0.80, uGrassR * 1.35, length( wxz ) );
+  /* MEASURED r2: the sward floor still printed BRIGHTER than the blades standing
+   * in it (ground L 0.43+ against blades ~0.36), so the whole meadow read as
+   * dark needles on a pale plane — ART_BIBLE §3's tip gradient exactly inverted.
+   * Looking down into grass you see the shaded base value and almost no sky, so
+   * inside the blade radius this texture is darkened hard and de-bleached; the
+   * bright sun-bleached value is the instanced geometry's job. */
+  float bleach = clamp( fibre * 1.18 - 0.24 + hi * 0.16, 0.0, 1.0 )
+               * mix( 1.0, 0.20, sward );
   vec3 grassC = mix( uGrassBase, uGrassTip, bleach );
-  grassC = mix( grassC, uGrassTip * 1.10, pow( clamp( dC.r, 0.0, 1.0 ), 2.2 ) * 0.34 );
-  grassC *= 0.94 + 0.14 * cell;
+  grassC = mix( grassC, uGrassTip * 1.10,
+                pow( clamp( dC.r, 0.0, 1.0 ), 2.2 ) * 0.34 * mix( 1.0, 0.30, sward ) );
+  grassC *= ( 0.94 + 0.14 * cell ) * mix( 1.0, 0.66, sward );
 
   vec3 dryC  = mix( uGrassDry * 0.80, uGrassDry * 1.14, clamp( fibre * 1.2, 0.0, 1.0 ) );
   vec3 earthC = mix( uEarthDark, uEarth, clamp( grain * 1.35 + cell * 0.30, 0.0, 1.0 ) );
@@ -167,10 +192,33 @@ void main(){
   // meadow-patch structure at any distance and at any macro resolution.
   float pA = snoise( vec3( wxz * 0.047, 11.3 ) );
   float pB = snoise( vec3( wxz * 0.163, 27.9 ) );
-  float mead = pA * 0.64 + pB * 0.36;
-  albedo *= 1.0 + mead * 0.22;
-  albedo = mix( albedo, albedo * vec3( 1.12, 0.99, 0.79 ), clamp(  mead, 0.0, 1.0 ) * 0.45 );
-  albedo = mix( albedo, albedo * vec3( 0.86, 1.00, 0.95 ), clamp( -mead, 0.0, 1.0 ) * 0.42 );
+  // ...and a third octave at ~2 m, faded out by the PIXEL FOOTPRINT rather than
+  // by distance, so it adds structure right up to the point where it would start
+  // to alias and no further. MEASURED r0: the wide frame's bottom half had 200x30
+  // regions at luminance sd 0.03 and flatBlocks 0.109; the two octaves above run
+  // at 21 m and 6 m features, which is coarser than a 200 px band at 60 m.
+  float fp = fwidth( wxz.x ) + fwidth( wxz.y );          // world metres / pixel
+  float pC = snoise( vec3( wxz * 0.52, 41.1 ) ) * ( 1.0 - smoothstep( 0.06, 0.42, fp ) );
+  float mead = pA * 0.56 + pB * 0.32 + pC * 0.30;
+  albedo *= 1.0 + mead * 0.30;
+  // the yellow arm trimmed 0.45 -> 0.30: stacked on the dry-grass layer it was
+  // half the reason open meadow read khaki rather than green.
+  albedo = mix( albedo, albedo * vec3( 1.10, 1.00, 0.84 ), clamp(  mead, 0.0, 1.0 ) * 0.30 );
+  albedo = mix( albedo, albedo * vec3( 0.84, 1.00, 0.94 ), clamp( -mead, 0.0, 1.0 ) * 0.46 );
+
+  /* ---- mid-scale layer SCARS (prescription 4c) -----------------------
+   * The four-layer blend is driven by a 0.013-0.34 m^-1 noise set plus slope, so
+   * on the flat knoll the weights barely move and any 300 px span of near ground
+   * carried ONE albedo. These are worley patches at ~2.4 m and ~3.7 m: trodden
+   * bare earth where the cells pack, moss flushes in the hollows between them.
+   * Different frequency AND different generator from the meadow octaves below,
+   * so they read as ground cover rather than as more of the same noise. */
+  float scar  = smoothstep( 0.50, 0.88, 1.0 - worley( wxz * 0.42 + 4.7 ) );
+  float flush = smoothstep( 0.46, 0.90, 1.0 - worley( wxz * 0.27 + 31.0 ) );
+  float scarF = 1.0 - smoothstep( 26.0, 70.0, dist );   // near/mid field only
+  albedo = mix( albedo, earthC * ( 0.90 + 0.22 * grain ),
+                scar * 0.62 * scarF * ( 1.0 - wPath * 0.8 ) );
+  albedo = mix( albedo, mossC * ( 0.88 + 0.26 * cell ), flush * 0.42 * scarF );
 
   // large-scale value + temperature drift: the ground must never be one colour
   float lv = M2.a * 2.0 - 1.0;
@@ -203,6 +251,30 @@ void main(){
   vec3 col = nprShadeN( albedo, N, Ng, V, sm,
                         0.30 + pet * 0.35, 0.30 + pet * 0.25,
                         spec, 0.80, clamp( ao, 0.0, 1.0 ) );
+
+  /* ---- contact occlusion at every footing -----------------------------
+   * TARGET (round-2 prescription): 0.55 x the open-ground luminance AT the
+   * contact, back to 1.0 by 1.2 m from the footing edge, and hue-shifted COOL
+   * (205-245 deg, B >= R) rather than warmer — the measured failure was a warm
+   * 0.64-ratio haze spread over 5 m, which grounds nothing.
+   *
+   * The level drop and the hue push are separate operations, exactly as
+   * nprShadowHue/nprShadowLevel keep them separate: multiplying alone would be
+   * ART_BIBLE §8.4's "shadow that is only darker albedo".                   */
+  {
+    float ring = 0.0;
+    for ( int i = 0; i < GROUND_CONTACTS; i++ ) {
+      vec4 C = uContact[i];
+      if ( C.w <= 0.0 ) continue;
+      float dEdge = max( 0.0, length( wxz - C.xy ) - C.z );
+      ring = max( ring, ( 1.0 - smoothstep( 0.0, 1.20, dEdge ) ) * C.w );
+    }
+    if ( ring > 0.001 ) {
+      vec3 cool = uShadowTint * ( nprLuma( col ) / max( nprLuma( uShadowTint ), 1e-4 ) );
+      col = mix( col, cool, ring * 0.55 ) * mix( 1.0, 0.55, ring );
+    }
+  }
+
   col = applyAerial( col, dist, vWorldPos.y, V );
 
   gl_FragColor = vec4( col, 1.0 );
@@ -233,6 +305,7 @@ uniform vec3  uNear;    // (nearFadeStart, nearFadeEnd, strength) metres
 uniform float uWidthComp; // density compensation: fewer blades => wider blades
 uniform float uBend;
 uniform float uGrow;    // global 0..1 spawn-in, lets quality changes not pop
+uniform vec2  uUpBias;  // shading-normal blend toward +Y at (base, tip)
 
 #include <common>
 #include <shadowmap_pars_vertex>
@@ -284,7 +357,17 @@ void main(){
   wpos.y  -= min( length( disp ) * 0.42, 0.9 ) * bend * H;   // arc-length-ish
 
   // tilt the shading normal with the bend so backlit tips catch transmission
-  rn = normalize( rn + vec3( disp.x, 0.0, disp.y ) * ( 1.7 * t ) + vec3( 0.0, 0.22, 0.0 ) );
+  rn = normalize( rn + vec3( disp.x, 0.0, disp.y ) * ( 1.7 * t ) );
+  /* ---- and lift it toward the sky (blocker: the inverted tip gradient) ----
+   * A blade is a near-VERTICAL card, so its true normal is horizontal and, with
+   * the key at a real elevation, it collects far less key than the horizontal
+   * ground it stands in — which is the arithmetic behind "dark green needles on
+   * a bright yellow-green plane", the exact inverse of ART_BIBLE §3. Every
+   * stylised grass shader cheats the same way: blend the shading normal toward
+   * the terrain's up vector so a blade is lit like the sward it belongs to, and
+   * let the ALBEDO ladder carry the tip highlight. Stronger at the tip, where a
+   * real blade is also curling over and presenting its face to the sky. */
+  rn = normalize( mix( rn, vec3( 0.0, 1.0, 0.0 ), mix( uUpBias.x, uUpBias.y, t ) ) );
 
   vec4 wp = modelMatrix * vec4( wpos, 1.0 );
   vWorldPos = wp.xyz;
@@ -314,29 +397,77 @@ ${FRAG_SHADOW_PARS}
 ${GLSL_NPR}
 
 void main(){
-  // lighter AND yellower toward the tip — the single biggest grass tell.
-  // At a low tier one blade stands in for several, so it has to be shaded like
-  // the AGGREGATE it represents (tip-dominated) rather than like a single blade;
-  // otherwise the sward turns into scattered dark needles on a bright plane.
+  /* ---- the vertical albedo ladder (blocker 2) ------------------------
+   * ART_BIBLE §3: "grass must be lighter and yellower at the tips". MEASURED r0
+   * of this round: rendered blades sat at #5E5D39 (L 0.355) against ground at
+   * #58563C (L 0.332) — a 0.023 separation, i.e. no gradient at all, and R ~= G
+   * so the sward read khaki rather than green. Targets, in the graded frame:
+   * mean tip L >= 0.62 (#8FB463) against base L 0.34 (#3E6134).
+   *
+   * At a low tier one blade stands in for several, so it is shaded like the
+   * AGGREGATE it represents (tip-dominated) rather than like a single blade;
+   * otherwise the sward turns into scattered dark needles on a bright plane.   */
   float t = clamp( vT * ( 1.0 + uTipBias * 0.85 ) + uTipBias * 0.22, 0.0, 1.0 );
-  vec3 albedo = mix( uBaseCol, uMidCol, smoothstep( 0.0, 0.55, t ) );
-  albedo = mix( albedo, uTipCol, smoothstep( 0.42, 1.0, t ) );
-  albedo = mix( albedo, uDryCol, vDry * ( 0.30 + 0.70 * t ) );
-  albedo += uTipCol * pow( t, 5.0 ) * 0.20;
-  albedo *= 0.86 + 0.30 * vJit;
+  // MEASURED r5: with tv = t^0.78 the mid value had taken over by 20 % of blade
+  // height, so a 200x20 near-field band averaged L 0.535 with sd 0.122 — one
+  // mid-green mass rather than dark bases under bright tips (target: base 0.34,
+  // tip >= 0.62, band sd >= 0.18). Linear in blade height, so the bottom third
+  // actually stays at the base value, and the tip band is widened by the additive
+  // highlight below instead of by warping the ramp.
+  float tv = t;
+  vec3 albedo = mix( uBaseCol, uMidCol, smoothstep( 0.02, 0.50, tv ) );
+  albedo = mix( albedo, uTipCol, smoothstep( 0.46, 1.00, tv ) );
+  albedo = mix( albedo, uDryCol, vDry * ( 0.12 + 0.38 * tv ) );
+  albedo += uTipCol * pow( tv, 3.4 ) * 0.34;
+  // ...and a further warm shift on the top 15 % only (prescription 3b): the very
+  // tip of a sun-exposed blade is bleached toward straw, which is what carries
+  // the band's hue into the 65-80 deg window without turning the whole sward khaki.
+  albedo *= mix( vec3( 1.0 ), vec3( 1.075, 1.030, 0.905 ), smoothstep( 0.85, 1.0, tv ) );
+  // deepen the bottom third so the band keeps a real value spread (target sd >= 0.18)
+  albedo *= mix( 0.74, 1.0, smoothstep( 0.0, 0.34, tv ) );
+  // ---- per-instance hue + value jitter -------------------------------
+  // vJit is one seeded random; fract(vJit * 7.31) is a second, independent
+  // enough for the hue swing without paying for another instanced attribute.
+  float hj = fract( vJit * 7.31 ) * 2.0 - 1.0;                 // -1..1
+  const vec3 G_YEL = vec3( 1.085, 1.000, 0.845 );               // ~ +8 deg
+  const vec3 G_BLU = vec3( 0.915, 1.000, 1.115 );               // ~ -8 deg
+  albedo *= mix( G_BLU, G_YEL, hj * 0.5 + 0.5 );
+  albedo *= 0.87 + 0.28 * vJit;                                 // ~ +-0.06 L
 
   vec3 N = normalize( vWorldNormal );
-  if ( !gl_FrontFacing ) N = -N;
+  // Flip only the HORIZONTAL half on the back face. A full negation also flips
+  // the sky-ward lift that GRASS_VERT just applied, so every back-facing blade
+  // fragment ended up with a normal pointing at the GROUND — i.e. half of every
+  // blade in the field was shaded as if it faced away from the sky. That is the
+  // other half of the inverted tip gradient.
+  if ( !gl_FrontFacing ) N = vec3( -N.x, N.y, -N.z );
   vec3 toCam = cameraPosition - vWorldPos;
   float dist = length( toCam );
   vec3 V = toCam / max( dist, 1e-4 );
 
   float sm = nprShadowMaskSoft( vWorldPos );
   nprSetWorldPos( vWorldPos );
-  float ao = clamp( vAO * ( 0.52 + 0.48 * t ), 0.0, 1.0 );
+  float ao = clamp( vAO * ( 0.46 + 0.54 * tv ), 0.0, 1.0 );
   // thin at the tip => more light bleeds THROUGH => backlit blades glow
-  vec3 col = nprShadeN( albedo, N, N, V, sm, 1.0, mix( 0.40, 1.00, t ),
+  vec3 col = nprShadeN( albedo, N, N, V, sm, 1.0, mix( 0.34, 1.00, tv ),
                         0.28, 1.30, ao );
+  // ---- explicit wrapped transmission at the tip ----------------------
+  // The key sits BEHIND the tree all day (a settled decision), so the near-field
+  // sward is backlit and its top third should be the brightest green in frame.
+  // The library's lobe is gated on Fresnel, which a blade seen face-on fails, so
+  // this is the term that gets a backlit tip to L 0.72.
+  {
+    vec3 Lg = normalize( mix( uSunDir, uMoonDir, step( 0.5, uNightMix ) ) );
+    float back = pow( clamp( dot( -Lg, V ), 0.0, 1.0 ), 3.0 );
+    float awayN = clamp( -dot( N, Lg ) * 0.5 + 0.5, 0.0, 1.0 );
+    // Tinted by uTipCol AND biased back toward green: uSunColor is #FFEBCB, so a
+    // straight key-coloured transmission pushed the whole near sward to hue 54
+    // (khaki — R == G, the exact tell blocker 2 names). This keeps the warmth in
+    // the value and the hue in the grass.
+    vec3 tcol = uTipCol * mix( uSunColor, vec3( nprLuma( uSunColor ) ), 0.78 );
+    col += tcol * ( back * 0.80 + awayN * awayN * 0.34 )
+         * pow( tv, 1.6 ) * mix( 0.30, 1.0, sm ) * 1.15;
+  }
   col = applyAerial( col, dist, vWorldPos.y, V );
 
   gl_FragColor = vec4( col, 1.0 );
