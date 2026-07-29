@@ -432,7 +432,31 @@ uniform float uMilky;
 uniform vec3  uMoonCol;
 uniform float uMoonSize;
 uniform float uMoonBright;
+uniform float uMoonMaria;   /* how deep the maria go, as a fraction of highland */
+uniform float uMoonHalo;
 uniform float uDither;
+
+/* ── night cloud deck ──────────────────────────────────────────────────────
+ * MEASURED (shots/sky-r1-nightstars/hero.png, cloud masses x 1500-1700 y 120-230
+ * against the clear night zenith at x 760-860 y 60-140): the deck came back at
+ * display L 0.150 over a sky of 0.091, i.e. every mass was a pale blue amoeba
+ * stain 1.65x BRIGHTER than the sky it hangs in, with a lit outline all the way
+ * round. A night cumulus is the opposite: an OCCLUDER that swallows the stars
+ * behind it and only catches light on the flanks that face the moon. These two
+ * knobs converge the body of a night mass onto a fraction of its own background
+ * and thin its opacity, while the silver-lining terms (gated on the moon's own
+ * screen direction) still survive to draw the moonlit edge. */
+uniform float uNightCloudV;   /* body value as a fraction of the sky behind it */
+uniform float uNightCloudA;   /* opacity multiplier at full night */
+uniform float uNightCloudR;   /* rim / transmission multiplier at full night */
+
+/* Cloud value-range calibration. The deck's lit/shade spread is the one thing
+ * that decides whether a mass reads as a MASS or as vapour, and it has to be
+ * measurable in the graded frame rather than guessed at — hence two uniforms
+ * that the sky-cloud-* scenarios sweep. */
+uniform float uCloudLitK;     /* gain on the lit-top ramp */
+uniform float uCloudShadeK;   /* how far the shadow side falls below the lit side */
+uniform float uCloudCoreK;    /* how dark an optically thick backlit core stays */
 
 #define SAT(x) clamp(x, 0.0, 1.0)
 
@@ -483,6 +507,10 @@ vec4 cloudLayer(vec3 d, float kf, float scl, float spd, float cov, float pw,
   float hi = smoothstep(0.30, 0.62, d.y);      /* 0 below 17°, 1 above 38° */
   cov += zenCov * hi;
   amt *= mix(1.0, zenAmt, hi);
+  /* at night the deck thins to a veil (see uNightCloudA) */
+  float nightA = SAT(uStars);
+  amt *= mix(1.0, uNightCloudA, nightA);
+  rimA *= mix(1.0, uNightCloudR, nightA);
   if (d.y < 0.003 || cov > 0.995 || amt < 0.003) return vec4(0.0);
 
   /* ── cloud-plane projection, radially de-compressed ─────────────────── */
@@ -583,7 +611,21 @@ vec4 cloudLayer(vec3 d, float kf, float scl, float spd, float cov, float pw,
      presents a sunlit crown upward and a flat base downward. Toward the zenith
      we are looking at that base head-on, so the up-bias eases off. */
   float upB = mix(0.88, 0.18, smoothstep(0.35, 0.85, d.y));
-  vec3 Nr = normalize(vec3(-gs.x, -gs.y + upB, 0.55));
+  /* ── why the toward-viewer component has to SHRINK with elevation ────────
+   * MEASURED (shots/sky-r2-day/canopy.png, upper sky x 1000-1900 y 0-500): the
+   * high-sky decks came back as flat pale stains with no interior at all, and
+   * the cause is here rather than in any colour. With a fixed +0.55 on the
+   * toward-viewer axis and upB easing off to 0.18 near the zenith, BOTH of the
+   * terms that vary across a mass (gs.x, gs.y) are small next to a constant, so
+   * hl is very nearly the same number over the whole mass — the shading ramp,
+   * the self-shadow and the three tone bands all collapse onto one value. Easing
+   * nz down and lifting the relief gain over the same range lets the lobes drive
+   * the normal again, which is what puts a bright crown and a shaded flank on a
+   * mass seen from below. */
+  float hiRel = smoothstep(0.35, 0.85, d.y);
+  float nz = mix(0.55, 0.26, hiRel);
+  gs *= mix(1.0, 1.45, hiRel);
+  vec3 Nr = normalize(vec3(-gs.x, -gs.y + upB, nz));
 
   /* the sun in the same frame; Lr.z < 0 means the deck is backlit */
   vec3 R3 = vec3(Rt.x, 0.0, Rt.y);
@@ -629,13 +671,14 @@ vec4 cloudLayer(vec3 d, float kf, float scl, float spd, float cov, float pw,
   float muS   = max(dot(d, sunD), 0.0);
   float back  = SAT(-Lr.z * 0.85 + 0.15);
   float trans = back * (0.30 + 0.70 * pow(muS, 2.0));
+  trans *= mix(1.0, uNightCloudR, nightA);
 
   /* Per-mass value variation. Without it every mass in the deck lands on the
      same value and the whole sky reads as one paint colour; two masses side by
      side must not be the same white (§8.11). */
   float mv = texture2D(uNoiseA, Q * 0.115 + vec2(0.71, 0.29)).r;
 
-  float lit = SAT(0.10 + band * 0.72 + shadow * 0.18) * mix(1.0, 0.56, down * 0.85);
+  float lit = SAT(0.10 + band * 0.72 * uCloudLitK + shadow * 0.18) * mix(1.0, 0.56, down * 0.85);
   lit *= mix(0.86, 1.05, mv);
   /* Transmission floors the value, but STEEPLY graded by thickness — that
      gradient IS the backlit look: a thin edge transmits almost everything and
@@ -648,7 +691,7 @@ vec4 cloudLayer(vec3 d, float kf, float scl, float spd, float cov, float pw,
      there the mass has to be the LIGHT shape, as every painted anime sky draws
      it. Measured: with a flat 0.26 floor the canopy deck sat within 0.03 of the
      zenith's own luminance, i.e. invisible. */
-  float coreF = mix(0.21, 0.52, smoothstep(0.30, 0.70, d.y));
+  float coreF = mix(0.21, 0.52, smoothstep(0.30, 0.70, d.y)) * uCloudCoreK;
   lit = max(lit, trans * (coreF + (1.04 - coreF) * pow(1.0 - thick, 1.35)));
   /* three-stop ramp: hue-shifted shadow → warm midtone → near-white top.
      A two-stop lerp is what makes procedural clouds read as grey mush. */
@@ -663,11 +706,26 @@ vec4 cloudLayer(vec3 d, float kf, float scl, float spd, float cov, float pw,
    * unit luminance, so it is genuinely darker AND cooler, never just darker. */
   float stL = max(skyLuma(uShadowTint), 1e-4);
   vec3  stChroma = mix(vec3(1.0), uShadowTint / stL, 0.45);
-  vec3  shadeC = col * 0.55 * stChroma;
+  vec3  shadeC = col * uCloudShadeK * stChroma;
   float litMask = SAT(band * 1.35 + shadow * 0.40 - 0.32 - down * 0.55);
   /* a backlit mass is not "in shadow" — but its core still is */
   litMask = max(litMask, trans * (0.32 + 0.68 * (1.0 - thick)));
   col = mix(shadeC, col, litMask);
+
+  /* ── night: the deck is an OCCLUDER ──────────────────────────────────
+   * Converge the body of the mass onto a fraction of the sky radiance behind
+   * it, so a night cumulus swallows the star field instead of glowing over it.
+   * Deliberately BEFORE the silver-lining block: the rim terms below are gated
+   * on the key's own screen direction (which at night is the drawn moon), so
+   * the moon-facing flank still lights up while the body goes dark. */
+  if (nightA > 0.002) {
+    /* Even the THIN parts land a few percent under the sky, not on it: an
+       occluder that exactly matches its background still has to dim the stars
+       it covers, and MEASURED, a veil sitting at 1.00x the sky pushed the clear
+       night zenith from L 0.099 to 0.111 once the high-sky opacity budget was
+       relaxed (its edge rim rides on top of the sky value). */
+    col = mix(col, skyC * mix(0.90, uNightCloudV, SAT(thick * 1.6)), nightA * 0.90);
+  }
 
   /* ── low-sun relight (ART_BIBLE §2) ───────────────────────────────────
    * MEASURED on critic-p4-r2-dusk/canopy.png, cloud mass x 900-1250 y 120-330:
@@ -888,18 +946,44 @@ void main() {
     float r2 = dot(mUV, mUV);
     /* maria: broad dark plains, deliberately low frequency so the LIMB stays the
        strongest edge on the disc. Target display L: 0.93 highland / 0.86 mare. */
-    float maria = texture2D(uNoiseB, mUV * 0.34 + 0.5).r * 0.58
-                + texture2D(uNoiseA, mUV * 0.85 + 0.2).r * 0.42;
-    float mv = mix(1.0, 0.62, smoothstep(0.40, 0.70, maria));
+    /* MEASURED before this change (shots/sky-r1-nightstars/hero.png, disc at
+       1222,232): the highland came back at display L 0.964 and the maria at
+       0.964 as well — a peak of 3.3 linear is so far up the ACES shoulder that a
+       0.62 multiplier on it is worth 0.00 display luminance, so the disc was a
+       flat white ball and every scrap of surface detail authored here was being
+       compressed away. The disc's PEAK is therefore authored at the value where
+       the shoulder still has slope (see uMoonBright), and the maria depth is a
+       uniform so it can be swept and landed on (sky-moon-m*). Target: highland
+       display L 0.92-0.95, maria 0.80-0.86, i.e. a spread the eye can read as
+       markings on a body. */
+    float maria = texture2D(uNoiseB, mUV * 0.34 + 0.5).r * 0.46
+                + texture2D(uNoiseA, mUV * 0.85 + 0.2).r * 0.34
+                + texture2D(uNoiseB, mUV * 2.10 + 0.8).r * 0.20;
+    float mv = mix(1.0, uMoonMaria, smoothstep(0.30, 0.72, maria));
+    /* a sparse crater speckle on the highlands only — breaks the "airbrushed
+       ball" read at the 26-30 px the disc actually occupies */
+    float crat = texture2D(uNoiseB, mUV * 4.30 + 0.31).a;
+    mv *= 1.0 - smoothstep(0.68, 0.94, crat) * 0.13;
     /* a step limb: ~1.3 px of gradient, just enough that it does not alias */
     float disc = 1.0 - smoothstep(uMoonSize * 0.975, uMoonSize * 1.020, ang);
     /* very slight limb darkening — a full moon is nearly flat, and a strong
        falloff here is what reads as a soft ball of light */
-    vec3 mc = uMoonCol * uMoonBright * mv * mix(1.0, 0.90, SAT(r2 * r2));
+    vec3 mc = uMoonCol * uMoonBright * mv * mix(1.0, 0.88, SAT(r2 * r2));
     col = mix(col, mc, disc * uStars);
-    /* Mie halo: 1/e at 0.75 R, 0.018 of peak by 3 R — present, never a flare */
-    float halo = exp(-ang / max(uMoonSize * 0.75, 1e-4)) * 0.15;
-    col += uMoonCol * halo * uStars;
+    /* Mie halo: 1/e at 0.75 R, 0.018 of peak by 3 R — present, never a flare.
+       A second, far wider and far fainter lobe reads as the moon lighting the
+       air itself: it lifts the sky over ~8 disc radii by <0.02 linear, which is
+       what stops the disc from looking pasted onto the gradient. */
+    /* MEASURED: the wide lobe at 0.022 lifted the clear night zenith 400 px away
+       from display L 0.094 to 0.112, i.e. it was pushing the ART_BIBLE 3 night
+       row (#101A34, L 0.10) off its value — the one number this frame is already
+       dead on. 0.011 keeps the "the moon is lighting the air" read at a tenth of
+       that cost (measured back at 0.099). The near lobe is also trimmed: a wide
+       bright skirt is the bloom pass's seed, and a fat seed is what dissolved the
+       limb into a gradient. */
+    float halo = exp(-ang / max(uMoonSize * 0.75, 1e-4)) * 0.105
+               + exp(-ang / max(uMoonSize * 6.0, 1e-4)) * 0.011;
+    col += uMoonCol * halo * uMoonHalo * uStars;
   }
 
   /* ---- sun: Mie forward scatter, then the disc ---- */

@@ -110,8 +110,16 @@ const PAL = {
    */
   vermilion: 0xC4322B,
   vermWorn: 0x8E3A32,
-  woodLite: 0x877662,      // sun-bleached bare cryptomeria
-  woodDark: 0x4E4034,
+  /* Bare weathered cryptomeria. MEASURED why these are warmer and lighter than
+   * r9's #877662 / #4E4034: nprShadowHue multiplies a shadowed albedo by
+   * uShadowTint renormalised to unit luminance, which is (0.81, 0.95, 2.06), so
+   * any albedo whose linear R/B is below ~2.2 comes out BLUE-dominant. #877662 is
+   * 2.03 and printed the exposed timber on the torii as saturated navy
+   * (rgb(38,30,66) measured on the kasagi). #9A8365 is 2.55 and #5A4838 is 2.44:
+   * both cool toward the tint without ever flipping channel dominance, which is
+   * what ART_BIBLE §2 asks for and §8.4 forbids the alternative of. */
+  woodLite: 0x9A8365,      // sun-bleached bare cryptomeria
+  woodDark: 0x5A4838,
   stoneLite: 0x9E9A92,
   stoneDark: 0x6E6A62,
   mossLite: 0x77934F,
@@ -121,9 +129,27 @@ const PAL = {
   bambooLite: 0xB6BC7A,
   bambooDark: 0x6E7A3E,
   emaWood: 0xD8C6A4,
+  // the gaku name-board's limewash. Deliberately near-white: it is the only
+  // near-neutral albedo on the gate, and only a HIGH value survives the shade
+  // multiply as a light cool grey instead of the navy a mid grey lands on.
+  plaster: 0xE4D8BE,
   ink: 0x8E2A24,
   paper: 0xFFD9A0,
   paperCold: 0x3A3630,
+  /* Washi seen by DAYLIGHT with a dark iron burner behind it — the fire box's
+   * albedo when there is no fire. CALIBRATED against the measurement the brief
+   * asks for: at #C8B08A (linear luma 0.448) with ao 0.72 the fire box printed
+   * display luma 0.376 against the lantern's own granite at 0.487-0.515, i.e.
+   * four dark holes. Display L ~= 0.56*(scene/0.333)^0.864 here, so landing the
+   * box on ~0.66 needs 2.05x the scene value: ao 0.72 -> 1.00 (a sheet of paper
+   * spanning an opening is not an occluded crevice) supplies 1.39x and this
+   * albedo's 0.673 linear luma the remaining 1.50x. r3 measured 0.515 against
+   * stone 0.481-0.503 — above it, but by too little to read as the lantern's
+   * focal point, so this is one more step to 0.759 linear luma. It stays WARM
+   * rather than going toward white on purpose: lightening a colour toward white
+   * lowers its R/B ratio, and below ~1.81 the shade multiply flips the sheet blue
+   * (see the window material's NPR_SHADOW_TINT). #F4E0B4 is 1.98. */
+  paperDay: 0xF4E0B4,
   flame: 0xFFE7B4,
   halo: 0xFFA85C,
 };
@@ -160,12 +186,30 @@ const TORII_H = 4.85;           // ground to the underside of the shimaki
  */
 const TORII_SKEW = 0.663;       // 38 deg
 
-/** Lantern stations: [pathT, lateral offset in metres (+ = camera side)]. */
+/** Lantern stations: [pathT, lateral offset in metres (+ = camera side)].
+ *
+ * SCALE, MEASURED rather than eyeballed. The lantern geometry below is 2.29 m
+ * from the buried kiso to the top of the hoju at scale 1. Projected into `hero`
+ * (probe, 1920x1080): the 14 m tree is 922 px, the 5.60 m torii 390 px, and the
+ * two lanterns nearest the lens were 181 / 156 px — dimensionally coherent
+ * (69.7 px/m on the torii at 26.6 m against 75.9 px/m on a lantern at 23.0 m), so
+ * they were never actually toy-sized. They did however read light next to a
+ * 922 px tree, so the ones that can afford it are up to 2.5-2.7 m, ordinary for a
+ * kasuga-style ishidoro on a shrine approach.
+ *
+ * STATION 0 IS PINNED AT 1.00 AND MUST STAY THERE. It is the `lantern` preset's
+ * subject, and that camera has almost no headroom over it: MEASURED, at the
+ * effective 1.044 the seeded jitter gives it the hoju finial sits 25 px below the
+ * top of a 1080-line frame with the prop 425+ px tall, i.e. 1.2% of slack. A
+ * round that tried 1.14 here cut the finial and the near half of the kasa clean
+ * off the top of shots/props-p5-r5/lantern.png. The foreground read is bought on
+ * station 3 instead — it is the one closest to the `hero` lens (23.7 m) and it
+ * has open sky above it in every preset. */
 const LANTERN_STATIONS = [
   { t: 0.462, lateral: 2.62, scale: 1.00 },   // the `lantern` preset's subject
-  { t: 0.375, lateral: 2.10, scale: 0.94 },
+  { t: 0.375, lateral: 2.10, scale: 1.02 },
   { t: 0.290, lateral: 2.10, scale: 1.06 },
-  { t: 0.545, lateral: 2.35, scale: 0.90 },   // west of the trunk, balances hero
+  { t: 0.545, lateral: 2.35, scale: 1.10 },   // west of the trunk, balances hero
 ];
 
 /** Wall arc: degrees of world azimuth (atan2(z,x)), radius in metres. */
@@ -549,21 +593,36 @@ function beam(M, pts, wFn, hFn, vals, cap = true, ch = 0) {
     frames.push(c);
   }
   const K = frames[0].length;
+  /* aEdge — WHICH QUADS ARE THE ARRISES.
+   *
+   * The octagonal section above is ordered [bottom, bevel, side, bevel, top,
+   * bevel, side, bevel], so quad k runs from vertex k to k+1 and every ODD k is
+   * one of the four chamfer strips that replace a square corner. Tagging them
+   * lets the wood shader take the paint off the EDGES of a beam, which is where
+   * paint on a real gate actually goes, instead of in the random 50 cm patches
+   * that made the kasagi read as damaged (see PROPS_WOOD_FRAG's wear block).
+   * A rectangular section (ch = 0) has no bevel strips and gets 0 everywhere. */
+  const bev = ch > 1e-4 && K === 8;
+  const kv = [];
+  for (let k = 0; k < K; k++) kv.push(bev && k % 2 === 1 ? { ...vals, aEdge: 1 } : vals);
   for (let i = 0; i < n - 1; i++) {
     const A = frames[i], B = frames[i + 1];
     const mid = new THREE.Vector3().addVectors(pts[i], pts[i + 1]).multiplyScalar(0.5);
     for (let k = 0; k < K; k++) {
       const k2 = (k + 1) % K;
-      M.quad(A[k], A[k2], B[k2], B[k], mid, vals,
+      M.quad(A[k], A[k2], B[k2], B[k], mid, kv[k],
         [[i / n, k / K], [i / n, (k + 1) / K], [(i + 1) / n, (k + 1) / K], [(i + 1) / n, k / K]]);
     }
   }
   if (cap) {
+    // end grain: the most exposed surface on any beam, so it wears — but only
+    // partly, because a fully bare end is what printed as a navy block before.
+    const capVals = bev ? { ...vals, aEdge: 0.38 } : vals;
     for (const [F, inner] of [[frames[0], pts[1]], [frames[n - 1], pts[n - 2]]]) {
       const cen = new THREE.Vector3();
       for (const q of F) cen.add(q);
       cen.multiplyScalar(1 / K);
-      for (let k = 0; k < K; k++) M.tri(cen, F[k], F[(k + 1) % K], inner, vals);
+      for (let k = 0; k < K; k++) M.tri(cen, F[k], F[(k + 1) % K], inner, capVals);
     }
   }
 }
@@ -729,6 +788,16 @@ export default {
        * lands on HSV sat 0.10 with a 22% hue lean. */
       NPR_SHADOW_CHROMA: '0.06',
       NPR_SHADOW_HUE: '0.22',
+      /* Under the CURRENT (multiply) tint model the two legacy dampers above are
+       * only honoured as a 0.78x trim, so granite's actual cool shift is set by
+       * this: how much of the multiply a NEAR-NEUTRAL albedo takes. The library
+       * default 0.45 was calibrated to land stone at "hue 238 deg, display
+       * saturation 0.10". MEASURED on shots/props-p5-r3/hero.png it is now landing
+       * at hue 207-218 and display saturation 0.23-0.28 — nearly 3x that, i.e.
+       * blue-painted stone, and the moss and lichen the shader does put on it are
+       * no longer readable through it. 0.34 is a trim back toward the number the
+       * library already agreed on, not an opt-out: granite still cools clearly. */
+      NPR_SHADOW_TINT_NEUTRAL: '0.34',
       NPR_CANOPY_SHADE: '0.32',
       NPR_CANOPY_KEY: '0.18',
     };
@@ -789,6 +858,7 @@ export default {
       uLichen: { value: C(PAL.lichen) },
       uMoss: { value: C(PAL.moss) },
       uInk: { value: C(PAL.ink) },
+      uPlaster: { value: C(PAL.plaster) },
       ...WU,
       ...L,
     });
@@ -811,6 +881,17 @@ export default {
        * thing holding the darkest paint pixels off the §8.4 floor. */
       NPR_SHADOW_CHROMA: '0.20',
       NPR_SHADOW_HUE: '0.38',
+      /* The shade multiply, trimmed from 1.00 — NOT switched off. ART_BIBLE §2's
+       * cool shade stays; what goes is the last 22%, which is what carried the
+       * exposed timber past channel-dominance inversion. nprShadowHue multiplies
+       * by uShadowTint at unit luminance, (0.81, 0.95, 2.06); nprTintStrength()
+       * currently returns 0.795 for this material, giving an effective multiplier
+       * of (0.85, 0.96, 1.84) — so bare wood needs linear R/B >= 2.17 to stay
+       * warm. At 0.78 the requirement drops to 1.88 and PAL.woodLite's 2.55 has
+       * real margin, so a WORN ARRIS reads as pale grey-brown timber in cool
+       * light instead of as navy damage. Vermilion (R/B 20.6) is unaffected
+       * either way. */
+      NPR_SHADOW_TINT: '0.78',
       NPR_AMBIENT_SHADOW: '1.00',
       NPR_CANOPY_SHADE: '0.18',
       NPR_CANOPY_KEY: '0.12',
@@ -843,6 +924,7 @@ export default {
         ...THREE.UniformsUtils.merge([THREE.UniformsLib.lights]),
         uPaper: { value: C(PAL.paper) },
         uPaperCold: { value: C(PAL.paperCold) },
+        uPaperDay: { value: C(PAL.paperDay) },
         uFlameCore: { value: C(PAL.flame) },
         uGlow: uGlow,
         uTime: uTime,
@@ -851,7 +933,14 @@ export default {
       vertexShader: PROPS_WINDOW_VERT,
       fragmentShader: PROPS_WINDOW_FRAG,
       lights: true,
-      defines: { NPR_HAS_SHADOWMAP: '' },
+      /* The washi keeps its warmth in shade. MEASURED: at the library default the
+       * daytime panel printed rgb(101,136,169) — hue 209 deg, sat 0.28, i.e. blue
+       * paper against blue-grey granite, which is both wrong for paper and the
+       * worst possible value/hue separation from the stone it sits in. #F4E0B4 has
+       * linear R/B 1.98 and nprShadowHue's unit-luminance tint is
+       * (0.81, 0.95, 2.06), so it needs the multiply held under ~0.60 to stay
+       * red-dominant. 0.58 leaves margin and still cools the sheet clearly. */
+      defines: { NPR_HAS_SHADOWMAP: '', NPR_SHADOW_TINT: '0.58' },
       side: THREE.DoubleSide,
       fog: false,
     });
@@ -894,7 +983,9 @@ export default {
     /* ================================================================ *
      * 1. The torii
      * ================================================================ */
-    const woodSpec = { aWood: 4, aGrain: 2, aVar: 4 };
+    // aEdge defaults to 0 for every builder that does not set it (Mesher._attrs
+    // treats a missing key as 0), so only beam() with a chamfer ever raises it.
+    const woodSpec = { aWood: 4, aGrain: 2, aVar: 4, aEdge: 1 };
     const WM = new Mesher(woodSpec);
 
     const toriiSpot = besidePath(TORII_T, 0);
@@ -960,11 +1051,13 @@ export default {
         aWood: (w) => [0.34, 1.0, aboveGround(w), 0.74],
         aGrain: grainY, aVar: [0, 0, 23.5, 0],
       });
-    // gaku (the plaque): a bare-wood panel in a vermilion frame, facing the walk
+    // gaku (the plaque): a LIMEWASHED name-board in a vermilion frame, facing the
+    // walk. aVar.x = 1 is the shader's flag for it — see uPlaster there. As bare
+    // timber it measured 43,45,71 (hue 237 deg), the last navy slab on the gate.
     const plaqueY = (nukiY + shimakiY) * 0.5 + 0.06;
     boxAt(WM, TP(0, plaqueY, 0.135), [0.72, 0.46, 0.05], toriiYaw, 0, {
       aWood: (w) => [0.58, 0.0, aboveGround(w), 0.95],
-      aGrain: grainX, aVar: [0, 0, 31.7, 0],
+      aGrain: grainX, aVar: [1, 0, 31.7, 0],
     });
     for (const [oy, ox, sw, sh] of [[0.255, 0, 0.80, 0.075], [-0.255, 0, 0.80, 0.075],
       [0, 0.395, 0.075, 0.60], [0, -0.395, 0.075, 0.60]]) {
@@ -1001,14 +1094,22 @@ export default {
      * 0.285) with a 55 mm chamfer on every arris. Proportions checked against a
      * real myojin gate: on a 4.85 m torii the kasagi is the heaviest member, about
      * 1/13 of the height in depth, and reading light next to the 0.49 m pillars is
-     * exactly what made it look like a ribbon. Wear is driven by rain, so its top
-     * is chalky and its ends are down to bare timber. */
+     * exactly what made it look like a ribbon.
+     *
+     * WEAR. The exposure ramp is 0.44 -> 0.78 across the last 1.10 m: deliberately
+     * BELOW the shader's 0.74..1.06 paint-loss window at the centre and only just
+     * inside it at the tips, so the ends of the kasagi read as sun-faded, chalky
+     * vermilion rather than as bare timber. r9 ran it to 0.90, which put the tips
+     * clear of the old 0.30..0.90 window and printed two solid navy blocks — bare
+     * near-neutral wood cannot defend itself against the shade tint (see
+     * PAL.woodLite). The visible paint loss now lives on the ARRISES instead, via
+     * aEdge, which is where a gate actually wears. */
     beam(WM, kasagiPts,
       (t) => 0.520 - 0.075 * Math.abs(t * 2 - 1),
       (t) => 0.360 - 0.090 * Math.abs(t * 2 - 1), {
         aWood: (w) => {
           const u = Math.abs((w.x - O.x) * SX.x + (w.z - O.z) * SX.z);
-          return [0.46 + 0.44 * Math.min(1, Math.max(0, (u - 1.55) / 1.10)), 1.0,
+          return [0.44 + 0.34 * Math.min(1, Math.max(0, (u - 1.55) / 1.10)), 1.0,
             aboveGround(w), 0.94];
         },
         aGrain: grainX, aVar: [0, 0, 51.9, 0],
@@ -1629,7 +1730,7 @@ export default {
     /* ================================================================ *
      * 7. Ema plaques — instanced, swinging in the ONE global wind
      * ================================================================ */
-    const EM = new Mesher({ aWood: 4, aGrain: 2 });
+    const EM = new Mesher({ aWood: 4, aGrain: 2, aEdge: 1 });
     {
       // One votive plaque, hanging from a pivot at the local origin. aWood.z is
       // SIGNED height relative to that pivot, so the vertex shader knows how far
@@ -1778,9 +1879,11 @@ export default {
     }
 
     let glow = 0;
-    const flick = new Float32Array(nL);
+    let lastFm = 1;                 // forces one write on the first frame
+    const flick = new Float32Array(nL).fill(1);
     const _fc = new THREE.Color();
     const _rig = () => ctx.assets.lightRig ?? null;
+    const phaseOfFn = ctx.assets.lighting?.phaseOf;
 
     /* ================================================================ */
     return {
@@ -1793,13 +1896,24 @@ export default {
         const rig = _rig();
         let target;
         if (forcedGlow != null) target = forcedGlow;
-        else if (rig && typeof rig.dayT === 'number') {
-          // sample the continuous clock; phaseOf's bounds, inlined
-          const t = ((rig.dayT % 1) + 1) % 1;
-          if (t >= 0.625 && t < 0.815) target = phaseGlow('dusk', (t - 0.625) / 0.19);
-          else if (t >= 0.085 && t < 0.200) target = phaseGlow('dawn', (t - 0.085) / 0.115);
-          else if (t >= 0.200 && t < 0.625) target = 0;
-          else target = 1;
+        else if (rig && typeof rig.dayT === 'number' && typeof phaseOfFn === 'function') {
+          /* THE AUTHORITATIVE PHASE, never a local copy of its bounds.
+           *
+           * THIS WAS THE DAYLIGHT-BLOWOUT BUG, and it was not in the shaders at
+           * all. r9 inlined 08-lighting's phase bounds here (`dusk` from 0.625)
+           * to get a continuous ramp out of the discrete `time:phase` event.
+           * src/lib/lighting.js then moved the day/dusk boundary to 0.690 so a
+           * fresh save opens on a golden-hour DAY sky — and this copy did not
+           * move with it. MEASURED at the default clock (dayT 0.6754, warm 300):
+           * rig.phase 'day', uNightMix 0.005, and this function returning
+           * glow = 0.666, i.e. every fire box burning at 66% in full daylight.
+           * That is the "flat saturated yellow blob" in shots/dbg-nopost/hero.png
+           * and the 245,233,210 panel in shots/props-p5-r0/hero.png.
+           *
+           * ctx.assets.lighting.phaseOf() is the same function 08-lighting emits
+           * `time:phase` from, so this cannot drift again. */
+          const po = phaseOfFn(rig.dayT);
+          target = phaseGlow(po.phase, po.t);
         } else target = phaseGlow(phase, phaseT);
 
         const k = 1 - Math.exp(-dt * 1.6);
@@ -1808,15 +1922,19 @@ export default {
         props.glow = glow;
         uGlow.value = glow;
 
-        // ---- per-flame flicker: two detuned oscillators plus a rare guttering
+        // ---- per-flame flicker: two detuned oscillators plus a rare guttering.
+        // Faded to a flat 1 as the fire dies so the DAYTIME panel is a still
+        // surface: nothing in an unlit stone box has any business pulsing.
+        const fm = Math.min(1, glow * 2.0);
         for (let i = 0; i < nL; i++) {
           const ph = lanterns[i].phase;
           const a = Math.sin(time * 5.7 + ph) * 0.5 + Math.sin(time * 11.3 + ph * 2.1) * 0.28;
           const gutter = Math.max(0, Math.sin(time * 0.83 + ph * 3.7) - 0.86) * 2.6;
-          flick[i] = THREE.MathUtils.clamp(1 + a * 0.085 - gutter, 0.42, 1.12);
+          const f = THREE.MathUtils.clamp(1 + a * 0.085 - gutter, 0.42, 1.12);
+          flick[i] = 1 + (f - 1) * fm;
         }
 
-        if (glow > 0.002) {
+        if (fm > 0.001 || lastFm > 0.001) {
           for (let i = 0; i < nL; i++) {
             _fc.setRGB(flick[i], flick[i], flick[i]);
             windowMesh.setColorAt(i, _fc);
@@ -1825,6 +1943,7 @@ export default {
           if (windowMesh.instanceColor) windowMesh.instanceColor.needsUpdate = true;
           if (haloMesh.instanceColor) haloMesh.instanceColor.needsUpdate = true;
         }
+        lastFm = fm;
         haloMesh.visible = glow > 0.004;
         // 1.55 + 0.35 -> 2.30 + 0.85: the skirt lobe now covers the 2.5 m warm
         // falloff the review asked for. Its per-pixel strength was cut in

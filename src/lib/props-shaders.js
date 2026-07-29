@@ -18,6 +18,9 @@
  *   aStone  vec3   (mossBias, bakedAo, crevBias)          — stone geometries
  *   aWood   vec4   (paintWear, isPainted, localY, bakedAo) — wood geometries
  *   aGrain  vec2   (metres along the grain, metres across) — wood geometries
+ *   aEdge   float  1 on the chamfer strip that replaces an ARRIS, 0 on a flat
+ *                  face — wood geometries. This is what makes paint wear follow
+ *                  the form (see the wear block in PROPS_WOOD_FRAG).
  *   aVar    vec4   per-INSTANCE on instanced meshes, per-vertex constant
  *                  otherwise: (variation, tone, seed, phase)
  */
@@ -349,11 +352,13 @@ export const PROPS_WOOD_VERT = /* glsl */`
 attribute vec4 aWood;
 attribute vec2 aGrain;
 attribute vec4 aVar;
+attribute float aEdge;
 varying vec3 vWorldPos;
 varying vec3 vWorldNormal;
 varying vec4 vWood;
 varying vec2 vGrain;
 varying vec4 vVar;
+varying float vEdge;
 #include <common>
 ${GLSL_NOISE}
 ${GLSL_WIND}
@@ -368,6 +373,7 @@ void main(){
   vWood = aWood;
   vGrain = aGrain;
   vVar = aVar;
+  vEdge = aEdge;
   vec4 wp = modelMatrix * vec4( tp, 1.0 );
 
   #ifdef PROPS_SWAY
@@ -397,6 +403,7 @@ varying vec3 vWorldNormal;
 varying vec4 vWood;
 varying vec2 vGrain;
 varying vec4 vVar;
+varying float vEdge;
 
 uniform vec3  uVermilion;      // #C4322B
 uniform vec3  uVermWorn;       // #8E3A32
@@ -405,6 +412,7 @@ uniform vec3  uWoodDark;       // grain
 uniform vec3  uLichen;         // #9AA88C
 uniform vec3  uMoss;           // #5C7A3E
 uniform vec3  uInk;
+uniform vec3  uPlaster;        // the gaku name-board's limewash (aVar.x == 1)
 
 ${GLSL_NOISE}
 ${FRAG_SHADOW_PARS}
@@ -461,34 +469,62 @@ void main(){
   albedo *= 0.92 + 0.16 * vVar.y;
   float specS = 0.30, rimS = 1.05, transl = 0.34;
 #else
-  // ---- vermilion paint, worn back to grey wood.
-  // vWood.x is the BAKED exposure (edges, arrises, the bottom of a pillar); the
-  // noise only breaks its outline up, so the wear pattern is authored, not random.
-  /* RAIN-WASHED TOP FACES. Every up-facing surface of an outdoor painted beam
-   * chalks and bleaches years before its flanks do — the kasagi's top is the
-   * classic example, which is exactly the "does the beam read as solid?" cue the
-   * review asked for.
+  /* ---- vermilion paint, worn back to grey wood.
    *
-   * It is expressed as CHALKING (a lighter, less saturated vermilion) and only
-   * barely as paint LOSS. MEASURED why: at upW^2*0.24 of wear the kasagi's top
-   * went 58% bare timber, and bare weathered wood is near-neutral (#877662 is 27%
-   * saturated) — so nprShadowHue's multiply, which a saturated albedo can defend
-   * against but a neutral one cannot, printed it as a saturated navy strip
-   * (shots/props-r2/hero.png x 1440-1560 y 598-612 measured rgb(38,30,66)).
-   * Keeping the top PAINTED keeps a red albedo that survives the tint multiply,
-   * and the top-vs-front value separation then comes from the key, where it
-   * belongs: 0.74 on the lit top against 0.13-0.25 on the backlit front face. */
-  float upW = clamp( N0.y, 0.0, 1.0 );
-  float wear = clamp( vWood.x + ( blot - 0.5 ) * 0.80 + split * 0.20 + upW * upW * 0.08,
-                      0.0, 1.4 );
-  float paintCov = vWood.y * ( 1.0 - smoothstep( 0.30, 0.90, wear ) );
+   * THE WEAR MASK FOLLOWS THE FORM. This is the fix for "the torii kasagi has
+   * dark blotches that read as damage or dirt rather than weathering".
+   *
+   * MEASURED, shots/props-p5-r0/hero.png x 1430-1920 y 560-700 (the kasagi at 3x):
+   * the beam was leopard-printed with 20-40 px navy patches at display luma
+   * 0.10-0.16, hue 230-250 deg. Cause chain, in order:
+   *   1. blot is fbm( worldPos * 1.9 ) — a ~50 cm feature size on a 0.52 m beam,
+   *      i.e. it generates PATCHES the size of the member, not surface texture.
+   *   2. It entered the wear sum at 0.80 amplitude (+-0.24 on a 0.30..0.90 paint
+   *      threshold), so it alone swung paint coverage from 1.0 to 0.26.
+   *   3. Where the paint went, the albedo became near-neutral bare timber, and
+   *      nprShadowHue's linear multiply by uShadowTint (unit-luminance
+   *      (0.81, 0.95, 2.06)) flips any albedo with R/B < 2.2 to blue-dominant.
+   *      A backlit gate presents its whole camera-facing width as shade side, so
+   *      every patch landed as saturated navy.
+   * The noise was therefore DRAWING the weathering and the shade tint was
+   * colouring it. Both are addressed:
+   *   - wear is driven by the baked exposure (vWood.x: pillar feet, beam ends),
+   *     by aEdge (the chamfer strip that replaces each arris — where paint on a
+   *     real beam actually goes first) and by downW (soffits, splash, abrasion).
+   *   - the noise term is a 18 cm band at 0.20 amplitude: it breaks the OUTLINE
+   *     of what the form already decided and can no longer open a patch on its own.
+   *   - the paint-loss window moved 0.30..0.90 -> 0.74..1.06, so only a surface
+   *     the FORM says is worn can lose its paint.
+   * Everything else the weathering used to say with paint loss it now says inside
+   * the paint, where the albedo stays red and survives the tint multiply: fading
+   * toward #8E3A32, chalking on rain-washed tops, and downward water streaking. */
+  float upW   = clamp( N0.y, 0.0, 1.0 );
+  float downW = clamp( -N0.y, 0.0, 1.0 );
+  // 18 cm outline-break band. NOT the 50 cm blot band — see above.
+  float blotO = fbm( vWorldPos * 5.6 + seed * 1.7, 2 ) * 0.5 + 0.5;
+  float wear = clamp( vWood.x
+                    + vEdge * 0.42                // arris: the paint goes first
+                    + downW * 0.14                // splash + abrasion on soffits
+                    + ( blotO - 0.5 ) * 0.20      // break the OUTLINE only
+                    + split * 0.10, 0.0, 1.6 );
+  float paintCov = vWood.y * ( 1.0 - smoothstep( 0.74, 1.06, wear ) );
 
   vec3 paint = mix( uVermilion, uVermWorn,
-                    clamp( wear * 0.78 + ( blot - 0.5 ) * 0.55, 0.0, 1.0 ) );
+                    clamp( wear * 0.72 + ( blot - 0.5 ) * 0.42, 0.0, 1.0 ) );
   // chalking: UV-bleached blooms where the paint has gone powdery, strongest on
   // the faces the rain sits on
   paint = mix( paint, paint * 1.10 + vec3( 0.040, 0.028, 0.024 ),
                clamp( pow( fine, 2.4 ) * 0.40 + upW * upW * 0.42, 0.0, 1.0 ) );
+  /* WATER STREAKING. Rain runs DOWN a vertical face and leaves thin dark stains.
+   * High frequency ACROSS the fall line (7 and 17 cycles/m horizontally) and low
+   * along it (0.55-0.90/m in world Y) is what makes a streak a streak rather than
+   * a stain; two octaves so the spacing is not a regular corduroy. Weighted by
+   * (1 - upW) so it stays off the rain-washed tops, where it would contradict the
+   * chalking above. */
+  float hpos = vWorldPos.x * 0.7071 + vWorldPos.z * 0.7071;
+  float streak = snoise( vec3( hpos * 7.0 + seed, vWorldPos.y * 0.55, 5.1 ) ) * 0.34
+               + snoise( vec3( hpos * 17.0 - seed, vWorldPos.y * 0.90, 2.3 ) ) * 0.16 + 0.5;
+  paint *= 1.0 - smoothstep( 0.52, 0.94, streak ) * 0.22 * ( 1.0 - upW * 0.85 );
   // hairline crazing
   paint *= 1.0 - smoothstep( 0.72, 0.98, worley( vGrain * 22.0 + seed ) ) * 0.16;
 
@@ -508,6 +544,16 @@ void main(){
 #endif
 
 #ifndef PROPS_EMA
+  /* ---- the gaku's plastered board, flagged by aVar.x.
+   * MEASURED: as bare timber the plaque printed 43,45,71 — hue 237 deg, i.e. a
+   * navy slab, for the same channel-inversion reason the kasagi's blotches did
+   * (see the wear block). A shrine name-board is a limewashed panel, and a
+   * near-WHITE albedo is the one near-neutral value that survives the shade
+   * multiply: luminance is preserved, so it lands as a light cool grey board
+   * instead of a dark navy one. */
+  albedo = mix( albedo, uPlaster * ( 0.90 + 0.20 * rings - 0.14 * split ),
+                clamp( vVar.x, 0.0, 1.0 ) );
+
   // ---- lichen + moss creeping up from the ground contact. vWood.z is metres
   // above the foot of the member, so this cannot smear up a horizontal beam.
   float low  = 1.0 - smoothstep( 0.05, 0.95, vWood.z );
@@ -576,7 +622,8 @@ varying vec4 vVar;
 varying vec3 vFlame;
 
 uniform vec3  uPaper;          // lit washi
-uniform vec3  uPaperCold;      // the same panel, unlit — a dark recess
+uniform vec3  uPaperCold;      // the same panel with a fire behind it — a dark recess
+uniform vec3  uPaperDay;       // the same panel in DAYLIGHT — pale sunlit paper
 uniform vec3  uFlameCore;
 uniform float uGlow;
 uniform float uTime;
@@ -593,7 +640,12 @@ void main(){
   float dist = length( toCam );
   vec3 V = toCam / max( dist, 1e-4 );
 
-  float glow = clamp( uGlow * vFlame.r, 0.0, 2.0 );
+  /* flame is the FIRE's presence, 0 at midday and 1 at night. 35-props.js
+   * derives it from the rig's own phaseOf(), never from a local copy of the phase
+   * bounds — a stale copy of those bounds is exactly what left every lantern
+   * burning at display luma 0.92 in the day hero frame (see the note there). */
+  float flame = clamp( uGlow * vFlame.r, 0.0, 2.0 );
+  float flameK = clamp( flame, 0.0, 1.0 );
 
   // washi: visible fibres, and a hot centre where the flame sits behind it
   vec2 uv = vPUv * 2.0 - 1.0;
@@ -602,29 +654,76 @@ void main(){
   float rib = ( snoise( vec3( vPUv * vec2( 3.0, 12.0 ), 1.9 ) ) * 0.5 + 0.5 ) * 0.5
             + ( snoise( vec3( vPUv * vec2( 11.0, 2.0 ), 5.4 ) ) * 0.5 + 0.5 ) * 0.5;
   float centre = 1.0 - smoothstep( 0.10, 1.15, length( uv * vec2( 1.0, 0.86 ) ) );
-  float flick = 0.86 + 0.14 * ( snoise( vec3( vPUv * 3.0, uTime * 2.6 ) ) * 0.5 + 0.5 );
+  // no fire, no flicker: the day panel must be a STILL surface, not a pulsing one
+  float flick = mix( 1.0, 0.86 + 0.14 * ( snoise( vec3( vPUv * 3.0, uTime * 2.6 ) ) * 0.5 + 0.5 ),
+                     flameK );
   // the iron burner sits low and centre and is opaque — a dark bar against the
   // glow, which is the single cue that says "there is a flame BEHIND paper"
   float burner = ( 1.0 - smoothstep( 0.10, 0.34, abs( uv.x ) ) )
                * ( 1.0 - smoothstep( -0.86, -0.44, uv.y ) );
 
-  /* UNLIT PANEL. MEASURED: shots/props-r1/lantern.png x 1320-1345 y 155-215 read
-   * display L 0.903 in BROAD DAYLIGHT with uGlow = 0 — a blown cream slab, which
-   * is the reviewer's "flat pale-yellow rectangles that cast no light". The cause
-   * was translucency 0.85 x thickness 0.55 on a BACKLIT thin panel: nprKeyG's
-   * wrapped transmission lobe fired at full strength and turned a #3A3630 recess
-   * into white. Washi over a dark fire box transmits a little, not a lot: 0.16 x
-   * 0.22 lands it at a dim warm recess, which is what a daytime ishidoro is. */
-  vec3 cold = mix( uPaperCold, uPaperCold * 1.45, fib * 0.55 + rib * 0.25 );
-  cold *= 1.0 - 0.30 * smoothstep( 0.35, 1.0, abs( uv.y ) );   // frame shading
-  vec3 sm0 = nprShadeN( cold, N0, N0, V, 1.0, 0.16, 0.22, 0.08, 0.40, 0.22 );
+  /* THE PANEL AS A SURFACE, not as a light.
+   *
+   * In daylight an ishidoro's washi is a pale sheet of paper with a dark iron
+   * burner behind it: it is genuinely BRIGHTER than the granite around it (washi
+   * #E8D4AE is linear luma 0.673 against granite's 0.333) but it is a shaded
+   * surface with form and fibre, and it must not glow, flicker or bloom. Once the
+   * fire is lit the same sheet loses its own daylight and becomes the dark recess
+   * the flame shines through, which is why the base albedo is crossfaded by
+   * flameK — at flameK = 1 every line below reduces to the night version this
+   * shader already had, which a review passed. MEASURED: 0.16 x 0.22 of
+   * translucency is what keeps a BACKLIT thin panel off the blown-cream 0.903 an
+   * earlier round shipped. */
+  vec3 base = mix( uPaperDay, uPaperCold, flameK );
+  base *= 1.0 + 0.45 * ( fib * 0.55 + rib * 0.25 );            // laid fibres
+  base *= 1.0 - 0.30 * smoothstep( 0.35, 1.0, abs( uv.y ) );   // frame shading
+  // the burner is opaque in daylight too — this is the internal detail that stops
+  // the day panel reading as a flat yellow blob
+  base *= 1.0 - burner * 0.46 * ( 1.0 - flameK );
+  /* The occlusion and translucency the panel is shaded with also crossfade.
+   * MEASURED: the night numbers (ao 0.22, translucency 0.16 x 0.22) exist to keep
+   * a BACKLIT thin panel off the blown-cream 0.903 an earlier round shipped, but
+   * applied to the daylight albedo they printed the fire box at display luma 0.246
+   * — DARKER than the lantern's own granite (0.44-0.57), i.e. four black holes.
+   * The day values are what land it above the granite without clipping; at
+   * flameK = 1 every one of them reduces to the night value exactly. */
+  float trP = mix( 0.42, 0.16, flameK );
+  float thP = mix( 0.44, 0.22, flameK );
+  float aoP = mix( 1.00, 0.22, flameK );
+  vec3 sm0 = nprShadeN( base, N0, N0, V, 1.0, trP, thP, 0.08, 0.40, aoP );
+
+  /* DAYLIGHT SCATTERED THROUGH THE SHEET.
+   *
+   * MEASURED, and this is what the shaded base alone cannot do. On the shadow
+   * side the NPR ambient is dominated by uSkyColor, which is (0.076, 0.135,
+   * 0.288) — strongly blue — so the panel printed rgb(114,138,157): hue 207 deg,
+   * luma 0.525, i.e. a COOL slab only 0.02-0.06 above the granite around it
+   * (0.469-0.503). Washi does not behave like that: it is translucent, the sun is
+   * BEHIND the lantern in this composition, and a lit sheet of paper scatters that
+   * key forward. Multiplying by uSunColor (1.106, 0.854, 0.658) is that forward
+   * scatter, and it is the only warm term available to a backlit panel.
+   *
+   * CALIBRATED, not guessed. The term's mean linear luma is
+   *   0.759 (uPaperDay) x 0.894 (uSunColor) x 0.925 (fibre) x 0.97 (rib) x DS
+   *   = 0.610 x DS,
+   * and display L ~= 0.56*(scene/0.333)^0.864 here, so lifting the box from its
+   * measured 0.309 scene / 0.525 display to the ~0.66 display the brief asks for
+   * needs +0.095 scene, i.e. DS = 0.156. It carries NO hot core, does not
+   * flicker, and is multiplied by (1 - flameK), so it cannot reintroduce the
+   * daylight blow-out this round exists to remove. */
+  #define PROPS_DAY_SCATTER 0.156
+  vec3 dayLit = uPaperDay * uSunColor * PROPS_DAY_SCATTER
+              * ( 0.55 + 0.75 * fib ) * ( 0.82 + 0.30 * rib )
+              * ( 0.76 + 0.48 * centre ) * ( 1.0 - burner * 0.62 ) * ( 1.0 - flameK );
+  sm0 += dayLit;
 
   /* LIT PANEL. Emissive — it is the light source, not a lit surface — so it
    * bypasses the NPR key and lands above the bloom threshold. Peak exposure at
    * the flame centre is (1.65 + 2.05) = 3.70x the paper albedo, i.e. the 3.5x the
-   * review asked for once the fibre term's 0.55..1.30 swing is averaged in. */
+   * review asked for once the fibre term's 0.55..1.30 swing is averaged in.
+   * Multiplied by the flame factor, so it is exactly ZERO at midday. */
   vec3 hotCol = mix( uPaper, uFlameCore, centre * 0.72 ) * ( 0.55 + 0.75 * fib );
-  hotCol *= flick * glow * ( 1.65 + 2.05 * centre ) * ( 0.82 + 0.30 * rib );
+  hotCol *= flick * flame * ( 1.65 + 2.05 * centre ) * ( 0.82 + 0.30 * rib );
   hotCol *= 1.0 - burner * 0.72;
 
   vec3 col = sm0 + hotCol;

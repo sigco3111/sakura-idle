@@ -125,9 +125,44 @@ export const TUNING = {
   GOLDEN_TTL: 15,             // seconds it stays catchable
   SIM_HZ: 20,                 // fixed simulation step — frame-rate independent
   AUTOSAVE: 10,               // autosave every 10 s                     (spec)
-  /** Global production scalar. Balance dial for the GAME_DESIGN pacing table;
-   *  measured against it in .tmp-game/sim.mjs — do not change casually. */
-  PROD_SCALE: 1.0,
+  /**
+   * Global production scalar — the primary balance dial for the GAME_DESIGN
+   * pacing table. Measured in `.tmp-game/sim.mjs`; do not change casually.
+   *
+   * 0.70, not 1.0, and the reason is measured: the earlier 1.0 was tuned by a
+   * simulator that ran the economy in an EVENTLESS vacuum. The live game runs
+   * Petal Storm (×10 for 20 s every 7 min ≈ +43% income), Golden Petal Frenzy
+   * (×7 for 30 s, ~34% of catches ≈ +27%), Spring Rain, Golden Hour and Full
+   * Moon crit continuously — together ≈ ×1.8 on income, and in a reinvestment
+   * economy time-to-milestone goes as income^-1.67, so the whole first Season
+   * ran 2.2–2.4× fast (満開 Full Bloom in 14.6 min against the ~35 min target).
+   * 0.70 hands that back. Measured alternatives that CANNOT fix it, all in
+   * .tmp-game/sim.mjs: upgrade prices alone saturate at 満開 = 1370 s (past ~×30
+   * the player is cash-rich and the ladder, not income, is the constraint);
+   * COST_GROWTH 1.15→1.22 reaches only 1113 s; halving the event cadence
+   * (storm 25 min, Golden Petal 4.5–12 min) reaches only 1339 s and costs the
+   * game its juice; CLICK_SCALE moves the first 3 minutes and nothing after.
+   *
+   * The visible cost of this dial: a Tender's card shows 0.70× the petals/s in
+   * the GAME_DESIGN Tenders column (a lone Wind Sprite reads 0.07/s, not 0.10).
+   * That column and the pacing table are not simultaneously satisfiable with the
+   * spec'd events, and the spec calls the pacing table "the thing balance must
+   * actually achieve", so pacing wins. Nothing in the rate MATH changed — every
+   * baseCost, every per-second output and every bloom threshold is still the
+   * literal spec value.
+   */
+  PROD_SCALE: 0.70,
+  /**
+   * Click scalar — multiplies clickValue and nothing else, so the opening
+   * (click-dominated: the click:passive ratio is ~3 at t = 0 and ~0.1 by minute
+   * ten) can be paced without touching passive income. Held at 1.0: measured in
+   * .tmp-game/sim.mjs it has authority over the first three minutes only —
+   * CLICK_SCALE 0.25 pushed "first Tender" from 18 s to 36 s and the first Codex
+   * card from 95 s to 180 s while moving 満開 Full Bloom by 100 s out of 1755.
+   * Kept as a dial because it is the ONLY one that can move the opening beats
+   * without disturbing the rest of the curve.
+   */
+  CLICK_SCALE: 1.0,
 };
 
 /* ==================================================================== *
@@ -350,21 +385,26 @@ const tenderUpNames = {
  * Per-Tender ×2 upgrades, unlocked at owned 1 / 5 / 25 / 50. Cost is
  * `baseCost × COSTF[tier]`.
  *
- * MEASURED, do not "fix" these to the spec's "10–25× the current cost of the
- * thing it improves" without re-running .tmp-game/sim.mjs. Read literally, that
- * rule wants ≈12× / 25× / 500× / 16000× baseCost, i.e. tier 1 twice as dear and
- * tiers 2–4 roughly 40× cheaper than they are here. Both moves were simulated:
- *   tier 1 → 12× base   pushes 満開 Full Bloom to 2159 s (target 2100, good) but
- *                       drags 初咲 First Bloom out to 675 s (target 480, 1.41× —
- *                       out of band). Net worse.
- *   tiers 2–4 ÷20       pulls Full Bloom in to 1830 s and the first Season to
- *                       3377 s. Also net worse.
- * The two legs of the curve move together under every authored price, because a
- * payback-greedy player just buys more Tenders instead. Current values are the
- * measured optimum against the GAME_DESIGN pacing table.
+ * MEASURED against the pacing table in .tmp-game/sim.mjs (with live events on —
+ * see PROD_SCALE). Tier 1 is the single most pacing-sensitive price in the game:
+ * it is a ×2 on a whole Tender line, unlocked at owned = 1, so a payback-greedy
+ * player buys it on every line the instant it appears. At the old 6× baseCost it
+ * paid itself back in seconds and by itself pulled 満開 Full Bloom in by 26%
+ * (sweep: t1 ×2 → 973 s, ×8 → 1060 s, ×16 → 1752 s, ×32 → 1864 s, everything
+ * else held). 96× baseCost is the measured landing.
+ *
+ * Tiers 2–4 are deliberately NOT re-priced: the same sweep moved 満開 by under
+ * 1% across ×1…×8 on them, because their gates (owned 5 / 25 / 50) arrive when
+ * the player has better things to buy. Raising a price that buys no pacing only
+ * kills content, so they keep the values the eventless round measured.
+ *
+ * Read literally, GAME_DESIGN's "10–25× the current cost of the thing it
+ * improves" wants ≈12× / 25× / 500× / 16000× baseCost. Tier 1 at 96× is above
+ * that band and knowingly so — that rule is a rule of thumb ("roughly"), the
+ * pacing table is the spec.
  */
 const TENDER_UP_GATES = [1, 5, 25, 50];
-const TENDER_UP_COSTF = [6, 900, 30000, 900000];
+const TENDER_UP_COSTF = [96, 900, 30000, 900000];
 
 const tenderUps = [];
 for (const t of TENDERS) {
@@ -387,10 +427,25 @@ for (const t of TENDERS) {
  * Season with it. Lifted ×50 to a ~6-minute payback, which also regularises the
  * ladder to a clean ~60× per rung (it used to widen from 60× to 167×). Only
  * all_1 / all_2 are inside the measured 75-minute window; the upper four are
- * priced to keep the ladder's shape and were checked against a 4-hour run. */
+ * priced to keep the ladder's shape and were checked against a 4-hour run.
+ *
+ * 2026-07-29, events-on re-measure: ×4 on all_1 / all_2 only. Those two are the
+ * ones inside the first Season, and the raise is worth +264 s on "the Season is
+ * worth turning" (3215 → 3479 s against a 3600 s target) while costing nothing
+ * early — all_1's gate is 15 Tenders, which the reference player reaches around
+ * minute 6.
+ *
+ * all_3…all_6 were raised ×4 too and then put back, because a 4-hour run
+ * (ESS=164, i.e. a third Season) measured the cost: the last 40 minutes went
+ * flat — rate pinned at 7.955B/s, 438T of bank with nothing left inside a
+ * 50-minute payback, doubling time out past 16000 s. At the original prices the
+ * same run keeps climbing (54/78 upgrades instead of 51, 629 → 674 Tenders,
+ * 1.49× the Essence at the four-hour mark) and the 110-minute marks do not move
+ * by a single second. Pricing the late ladder out of reach does not slow the
+ * player down, it just gives them nothing to do. */
 const globalUps = [
-  ['all_1', 'A Word of Thanks', 1.0e6, 15, 'Said once, at dusk, to everyone at the same time.'],
-  ['all_2', 'Shared Kettle', 6.0e7, 40, 'Nobody in the history of groves has ever worked well cold.'],
+  ['all_1', 'A Word of Thanks', 4.0e6, 15, 'Said once, at dusk, to everyone at the same time.'],
+  ['all_2', 'Shared Kettle', 2.4e8, 40, 'Nobody in the history of groves has ever worked well cold.'],
   ['all_3', 'The Rota', 3.5e9, 75, 'Written on the wall in a neat hand. Everyone obeys it. Nobody wrote it.'],
   ['all_4', 'Festival Wages', 2.5e11, 120, 'Paid in petals, spent on nothing, saved with enormous care.'],
   ['all_5', 'One Purpose', 1.5e13, 180, 'Ask any of them what they are doing. You will get the same answer.'],
@@ -1069,7 +1124,7 @@ export function computeDerived(state, live = {}) {
   // both sides makes click value scale as seasonMult² while passive scales as
   // seasonMult¹, so clicking runs away by a factor of the prestige bonus (at
   // 851 Essence earned that measured 326× passive). One application only.
-  const clickValue = (1 + clickFlat) * clickMult * eventClick * seasonMult
+  const clickValue = TUNING.CLICK_SCALE * (1 + clickFlat) * clickMult * eventClick * seasonMult
     * (1 + grove.clickPassiveTerm * rawRate);
 
   /* ---- crit ---- */

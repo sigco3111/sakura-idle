@@ -1111,6 +1111,129 @@ export default {
         s.stats.night = 1; s.stats.idle = 400;
       });
 
+      /* ---- stage0..stage5: keep the GAME STATE with the tree ------------ *
+       * 30-tree.js owns those six scenario names and uses them to force the
+       * canopy's visual stage, which is right for judging the tree. On their
+       * own they leave this module untouched, so `--scenario stage5` rendered
+       * an Everblossom canopy over a HUD reading 蕾 Budding / 0.00 per second,
+       * and `--scenario stage3` left whatever state the previous scenario had
+       * (measured: stage 0, 15 Tenders, 5.73/s). Wrap them so the state that
+       * would have grown that canopy is loaded too.
+       *
+       * Every loadout below is MEASURED, not invented: `.tmp-game/sim.mjs
+       * --dump` snapshots the reference player the moment they cross each
+       * threshold (95 s / 494 s / 1755 s / 6462 s). Stage 0 is the
+       * post-Season reset and stage 5 is a fourth-Season player who has just
+       * reached 常桜 — the one state `lategame` (everything maxed) does not
+       * cover.
+       */
+      const STAGE_STATES = {
+        0: (s) => {
+          s.season = 1; s.stageFloor = 0;
+          s.totalAllTime = 1.1e7;
+          s.essenceEarned = 3; s.essence = 3;
+          s.blossoms = 43;
+          for (const id of ['somei', 'yoko', 'yae', 'shidare', 'oshima', 'yama']) s.codex[id] = 1;
+          s.stats.clicks = 1815; s.stats.crits = 256; s.stats.playTime = 1800;
+          s.stats.seasonTime = 3; s.stats.storms = 4; s.stats.golden = 2;
+          s.stats.bestSeasonTotal = 1e7; s.stats.bestBank = 7.3e5; s.stats.maxTender = 44;
+        },
+        1: (s) => {
+          Object.assign(s.tenders, { sprite: 6, gatherer: 4 });
+          for (const id of ['shake_f1', 'shake_m1']) s.upgrades[id] = 1;
+          s.petals = 256; s.totalThisSeason = 1e3; s.totalAllTime = 1e3;
+          s.blossoms = 6;
+          s.stats.clicks = 237; s.stats.crits = 24; s.stats.playTime = 95;
+          s.stats.seasonTime = 95; s.stats.seasonClicks = 237;
+          s.stats.bestBank = 256; s.stats.maxTender = 6;
+        },
+        2: (s) => {
+          Object.assign(s.tenders, { sprite: 32, gatherer: 26, miko: 13 });
+          for (const id of ['shake_f1', 'shake_m1', 'shake_f2', 'shake_m2', 'shake_c1',
+            'up_sprite_1', 'up_gatherer_1']) s.upgrades[id] = 1;
+          s.petals = 1.36e4; s.totalThisSeason = 1e5; s.totalAllTime = 1e5;
+          s.blossoms = 24;
+          for (const id of ['somei', 'yoko', 'yae', 'shidare']) s.codex[id] = 1;
+          s.stats.clicks = 963; s.stats.crits = 127; s.stats.playTime = 494;
+          s.stats.seasonTime = 494; s.stats.seasonClicks = 963;
+          s.stats.bestBank = 1.4e4; s.stats.maxTender = 32; s.stats.golden = 1;
+        },
+        3: (s) => {
+          Object.assign(s.tenders, { sprite: 41, gatherer: 44, miko: 38, lantern: 22, koi: 13 });
+          for (const id of ['shake_f1', 'shake_m1', 'shake_f2', 'shake_m2', 'shake_c1',
+            'shake_f3', 'shake_x1', 'shake_m3', 'up_sprite_1', 'up_sprite_2',
+            'up_gatherer_1', 'up_gatherer_2', 'up_miko_1', 'up_miko_2']) s.upgrades[id] = 1;
+          s.petals = 7.31e5; s.totalThisSeason = 1e7; s.totalAllTime = 1e7;
+          s.blossoms = 43;
+          for (const id of ['somei', 'yoko', 'yae', 'shidare', 'oshima', 'yama']) s.codex[id] = 1;
+          s.stats.clicks = 1815; s.stats.crits = 256; s.stats.playTime = 1755;
+          s.stats.seasonTime = 1755; s.stats.seasonClicks = 1815;
+          s.stats.bestBank = 7.4e5; s.stats.maxTender = 44; s.stats.storms = 4; s.stats.golden = 2;
+        },
+        4: (s) => {
+          Object.assign(s.tenders, {
+            sprite: 58, gatherer: 61, miko: 58, lantern: 44, koi: 39, rabbit: 34, kitsune: 8,
+          });
+          for (const id of ['shake_f1', 'shake_m1', 'shake_f2', 'shake_m2', 'shake_c1',
+            'shake_f3', 'shake_x1', 'shake_m3', 'shake_c2', 'shake_f4', 'shake_x2',
+            'shake_m4', 'shake_c3', 'up_sprite_1', 'up_sprite_2', 'up_sprite_3',
+            'up_gatherer_1', 'up_gatherer_2', 'up_gatherer_3', 'up_miko_1', 'up_miko_2',
+            'up_miko_3', 'up_lantern_1', 'up_lantern_2', 'up_koi_1', 'up_koi_2',
+            'up_rabbit_1', 'up_rabbit_2', 'all_1', 'all_2']) s.upgrades[id] = 1;
+          s.petals = 6.92e9; s.totalThisSeason = 1.04e10; s.totalAllTime = 1.04e10;
+          s.blossoms = 60;
+          for (const id of ['somei', 'yoko', 'yae', 'shidare', 'oshima', 'yama', 'gyoiko']) s.codex[id] = 1;
+          s.stats.clicks = 4639; s.stats.crits = 848; s.stats.playTime = 6462;
+          s.stats.seasonTime = 6462; s.stats.seasonClicks = 4639;
+          s.stats.bestBank = 7e9; s.stats.maxTender = 61; s.stats.storms = 14; s.stats.golden = 9;
+        },
+        5: (s) => {
+          Object.assign(s.tenders, {
+            sprite: 128, gatherer: 131, miko: 126, lantern: 118, koi: 109,
+            rabbit: 101, kitsune: 84, envoy: 61, heart: 33, bough: 11,
+          });
+          for (const u of E.UPGRADES) {
+            if (u.family === 'shake' || /^up_[a-z]+_[123]$/.test(u.id)
+              || ['all_1', 'all_2', 'all_3', 'all_4'].includes(u.id)
+              || ['grove_bulk', 'grove_magnet', 'grove_auto1', 'grove_gold1',
+                'grove_dew1', 'grove_storm1', 'grove_gold2', 'grove_off1'].includes(u.id)) {
+              s.upgrades[u.id] = 1;
+            }
+          }
+          s.season = 3; s.stageFloor = 0;
+          s.essenceEarned = 384; s.essence = 96;
+          for (const n of E.CONSTELLATION) if (n.tier <= 2) s.nodes[n.id] = 1;
+          for (const h of ['hw_prod1', 'hw_click1', 'hw_start1', 'hw_prod2', 'hw_crit1']) s.heartwood[h] = 1;
+          s.petals = 3.1e12; s.totalThisSeason = 2.4e13; s.totalAllTime = 5.8e13;
+          s.blossoms = 21;
+          for (const c of E.CODEX) if (c.id !== 'everblossom' && c.id !== 'jugatsu') s.codex[c.id] = 1;
+          s.stats.clicks = 26400; s.stats.crits = 5100; s.stats.playTime = 21800;
+          s.stats.seasonTime = 6300; s.stats.seasonClicks = 8100;
+          s.stats.bestBank = 3.1e12; s.stats.maxTender = 131; s.stats.storms = 31;
+          s.stats.golden = 24; s.stats.offlineH = 6; s.stats.night = 1;
+        },
+      };
+
+      /* 30-tree re-registers stage0..5 on `game:ready`; this module's listener
+       * is added later (order 60 > 30) so it runs after and wraps the final
+       * version. Guarded so a second game:ready cannot double-wrap. */
+      let stagesWrapped = false;
+      const wrapStageScenarios = () => {
+        if (stagesWrapped) return;
+        stagesWrapped = true;
+        for (let s = 0; s <= 5; s++) {
+          const visual = sc[`stage${s}`];
+          const mutate = STAGE_STATES[s];
+          sc[`stage${s}`] = () => {
+            rebuild(mutate);
+            // ...then let the tree's own override have the last word, so the
+            // canopy snaps instead of growing into place during a shot.
+            if (visual) visual();
+          };
+        }
+      };
+      offs.push(bus.on('game:ready', wrapStageScenarios));
+
       sc['game-storm'] = () => { startStorm(); pushState(true); };
       sc['game-golden'] = () => { if (!golden) spawnGolden(); };
       sc['game-frenzy'] = () => { applyBoon(E.GOLDEN_BOONS[0]); applyBoon(E.GOLDEN_BOONS[2]); pushState(true); };

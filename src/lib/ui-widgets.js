@@ -338,22 +338,40 @@ export function sealedRow() {
 /**
  * The purchase button (ART_BIBLE §7): gold vertical gradient, inner top
  * highlight, 1 px darker border, drop shadow, hover lift + glow, press-in.
+ *
+ * It carries a VERB, not just a price. A reviewer read the previous cost-only
+ * pill as static text and concluded the game had no pressable control at all —
+ * for a clicker that is fatal, so the label line ("TEND", "LEARN", "AWAKEN")
+ * and the ＋ sigil are load-bearing, not decoration.
+ *
  * `stopPropagation` matters — the row itself is also clickable and a bubbled
  * click would buy twice.
  */
-export function buyBtn(onclick, title) {
+export function buyBtn(onclick, title, verb = 'TEND') {
   const v = h('span.v.num', '0');
   const x = h('span.x.num', '×1');
+  const act = h('span.act', verb);
   const root = h('button.sk-buy', {
+    type: 'button',
     onclick: (e) => { e.stopPropagation(); onclick(e); },
     title: title ?? null,
-  }, h('span.gl'), v, x);
+  },
+    h('span.gl'), h('span.pl'),
+    h('span.tx', h('span.hd', act, x), v),
+  );
   return {
-    root, v, x,
+    root, v, x, act,
     /** `badge` is shown verbatim in the pill — '×10' for bulk, a kanji for currency. */
     set(cost, badge) {
       setText(v, cost);
       setText(x, badge);
+    },
+    setVerb(s) { setText(act, s); },
+    /** Affordability recolours the button and blocks the press; it never hides it. */
+    setEnabled(on) {
+      setClass(root, 'off', !on);
+      const s = on ? 'false' : 'true';
+      if (root.__ad !== s) { root.__ad = s; root.setAttribute('aria-disabled', s); }
     },
   };
 }

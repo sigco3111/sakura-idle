@@ -118,6 +118,29 @@ uniform vec4  uCanopyOcc;
 //       vermilion stays red under a sunset key. Fades in with the key's own
 //       chroma so full daylight is untouched.
 uniform vec4  uShadowCal;
+// ---- Aerial-perspective calibration, written by 08-lighting.js every frame.
+// EVERY COMPONENT USES THE "0 MEANS DEFAULT" GUARD, so a shader that somehow
+// receives this uniform unset (all zeros) renders the shipped look rather than a
+// black fog. See nprAerialLevel() / nprAerialKeepMid() / … below.
+//   .x  LEVEL of the haze target as a fraction of uFogColor. ART_BIBLE §8.3 wants
+//       aerial perspective; §8.9 forbids the milky band it turns into when a LAND
+//       plane converges on something BRIGHTER than the sky above it. uFogColor is
+//       authored as the air's own colour seen against the zenith, so a receding
+//       ground plane has to land under it. (15-sky.js applies exactly the same
+//       correction to its hill bands, at 0.88.)
+//   .y  fraction of a surface's own relative luminance kept at MID depth
+//   .z  ...and at MAXIMUM depth. Non-zero on purpose: at f -> 1 a plane that keeps
+//       none of its own value converges on ONE flat colour and every receding
+//       band melts into it (§8.3 + §5's depth separation, both lost at once).
+//   .w  exponent on the optical depth (NPR_AERIAL_POW)
+uniform vec4  uAerial;
+// ---- Occlusion calibration, written by 08-lighting.js every frame. Same
+// "0 means default" guard as uAerial.
+//   .x  exponent on the ambient's occlusion term (sky visibility inside a pocket)
+//   .y  scale on NPR_SHADOW_AO — how much of the fake key fill survives at ao = 0
+//   .z  fraction of the SKY ambient the canopy's shade pool takes at its core
+//   .w  ...and of the KEY
+uniform vec4  uShadeCal;
 #endif
 `;
 
@@ -359,22 +382,44 @@ const vec3 NPR_TRANSMIT_TINT = vec3(1.000, 0.768, 0.838);
   // How much of a surface's own relative luminance survives aerial perspective
   // at MID range. 0 = every distant surface converges on one flat fog colour
   // (the milky white-out); 1 = no value compression at all. ART_BIBLE §5 needs
-  // the receding hill bands to stay separable by value, which is what this
-  // buys — but only out to NPR_AERIAL_VALUE_FADE below, because at MAXIMUM
-  // scene depth the opposite rule applies: nothing may sit further from the fog
-  // colour than the sky it is seen against.
-  #define NPR_AERIAL_VALUE 0.45
+  // the receding hill bands to stay separable by value, which is what this buys.
+  //
+  // 0.45 -> 0.52 (r4). MEASURED on shots/light-r0/hero.png with the row scanner:
+  // the terrain between 60 and 95 m printed L 0.39 -> 0.59 while the same grass at
+  // 43 m printed 0.33, i.e. the near-mid field was climbing 0.26 of display value
+  // for nothing but air and reading as a veil laid over the sward rather than as
+  // grass (§8.9). Value preservation is the only term that pushes back on that
+  // without also killing the far convergence, so it goes UP, not down.
+  #define NPR_AERIAL_VALUE 0.52
+#endif
+#ifndef NPR_AERIAL_VALUE_FAR
+  // ...and at MAXIMUM depth. This used to be a hard 0 (the fade below ran the
+  // preservation out entirely by f = 0.96), which is what produced the r4 blocker:
+  // every surface past ~150 m converged on EXACTLY uFogColor, so the far terrain
+  // printed L 0.74-0.78 in the wide frame while the sky above the ridges printed
+  // 0.60-0.64. A land plane brighter than the air in front of it is the milky
+  // band, and no amount of density tuning can fix it because the convergence
+  // TARGET was wrong, not the rate.
+  //
+  // Kept well below the mid value (air really does flatten value with depth) but
+  // never zero, so the near ridge stays a readable step under the far one.
+  #define NPR_AERIAL_VALUE_FAR 0.30
+#endif
+#ifndef NPR_AERIAL_LEVEL
+  // LEVEL of the haze target as a fraction of uFogColor — see uAerial.x. 0.78,
+  // MEASURED: uFogColor #BCD3EA is scene-linear luma 0.622 and prints at display
+  // L 0.78 through the grade, but 15-sky.js's actual horizon gradient prints
+  // 0.60-0.64 in the same frame. Converging a LAND plane on the authored fog
+  // colour therefore lands it ~0.15 display ABOVE the sky it recedes into. The
+  // hills use the same correction at 0.88; ours is stronger because our surfaces
+  // are nearer and must stay the darkest plane of the three.
+  #define NPR_AERIAL_LEVEL 0.72
 #endif
 #ifndef NPR_AERIAL_VALUE_FADE
-  // (start, end) of the fog fraction over which the value-preservation above is
-  // faded OUT. Measured, and this is the fix for the inverted-aerial tell: with
-  // preservation held at 0.45 all the way to f = 1, grass 160 m out still kept
-  // 45% of its own (much darker, much warmer) value and printed khaki #C9C18D
-  // against a sky at L 0.77 — a distant surface MORE saturated than the air in
-  // front of it, which reads as a cardboard cutout. Past 0.72 the surface is
-  // 3/4 air anyway, so handing the last quarter of the range to the fog costs
-  // no separation that the eye could have used.
-  #define NPR_AERIAL_VALUE_FADE vec2(0.66, 0.96)
+  // (start, end) of the fog fraction over which the MID preservation is faded to
+  // the FAR one. Kept wide and late so the playfield's own depth cues (the 40-100 m
+  // band, which is most of the visible ground) sit entirely on the mid value.
+  #define NPR_AERIAL_VALUE_FADE vec2(0.62, 0.95)
 #endif
 #ifndef NPR_AERIAL_POW
   // Exponent on the optical depth. A plain exp(-d*density) has to be dense
@@ -423,6 +468,28 @@ const vec3 NPR_TRANSMIT_TINT = vec3(1.000, 0.768, 0.838);
 #endif
 
 float nprLuma(vec3 c){ return dot(c, NPR_LUMA); }
+
+/* --- live calibration accessors. Every one falls back to its compile-time
+       default when the uniform is unset (or zero), so a shader that receives an
+       all-zero uAerial/uShadeCal still renders the shipped look. That guard is
+       not defensive decoration: these two uniforms were added after every
+       surface module was written, and a module that builds its own uniform block
+       without spreading the whole bag would otherwise get a black fog. */
+float nprAerialLevel(){   return uAerial.x > 0.0 ? uAerial.x : NPR_AERIAL_LEVEL; }
+float nprAerialKeepMid(){ return uAerial.y > 0.0 ? uAerial.y : NPR_AERIAL_VALUE; }
+float nprAerialKeepFar(){ return uAerial.z > 0.0 ? uAerial.z : NPR_AERIAL_VALUE_FAR; }
+float nprAerialPow(){     return uAerial.w > 0.0 ? uAerial.w : NPR_AERIAL_POW; }
+// 1.35 -> 1.85 (r4). The frame's DARK ANCHOR. MEASURED on shots/light-r0/hero.png:
+// the darkest pixel in the whole 1920x1080 frame was L 0.0786 and lum p1 was 0.164,
+// i.e. the histogram had no bottom at all (ART_BIBLE §8.9). Every module already
+// hands nprShadeN a real ao value (grass blade bases 0.46, bark crevices 0.65, canopy
+// interiors 0.30), so the pockets that ought to carry the low end exist — the
+// ambient was simply reading almost all of the sky inside them. 1.85 halves the
+// ambient at ao 0.68 instead of quartering it at ao 0.35, and it touches nothing
+// that is unoccluded (ao = 1 -> 1 at every exponent), so neither the terminator
+// nor the rim can move.
+float nprAmbOccPow(){     return uShadeCal.x > 0.0 ? uShadeCal.x : 1.85; }
+float nprShadowAoLevel(){ return NPR_SHADOW_AO * (uShadeCal.y > 0.0 ? uShadeCal.y : 1.0); }
 
 /* --- animated key breakup ------------------------------------------------
    A 2-octave, curl-warped value-noise field in world XZ, scrolled by the
@@ -496,6 +563,8 @@ float nprDappleMask(){
 #ifndef NPR_CANOPY_KEY
   #define NPR_CANOPY_KEY 0.28
 #endif
+float nprCanopySky(){ return uShadeCal.z > 0.0 ? uShadeCal.z : NPR_CANOPY_SHADE; }
+float nprCanopyKey(){ return uShadeCal.w > 0.0 ? uShadeCal.w : NPR_CANOPY_KEY; }
 float nprCanopyShade(vec3 N, float weight){
   if (nprDappleWP.x > 1.0e8 || uCanopyOcc.w <= 0.0) return 1.0;
   vec3 d = nprDappleWP - uCanopyOcc.xyz;
@@ -808,7 +877,7 @@ vec3 nprKeyG(vec3 albedo, vec3 N, vec3 Ng, vec3 V, vec3 L, vec3 kcol,
   float dapple = 1.0 - (1.0 - nprDappleMask())
                * mix(0.45, 1.0, clamp(N.y * 0.5 + 0.5, 0.0, 1.0));
   // the canopy's own shade pool takes a bite out of the key as well as the sky
-  float canopyK = nprCanopyShade(N, NPR_CANOPY_KEY);
+  float canopyK = nprCanopyShade(N, nprCanopyKey());
   t = clamp(t * dapple * nprKeyGust() * canopyK, 0.0, 1.12);
 
   float kl = clamp(nprLuma(kcol), 0.05, 1.15);
@@ -833,7 +902,7 @@ vec3 nprKeyG(vec3 albedo, vec3 N, vec3 Ng, vec3 V, vec3 L, vec3 kcol,
   float coreDepth = clamp(NPR_SHADOW_CORE * max(uShadowCal.y, 0.02), 0.05, 1.0);
   vec3  shDiff = shHue * (nprShadowLevel(nprLuma(albedo)) * kl
                           * mix(1.0, coreDepth, core)
-                          * mix(NPR_SHADOW_AO, 1.0, occ)
+                          * mix(nprShadowAoLevel(), 1.0, occ)
                           * castFill)
                + nprShadowFloor(shHue) * (NPR_SHADOW_FLOOR * kl);
 
@@ -877,8 +946,8 @@ vec3 nprKeyG(vec3 albedo, vec3 N, vec3 Ng, vec3 V, vec3 L, vec3 kcol,
   // occ^1.35, not occ: sky visibility falls off faster than a linear AO term
   // suggests once a point is inside a pocket, and this is the second half of
   // the dark anchor (the first is NPR_SHADOW_AO on the fill above).
-  col += ambA * nprAmbient(N) * pow(max(occ, 1e-4), 1.35) * ambOcc
-       * nprCanopyShade(N, NPR_CANOPY_SHADE);
+  col += ambA * nprAmbient(N) * pow(max(occ, 1e-4), nprAmbOccPow()) * ambOcc
+       * nprCanopyShade(N, nprCanopySky());
 
   // one sharp CLIPPED specular core + a BANDED broad sheen. Neither is a PBR
   // roughness lobe, and the sheen is stepped so it does not smear a glossy
@@ -1076,7 +1145,7 @@ float nprAerialF(float viewDist, float worldY){
   float density = uFogParams.x, hf = uFogParams.y, start = uFogParams.z;
   float d = max(viewDist - start, 0.0);
   float h = exp(-max(worldY, 0.0) * hf);
-  float tau = pow(max(d * density, 0.0), NPR_AERIAL_POW) * h;
+  float tau = pow(max(d * density, 0.0), nprAerialPow()) * h;
   return clamp(1.0 - exp(-tau), 0.0, 1.0);
 }
 vec3 nprAerialTint(float f){
@@ -1088,14 +1157,24 @@ vec3 nprAerialTint(float f){
   // the sky's chroma onto the fog's own luminance keeps the cooling and drops the
   // darkening.
   vec3 skyHue = uSkyColor * (nprLuma(uFogColor) / max(nprLuma(uSkyColor), 1e-4));
-  vec3 far = mix(uFogColor, skyHue, 0.35);
-  return mix(uFogColor, far, smoothstep(0.28, 1.0, f));
+  // 0.35 -> 0.52 (r4). ART_BIBLE §5 / the r4 brief: each receding plane must be
+  // COOLER than the one in front of it and never more saturated than the sky. The
+  // haze's own hue is what carries that, and uFogColor #BCD3EA is only mildly
+  // cool; pulling the far end further onto the sky's chroma (at the fog's own
+  // luminance, so no darkening comes with it) is what makes the far terrain read
+  // as air rather than as pale ground.
+  vec3 far = mix(uFogColor, skyHue, 0.52);
+  // ...and the whole target sits BELOW uFogColor's authored value, because what
+  // recedes here is LAND and it must stay under the sky. See NPR_AERIAL_LEVEL.
+  return mix(uFogColor, far, smoothstep(0.28, 1.0, f)) * nprAerialLevel();
 }
 vec3 nprAerialMix(vec3 color, vec3 fogc, float f){
   float rel = clamp(nprLuma(color) / max(nprLuma(fogc), 1e-4), 0.0, 2.2);
-  // Value preservation is a MID-range privilege — see NPR_AERIAL_VALUE_FADE.
-  float keep = NPR_AERIAL_VALUE
-             * (1.0 - smoothstep(NPR_AERIAL_VALUE_FADE.x, NPR_AERIAL_VALUE_FADE.y, f));
+  // Value preservation relaxes with depth but never to zero — see
+  // NPR_AERIAL_VALUE_FAR. That floor is what keeps three receding bands three
+  // separable values instead of one plate.
+  float keep = mix(nprAerialKeepMid(), nprAerialKeepFar(),
+                   smoothstep(NPR_AERIAL_VALUE_FADE.x, NPR_AERIAL_VALUE_FADE.y, f));
   return mix(color, fogc * mix(1.0, rel, keep), f);
 }
 
@@ -1285,15 +1364,37 @@ export const FOG_START_DISTANCE = 40.0;
 /**
  * Global scale on every keyframe's fog density.
  *
- * 1.0 — i.e. the `fogD` rows below ARE the shipped densities. It used to be 0.55
- * because the old law was a plain exp(-d*density): the only way to bury a ridge
- * at 160 m was a density that also veiled the garden at 60 m, so the density got
- * halved and the far distance stopped converging at all (the §8.3 tell). The
- * curve now carries NPR_AERIAL_POW, which separates those two distances, so the
- * densities are authored directly against the far end and there is nothing left
- * for a global scale to correct.
+ * 0.82 (r4). It was 1.0 — "the fogD rows ARE the shipped densities" — and that
+ * held while the aerial TARGET was uFogColor itself, because the only way to get
+ * any convergence at all was to push the rate. Now that the target sits at
+ * NPR_AERIAL_LEVEL of the fog colour and keeps a floor of the surface's own value
+ * (NPR_AERIAL_VALUE_FAR), the far end converges on its own and the rate is free to
+ * come down — which is what buys back the mid-ground.
+ *
+ * MEASURED on the hero frame, terrain at 91 m (the row the reviewer called a milky
+ * band), display L and rgb:
+ *   1.00  0.624  rgb(138,165,161)   grey-teal — haze, not grass
+ *   0.82  0.514  rgb(115,138,109)   green, and 0.11 lower than the 43 m sward
+ *   0.60  0.494  rgb(114,133, 92)   greener still, but the far edge at 130 m stops
+ *                                   reading as AIR (0.603, chroma 0.09) — §8.3
+ * 0.82 is the last value at which the 130 m edge is still recognisably cool air
+ * (rgb(145,167,172)) while 91 m is recognisably grass.
  */
-export const AERIAL_STRENGTH = 1.0;
+export const AERIAL_STRENGTH = 0.82;
+
+/* ---------------------------------------------------------------------- *
+ * The four aerial + four occlusion calibration numbers, mirrored on the JS
+ * side so 08-lighting.js can write them per phase (and sweep them live via the
+ * cal-* scenarios) without the GLSL #defines and these ever disagreeing.
+ * KEEP IN LOCKSTEP with NPR_AERIAL_* / NPR_CANOPY_* in the GLSL above.
+ * ---------------------------------------------------------------------- */
+export const AERIAL_LEVEL = 0.72;      // haze target as a fraction of uFogColor
+export const AERIAL_KEEP_MID = 0.52;   // own-value preservation at mid depth
+export const AERIAL_KEEP_FAR = 0.30;   // ...and at maximum depth (never 0)
+export const AERIAL_POW = 1.6;         // exponent on the optical depth
+export const AMB_OCC_POW = 1.85;       // sky visibility falloff inside a pocket
+export const CANOPY_SKY = 0.50;        // canopy shade pool: fraction of sky taken
+export const CANOPY_KEY = 0.28;        // ...and of the key
 
 /**
  * The colour light actually takes on bouncing off a sunlit grass garden
@@ -1368,6 +1469,12 @@ export function createLightUniforms() {
     // palette; the defaults here are the shipped day values so a module that
     // falls back to createLightUniforms() still looks right.
     uShadowCal: { value: new THREE.Vector4(1, 1, 1, NPR_KEY_DESAT) },
+    // Aerial calibration — (hazeLevel, keepMid, keepFar, depthPow). Every
+    // component uses the "0 means the shipped default" guard in the GLSL, so
+    // these defaults and the #defines can never disagree.
+    uAerial: { value: new THREE.Vector4(AERIAL_LEVEL, AERIAL_KEEP_MID, AERIAL_KEEP_FAR, AERIAL_POW) },
+    // Occlusion calibration — (ambOccPow, shadowAoScale, canopySky, canopyKey).
+    uShadeCal: { value: new THREE.Vector4(AMB_OCC_POW, 1, CANOPY_SKY, CANOPY_KEY) },
   };
 }
 

@@ -536,10 +536,17 @@ export function uiCss() {
   box-shadow:0 1px 0 rgba(255,255,255,.5) inset;}
 #ui-root .sk-shake span{font-size:calc(var(--u)*.92);color:rgba(255,242,246,.96);letter-spacing:.1em;}
 #ui-root .sk-shake b{font-family:var(--serif);color:#FFE6B8;font-size:calc(var(--u)*1.0);}
-#ui-root .sk-shake:hover{border-color:rgba(232,197,106,.6);}
+#ui-root .sk-shake{cursor:pointer;transition:transform .1s var(--ease),border-color .16s ease,box-shadow .16s ease;}
+#ui-root .sk-shake:hover{border-color:rgba(232,197,106,.75);
+  box-shadow:0 4px 16px rgba(0,0,0,.42),0 0 calc(var(--u)*1.2) rgba(232,197,106,.34);}
+#ui-root .sk-shake:active{transform:translateX(-50%) translateY(1px) scale(.985);}
 
 /* --- live event banner --- */
-#ui-root .sk-event{position:absolute;left:calc(50% - var(--rail)*0.5);top:calc(var(--u)*1.5);transform:translateX(-50%);
+/* Centred on the gap BETWEEN the HUD plate (right edge 28.95u) and the rail,
+   not on the window: at 1280 a window-centred ribbon drove its left point
+   straight through the plate and clipped the crit readout. */
+#ui-root .sk-event{position:absolute;
+  left:calc((var(--u)*30 + 100% - var(--rail)) / 2);top:calc(var(--u)*1.5);transform:translateX(-50%);
   min-width:calc(var(--u)*22);padding:calc(var(--u)*.5) calc(var(--u)*2.3) calc(var(--u)*.55);
   text-align:center;pointer-events:none;
   background:linear-gradient(180deg,rgba(58,32,22,.68),rgba(30,16,14,.58));
@@ -556,7 +563,8 @@ export function uiCss() {
 #ui-root .sk-event-bar>i{display:block;height:100%;background:linear-gradient(90deg,#FFD79A,#FFF3DC);box-shadow:0 0 6px rgba(255,205,130,.9);}
 
 /* ================= toasts ================= */
-#ui-root .sk-toasts{position:absolute;right:calc(var(--rail) + var(--u)*1.0);top:calc(var(--u)*1.4);
+/* below the live-event ribbon, never beside it: at 1280 the two overlapped */
+#ui-root .sk-toasts{position:absolute;right:calc(var(--rail) + var(--u)*1.0);top:calc(var(--u)*5.6);
   display:flex;flex-direction:column;gap:calc(var(--u)*.5);align-items:flex-end;z-index:3;}
 #ui-root .sk-toast{position:relative;display:flex;align-items:center;gap:calc(var(--u)*.7);
   padding:calc(var(--u)*.62) calc(var(--u)*1.1) calc(var(--u)*.62) calc(var(--u)*.9);
@@ -610,6 +618,11 @@ export function uiCss() {
 #ui-root .sk-panel-body{flex:0 1 auto;overflow-y:auto;overflow-x:hidden;
   padding:calc(var(--u)*.6) calc(var(--u)*.9) calc(var(--u)*.5);
   scrollbar-width:thin;}
+/* .more is set from JS only while content remains below: a list that ends in a
+   half-sliced row reads as a clipping bug, a list that fades reads as depth. */
+#ui-root .sk-panel-body.more{
+  -webkit-mask-image:linear-gradient(180deg,#000 0,#000 calc(100% - var(--u)*1.9),transparent 100%);
+  mask-image:linear-gradient(180deg,#000 0,#000 calc(100% - var(--u)*1.9),transparent 100%);}
 #ui-root .sk-panel-foot{flex:0 0 auto;padding:calc(var(--u)*.6) calc(var(--u)*3.2) calc(var(--u)*.9);
   display:flex;gap:calc(var(--u)*.5);align-items:center;justify-content:space-between;
   border-top:1px solid rgba(74,64,52,.18);}
@@ -662,7 +675,7 @@ export function uiCss() {
 #ui-root .sk-card:active{transform:translateY(1px) scale(.996);}
 #ui-root .sk-card.buy{border-color:rgba(184,138,48,.9);
   box-shadow:0 0 0 1px rgba(232,197,106,.5),0 2px 10px rgba(150,110,30,.26),0 1px 0 rgba(255,255,255,.78) inset;}
-#ui-root .sk-card.poor{filter:saturate(.72);}
+#ui-root .sk-card.poor{filter:saturate(.85);}
 #ui-root .sk-card.reveal{animation:sk-flip .56s var(--ease) both;}
 /* ---- rarity icon chip.  Two-stop tier gradient, a 1 px dark border with a
        3 px gold inner keyline, an embossed blossom watermark so it is never a
@@ -710,11 +723,14 @@ export function uiCss() {
 #ui-root .sk-mini .lb{font-size:var(--t-sec);color:${T.inkFaint};letter-spacing:.04em;white-space:nowrap;}
 #ui-root .sk-mini .lb b{color:${T.goldInk};font-weight:700;}
 
-/* ---- the purchase button (ART_BIBLE §7).  Before this the only affordance on
-       a Tender row was a cost string; a clicker with no button is not a game. ---- */
+/* ---- the purchase button (ART_BIBLE §7).  A reviewer read the earlier
+       cost-only pill as static text and concluded the game had no pressable
+       control at all, so this carries a VERB line, a ＋ sigil and a bulk badge
+       on the §7 gold gradient: unmistakably a button at a glance. ---- */
 #ui-root .sk-buy{position:relative;grid-column:3;grid-row:1/3;align-self:center;
-  display:flex;align-items:center;justify-content:center;gap:calc(var(--u)*.34);
-  min-width:134px;min-height:34px;padding:0 calc(var(--u)*.58);
+  display:flex;align-items:center;justify-content:flex-start;gap:calc(var(--u)*.42);
+  min-width:calc(var(--u)*9.4);min-height:calc(var(--u)*3.0);
+  padding:calc(var(--u)*.24) calc(var(--u)*.62) calc(var(--u)*.24) calc(var(--u)*.44);
   border-radius:3px;overflow:hidden;pointer-events:auto;
   background:linear-gradient(180deg,${T.goldHi} 0%,#E3C270 40%,${T.goldLo} 100%);
   border:1px solid #7A5A18;
@@ -724,28 +740,56 @@ export function uiCss() {
 #ui-root .sk-buy .gl{position:absolute;left:1px;right:1px;top:0;height:46%;pointer-events:none;
   border-radius:2px 2px 40% 40%/2px 2px 100% 100%;
   background:linear-gradient(180deg,rgba(255,253,235,.62),rgba(255,253,235,0));}
-#ui-root .sk-buy.sm{padding:0 calc(var(--u)*.48);gap:calc(var(--u)*.28);}
-#ui-root .sk-buy.sm .v{font-size:calc(var(--u)*.94);}
-#ui-root .sk-buy .v{position:relative;font-family:var(--serif);font-size:calc(var(--u)*1.02);
-  color:#2E2318;line-height:1;font-weight:600;text-shadow:0 1px 0 rgba(255,248,214,.55);}
-#ui-root .sk-buy .x{position:relative;font-size:calc(var(--u)*.72);font-weight:700;color:#5E4108;
-  letter-spacing:.04em;padding:1px calc(var(--u)*.28);border-radius:2px;
-  background:rgba(255,250,226,.7);border:1px solid rgba(122,90,24,.5);
+/* the ＋ sigil: a bevelled coin, the one element that reads "press me" even at
+   a glance with the text unresolved */
+#ui-root .sk-buy .pl{position:relative;flex:0 0 auto;
+  width:calc(var(--u)*1.34);height:calc(var(--u)*1.34);border-radius:99px;
+  display:grid;place-items:center;
+  background:radial-gradient(120% 120% at 34% 26%,#FFF8DC,#E8C56A 46%,#9A6E18);
+  border:1px solid rgba(74,50,8,.7);
+  box-shadow:0 1px 0 rgba(255,255,255,.55) inset,0 1px 2px rgba(40,26,6,.35);}
+#ui-root .sk-buy .pl::before{content:"＋";font-family:var(--sans);font-weight:700;
+  font-size:calc(var(--u)*.88);line-height:1;color:#4A330A;margin-top:-.04em;}
+#ui-root .sk-buy .tx{position:relative;display:flex;flex-direction:column;
+  align-items:flex-start;gap:calc(var(--u)*.06);min-width:0;}
+#ui-root .sk-buy .hd{display:flex;align-items:center;gap:calc(var(--u)*.3);}
+#ui-root .sk-buy .act{font-family:var(--sans);font-size:calc(var(--u)*.68);font-weight:700;
+  letter-spacing:.18em;color:#5A3F08;text-transform:uppercase;
+  text-shadow:0 1px 0 rgba(255,250,222,.6);}
+#ui-root .sk-buy.sm{min-width:calc(var(--u)*8.4);}
+#ui-root .sk-buy .v{position:relative;font-family:var(--serif);font-size:calc(var(--u)*1.04);
+  color:#2E2318;line-height:1;font-weight:600;text-shadow:0 1px 0 rgba(255,248,214,.55);
+  white-space:nowrap;}
+#ui-root .sk-buy .x{position:relative;font-size:calc(var(--u)*.62);font-weight:700;color:#5E4108;
+  letter-spacing:.04em;padding:0 calc(var(--u)*.22);border-radius:2px;
+  background:rgba(255,250,226,.75);border:1px solid rgba(122,90,24,.5);
   box-shadow:0 1px 0 rgba(255,255,255,.5) inset;}
 #ui-root .sk-buy:hover{transform:translateY(-1px);filter:brightness(1.05);
   box-shadow:0 1px 0 rgba(255,255,255,.78) inset,0 -3px 7px rgba(120,84,16,.3) inset,
              0 4px 12px rgba(40,26,6,.34),0 0 calc(var(--u)*1.3) rgba(232,197,106,.8);}
 #ui-root .sk-buy:active{transform:translateY(1px);
   box-shadow:0 3px 6px rgba(90,62,10,.5) inset,0 1px 2px rgba(40,26,6,.22);}
-#ui-root .sk-card.buy .sk-buy{animation:sk-afford 2.2s ease-in-out infinite;}
-/* unaffordable: still a real pressable control, just inset and cool */
-#ui-root .sk-card.poor .sk-buy{
-  background:linear-gradient(180deg,rgba(230,216,184,.95),rgba(196,180,146,.92));
-  border-color:rgba(110,84,30,.65);
-  box-shadow:0 2px 5px rgba(60,44,26,.3) inset,0 1px 0 rgba(255,255,255,.55);}
-#ui-root .sk-card.poor .sk-buy .gl{background:linear-gradient(180deg,rgba(255,255,250,.4),rgba(255,255,250,0));}
-#ui-root .sk-card.poor .sk-buy .v{color:#6E3225;text-shadow:0 1px 0 rgba(255,255,255,.45);}
-#ui-root .sk-card.poor .sk-buy .x{color:#5A4B36;background:rgba(255,253,246,.55);border-color:rgba(74,64,52,.4);}
+#ui-root .sk-card.buy .sk-buy,#ui-root .sk-up.buy .sk-buy{animation:sk-afford 2.2s ease-in-out infinite;}
+/* ---- unaffordable: still a real, visible control — pressed INTO the parchment,
+       colour drained out of the gold, the ＋ coin gone cold, cost in rust. The
+       shape stays identical so the player learns one affordance, not two. ---- */
+#ui-root .sk-buy.off{cursor:not-allowed;animation:none!important;
+  background:linear-gradient(180deg,#DCD2BC 0%,#C6BAA0 46%,#ADA087 100%);
+  border-color:rgba(96,80,50,.7);
+  box-shadow:0 3px 6px rgba(56,42,22,.36) inset,0 -1px 0 rgba(255,255,255,.4) inset,
+             0 1px 0 rgba(255,255,255,.42);}
+#ui-root .sk-buy.off:hover{transform:none;filter:none;
+  box-shadow:0 3px 6px rgba(56,42,22,.36) inset,0 -1px 0 rgba(255,255,255,.4) inset,
+             0 1px 0 rgba(255,255,255,.42);}
+#ui-root .sk-buy.off:active{transform:none;}
+#ui-root .sk-buy.off .gl{background:linear-gradient(180deg,rgba(255,255,250,.32),rgba(255,255,250,0));}
+#ui-root .sk-buy.off .pl{background:radial-gradient(120% 120% at 34% 26%,#EFEADC,#BCB29A 52%,#7E7460);
+  border-color:rgba(70,60,42,.66);box-shadow:0 1px 2px rgba(40,32,16,.3) inset;}
+#ui-root .sk-buy.off .pl::before{content:"錠";font-family:var(--serif);font-weight:600;
+  font-size:calc(var(--u)*.76);color:#4A4132;}
+#ui-root .sk-buy.off .act{color:#5A4E3A;text-shadow:none;}
+#ui-root .sk-buy.off .v{color:#7A3527;text-shadow:0 1px 0 rgba(255,255,255,.42);}
+#ui-root .sk-buy.off .x{color:#5A4B36;background:rgba(255,253,246,.5);border-color:rgba(74,64,52,.4);}
 
 /* ---- next-unlock row: a SEALED SCROLL, not a disabled fieldset.
        The r2 review read the old grey diagonal-hatched rectangle as HTML chrome.
@@ -801,8 +845,11 @@ export function uiCss() {
 #ui-root .sk-up:hover{transform:translateY(-1px);border-color:rgba(74,64,52,.48);}
 #ui-root .sk-up.buy{border-color:rgba(184,138,48,.8);background:linear-gradient(180deg,rgba(255,249,226,.88),rgba(246,229,186,.62));
   animation:sk-afford 2.2s ease-in-out infinite;}
-#ui-root .sk-up.poor{opacity:.66;filter:saturate(.55);}
-#ui-root .sk-up.own{opacity:.58;filter:saturate(.35);cursor:default;}
+/* the button owns the "you cannot afford this" signal now — the row only steps
+   back a little, so a greyed row never swallows its own control */
+#ui-root .sk-up.poor{opacity:.88;}
+/* the Learned list is real content at late game, not leftovers — keep it readable */
+#ui-root .sk-up.own{opacity:.82;filter:saturate(.6);cursor:default;}
 #ui-root .sk-up.own:hover{transform:none;}
 #ui-root .sk-up .g{grid-column:1;grid-row:1/3;align-self:center;width:calc(var(--u)*2.3);height:calc(var(--u)*2.3);border-radius:99px;
   display:grid;place-items:center;font-family:var(--serif);font-size:calc(var(--u)*1.05);color:#FFF3DC;
@@ -814,14 +861,7 @@ export function uiCss() {
 #ui-root .sk-up h3{grid-column:2;grid-row:1;font-family:var(--serif);font-size:calc(var(--u)*.96);letter-spacing:.05em;color:#332B22;}
 #ui-root .sk-up .fv{grid-column:2;grid-row:2;font-family:var(--serif);font-style:italic;font-size:var(--t-sec);
   color:var(--ink-soft);line-height:1.35;margin-top:calc(var(--u)*.1);}
-#ui-root .sk-up .sk-buy{grid-column:3;grid-row:1/3;min-width:134px;min-height:34px;}
-#ui-root .sk-up.buy .sk-buy{animation:sk-afford 2.2s ease-in-out infinite;}
-#ui-root .sk-up.poor .sk-buy{
-  background:linear-gradient(180deg,rgba(230,216,184,.95),rgba(196,180,146,.92));
-  border-color:rgba(110,84,30,.65);
-  box-shadow:0 2px 5px rgba(60,44,26,.3) inset,0 1px 0 rgba(255,255,255,.55);}
-#ui-root .sk-up.poor .sk-buy .v{color:#6E3225;}
-#ui-root .sk-up.poor .sk-buy .x{color:#5A4B36;background:rgba(255,253,246,.55);border-color:rgba(74,64,52,.4);}
+#ui-root .sk-up .sk-buy{grid-column:3;grid-row:1/3;}
 
 /* ================= centred overlay ================= */
 #ui-root .sk-scrim{position:absolute;inset:0;display:grid;place-items:center;pointer-events:auto;
@@ -927,12 +967,15 @@ export function uiCss() {
 /* ================= stage-up set piece ================= */
 #ui-root .sk-stageup{position:absolute;inset:0;display:grid;place-items:center;pointer-events:none;z-index:6;
   animation:sk-fade .3s ease both;}
+/* centred on the VISIBLE frame, not the window: the rail owns the right ~31%,
+   and a set piece centred behind it lands half-buried under the Tender panel */
 #ui-root .sk-stageup .dim{position:absolute;inset:0;
-  background:radial-gradient(46% 42% at 50% 50%,rgba(10,5,14,.80),rgba(10,5,14,.52) 42%,rgba(10,5,14,.16) 68%,rgba(10,5,14,0) 84%);}
+  background:radial-gradient(56% 50% at calc(50% - var(--rail)*.5) 50%,rgba(10,5,14,.88),rgba(10,5,14,.62) 40%,rgba(10,5,14,.24) 66%,rgba(10,5,14,0) 86%);}
 #ui-root .sk-stageup .glow{position:absolute;inset:0;
-  background:radial-gradient(30% 24% at 50% 50%,rgba(255,196,224,.40),rgba(255,170,210,0) 70%);
+  background:radial-gradient(30% 24% at calc(50% - var(--rail)*.5) 50%,rgba(255,196,224,.40),rgba(255,170,210,0) 70%);
   mix-blend-mode:screen;animation:sk-glowpulse 3.4s ease-out both;}
-#ui-root .sk-stageup .card{position:relative;text-align:center;padding:calc(var(--u)*2.0) calc(var(--u)*5.2);}
+#ui-root .sk-stageup .card{position:relative;text-align:center;padding:calc(var(--u)*2.0) calc(var(--u)*5.2);
+  margin-right:var(--rail);}
 #ui-root .sk-stageup .eyebrow{font-family:var(--serif);font-size:calc(var(--u)*.86);letter-spacing:.52em;
   color:#FFE7B4;text-transform:uppercase;text-indent:.52em;
   text-shadow:0 2px 10px rgba(20,6,16,1),0 0 calc(var(--u)*1.4) rgba(255,190,120,.55);
@@ -1016,6 +1059,46 @@ export function uiCss() {
   box-shadow:0 1px 0 rgba(255,255,255,.66) inset,0 -3px 6px rgba(120,84,16,.34) inset;}
 #ui-root .sk-seg button.on::after{content:"";position:absolute;left:0;right:0;top:0;height:44%;
   background:linear-gradient(180deg,rgba(255,253,235,.5),rgba(255,253,235,0));pointer-events:none;}
+
+/* ---- constellation node card.  The star map alone gave a player nothing to
+       press: the only affordance was a 1.5%-of-width SVG circle. This is the
+       Genshin talent-tree pattern — pick a star, read it, press AWAKEN. ---- */
+#ui-root .sk-nodecard{display:grid;grid-template-columns:calc(var(--u)*2.7) minmax(0,1fr) auto;
+  gap:0 calc(var(--u)*.7);align-items:center;text-align:left;
+  margin-top:calc(var(--u)*.7);padding:calc(var(--u)*.6) calc(var(--u)*.8);
+  border-radius:3px;border:1px solid rgba(74,64,52,.3);
+  background:linear-gradient(180deg,rgba(255,252,244,.62),rgba(232,220,198,.38));
+  box-shadow:0 1px 0 rgba(255,255,255,.55) inset,0 1px 3px rgba(60,44,26,.14);}
+#ui-root .sk-nodecard .em{grid-column:1;grid-row:1/4;align-self:center;
+  width:calc(var(--u)*2.7);height:calc(var(--u)*2.7);border-radius:99px;
+  display:grid;place-items:center;font-family:var(--serif);font-size:calc(var(--u)*1.2);
+  color:#FFF8E8;background:radial-gradient(120% 120% at 32% 24%,#4A4472,#171A34);
+  border:1px solid rgba(30,26,50,.8);
+  box-shadow:0 1px 0 rgba(255,255,255,.3) inset,0 2px 5px rgba(20,14,30,.4);
+  text-shadow:0 1px 3px rgba(0,0,0,.6);}
+#ui-root .sk-nodecard .br{grid-column:2;grid-row:1;font-size:calc(var(--u)*.68);
+  letter-spacing:.24em;text-transform:uppercase;color:${T.goldInk};font-weight:700;}
+#ui-root .sk-nodecard h3{grid-column:2;grid-row:2;font-family:var(--serif);
+  font-size:calc(var(--u)*1.06);letter-spacing:.05em;color:#2F2820;}
+#ui-root .sk-nodecard .fv{grid-column:2;grid-row:3;font-family:var(--serif);font-style:italic;
+  font-size:var(--t-sec);color:var(--ink-soft);line-height:1.4;margin-top:calc(var(--u)*.12);}
+#ui-root .sk-nodecard .sk-buy{grid-column:3;grid-row:1/4;align-self:center;}
+#ui-root .sk-taken{grid-column:3;grid-row:1/4;align-self:center;text-align:center;
+  padding:calc(var(--u)*.4) calc(var(--u)*.8);border-radius:3px;white-space:nowrap;
+  font-family:var(--serif);font-size:calc(var(--u)*.84);letter-spacing:.2em;color:#2E4A24;
+  background:linear-gradient(180deg,rgba(226,238,210,.9),rgba(190,210,168,.85));
+  border:1px solid rgba(70,96,52,.6);
+  box-shadow:0 2px 5px rgba(40,56,28,.24) inset,0 1px 0 rgba(255,255,255,.55);}
+
+/* the node card sits between the scrolling body and the footer, so it is always
+   on screen no matter how tall the star map got */
+#ui-root .sk-nodebar{flex:0 0 auto;padding:0 calc(var(--u)*1.3);}
+#ui-root .sk-nodebar .sk-nodecard{margin-top:calc(var(--u)*.5);}
+/* a 1.34 sky filled the whole modal; 1.66 leaves room for the card + footer */
+#ui-root .sk-modal.wide .sk-sky{aspect-ratio:1.66;}
+
+/* modal sub-navigation (Codex: varieties / achievements) */
+#ui-root .sk-mnav{display:flex;justify-content:center;margin:0 0 calc(var(--u)*.7);}
 
 #ui-root .sk-detail{margin-top:calc(var(--u)*.8);padding:calc(var(--u)*.6) calc(var(--u)*1.0);
   text-align:center;min-height:calc(var(--u)*4.4);

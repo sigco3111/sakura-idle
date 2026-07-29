@@ -225,6 +225,14 @@ export default {
       scrim = h('div.sk-scrim', { onclick: (e) => { if (e.target === scrim) closeModal(); } }, node);
       scrim.__tab = tag;
       ui.append(scrim);
+      /* same bottom-fade cue the rail panels use — a modal list that ends in a
+         sliced row reads as a clipping bug */
+      const body = node.querySelector?.('.sk-panel-body');
+      if (body) {
+        scrim.__body = body;
+        body.addEventListener('scroll', () => markScroll(body), { passive: true });
+        markScroll(body);
+      }
       syncTabs();
       return scrim;
     }
@@ -258,7 +266,7 @@ export default {
         const mBar = bar('track', false);
         const mLbl = h('b', '10');
         const mPre = h('span', 'next ×2 at ');
-        const btn = buyBtn(() => buyTender(d.id), `Buy ${d.name}`);
+        const btn = buyBtn(() => buyTender(d.id), `Buy ${d.name}`, 'TEND');
         const row = h('div.sk-card', {
           class: 'r' + rarity,
           onclick: () => buyTender(d.id),
@@ -336,9 +344,24 @@ export default {
           }));
         }
       }
+      /* Nothing available is a real late-game state, and a one-line apology on
+         empty parchment reads as an unbuilt screen (§8.11). Show what has
+         already been learned instead — the panel stays full and stays useful. */
       if (!upgradeRows.length) {
-        upgradePanel.body.append(h('div.sk-flavour', { style: { textAlign: 'center', padding: 'calc(var(--u)*2) 0' } },
-          'Nothing new to learn yet. Grow the grove and come back.'));
+        upgradePanel.body.append(h('div.sk-flavour', { style: { textAlign: 'center', padding: 'calc(var(--u)*.6) 0 calc(var(--u)*.4)' } },
+          bought.length
+            ? 'Every lesson this grove had to teach has been taken. Turn the Season for more.'
+            : 'Nothing new to learn yet. Grow the grove and come back.'));
+        if (bought.length) {
+          upgradePanel.body.append(famHeader({ id: 'done', kanji: '済', name: 'Learned', sub: 'kept until the Season turns' }));
+          for (const u of bought.slice(-14).reverse()) {
+            upgradePanel.body.append(h('div.sk-up.own', { class: 'fam-' + (u.family ?? 'grove') },
+              h('div.g', famMeta(u.family).kanji),
+              h('h3', u.name ?? u.id),
+              h('div.sk-taken', { style: { gridRow: '1/3' } }, '済 LEARNED'),
+              h('div.fv', u.flavour ?? '')));
+          }
+        }
       }
       upgradeFootR.textContent = `${bought.length} learned`;
     }
@@ -347,7 +370,8 @@ export default {
         h('span.sk-hint', { style: { fontStyle: 'italic' } }, fam.sub ?? ''));
     }
     function mkUpgradeRow({ id, family, name, flavour, cost, currency, buy }) {
-      const btn = buyBtn(buy, `Learn ${name}`);
+      const btn = buyBtn(buy, `${currency === 'blossoms' ? 'Engrave' : 'Learn'} ${name}`,
+        currency === 'blossoms' ? 'ENGRAVE' : 'LEARN');
       btn.root.classList.add('sm');
       btn.set(A.fmt(cost), currency === 'blossoms' ? '桜花' : '花');
       const row = h('div.sk-up', { class: 'fam-' + family, onclick: buy },
@@ -362,7 +386,7 @@ export default {
     /* ============================================================== *
      * 6.  Codex modal — rarity cards with flip + shine
      * ============================================================== */
-    function buildCodex() {
+    function buildCodex(view = 'varieties') {
       const p = panel({ title: 'SAKURA CODEX', kanji: '桜 図 鑑', cls: 'sk-modal', close: closeModal });
       const list = A.codexViews();
       const detail = h('div.sk-detail',
@@ -394,15 +418,32 @@ export default {
       const achs = A.achievements();
       const got = achs.filter((a) => a.got).length;
       const achWrap = h('div.sk-achs');
-      for (const a of achs.slice(0, 44)) {
+      for (const a of achs) {
         achWrap.append(h('div.sk-ach', { class: a.got ? 'got' : '', title: a.desc },
           h('i'), h('span', a.got ? a.name : (a.secret ? '???' : a.name))));
       }
 
-      mount(p.body, grid, detail,
-        achs.length ? h('div.sk-fam', h('div.d'), h('h4', 'Achievements'), h('div.ln'),
-          h('span.sk-hint.num', `${got} / ${achs.length}`)) : null,
-        achs.length ? achWrap : null);
+      /* Two views behind a segmented control. Stacked, the 48-row achievement
+         grid sat below the modal's 82vh fold and read as unbuilt. */
+      const nav = segmented([['桜 図鑑', 'varieties'], [`実績 ${got}/${achs.length}`, 'achievements']],
+        (v) => openModal(buildCodex(v), 'codex'));
+      nav.set(view);
+
+      if (view === 'achievements' && achs.length) {
+        mount(p.body, h('div.sk-mnav', nav.root),
+          h('div.sk-flavour', { style: { textAlign: 'center', marginBottom: 'calc(var(--u)*.5)' } },
+            'Every one of them is worth +1% of everything, forever.'),
+          achWrap);
+        p.root.append(h('div.sk-panel-foot',
+          h('span.sk-hint', 'each one adds +1% to all production'),
+          h('span.sk-hint.num', `${got} / ${achs.length} earned`)));
+        return p.root;
+      }
+
+      /* the reading pane sits outside the scroll: at 1280x800 the card grid fills
+         the modal, and a description that updates below the fold is invisible */
+      mount(p.body, achs.length ? h('div.sk-mnav', nav.root) : null, grid);
+      p.root.append(h('div.sk-nodebar', detail));
       p.root.append(h('div.sk-panel-foot',
         h('span.sk-hint', 'each variety tints the petals of the world'),
         h('span.sk-hint.num', `${list.filter((d) => d.found).length} / ${list.length} found`)));
@@ -412,7 +453,7 @@ export default {
     /* ============================================================== *
      * 7.  Constellation modal — radial star tree over a night sky
      * ============================================================== */
-    function buildConstellation() {
+    function buildConstellation(preselect = null) {
       const p = panel({ title: 'CONSTELLATION', kanji: '星 屑 ノ 樹', cls: 'sk-modal wide', close: closeModal });
       const nodes = A.nodeViews();
       const branches = A.branches();
@@ -461,15 +502,35 @@ export default {
         }));
       }
 
-      const detail = h('div.sk-detail',
-        h('div.sk-title', { style: { fontSize: 'calc(var(--u)*1.0)' } }, '星屑ノ樹'),
-        h('div.sk-flavour', 'Essence spent here still counts toward the +2% it grants. Spend freely.'));
+      /* The star map on its own left a player nothing to press — a node was a
+         1.5%-of-width SVG circle. Selecting a star now fills a real card with a
+         real AWAKEN button, which is also the only way to read what a node does. */
+      const nodeHost = h('div');
+      const detail = h('div.sk-detail', { style: { minHeight: '0' } },
+        h('div.sk-flavour', 'Pick a star. Essence spent here still counts toward the +2% it grants — spend freely.'));
       const showNode = (n) => {
-        clear(detail).append(
-          h('div.sk-title', { style: { fontSize: 'calc(var(--u)*1.02)' } }, `${n.kanji}  ${n.branchName ?? ''} · ${n.name}`),
-          h('div.sk-flavour', n.flavour ?? ''),
-          h('div', { style: { marginTop: 'calc(var(--u)*.4)', fontSize: 'calc(var(--u)*.8)', color: n.owned ? '#4E7D42' : n.affordable ? '#7A5A10' : '#9B4A3A' } },
-            n.owned ? 'TAKEN' : `${A.fmt(n.cost)} Essence${n.available ? '' : ' · locked'}`));
+        if (!n) return;
+        const hue = hueOf(n);
+        let action;
+        if (n.owned) {
+          action = h('div.sk-taken', '刻 TAKEN');
+        } else {
+          const b = buyBtn(() => {
+            if (!n.affordable) return;
+            A.buyNode(n.id);
+            openModal(buildConstellation(n.id), 'star');
+            refresh();
+          }, n.available ? `Awaken ${n.name}` : 'Take the star before it first', n.available ? 'AWAKEN' : 'SEALED');
+          b.set(A.fmt(n.cost), '桜精');
+          b.setEnabled(!!n.affordable);
+          action = b.root;
+        }
+        clear(nodeHost).append(h('div.sk-nodecard',
+          h('div.em', { style: { color: hue, borderColor: hue } }, n.kanji ?? '星'),
+          h('div.br', `${n.branchName ?? ''} · ${ROMAN[Math.max(0, num(n.tier))] ?? ''}`),
+          h('h3', n.name ?? ''),
+          h('div.fv', n.flavour ?? ''),
+          action));
       };
 
       for (const n of nodes) {
@@ -494,10 +555,9 @@ export default {
           t.textContent = n.kanji ?? '';
           g.append(t);
         }
-        g.addEventListener('click', () => {
-          if (!n.owned && n.affordable) { A.buyNode(n.id); openModal(buildConstellation(), 'star'); return; }
-          showNode(n);
-        });
+        /* select, never buy-on-touch: the card's AWAKEN button is the single
+           purchase affordance, so a mis-aimed click can't spend Essence. */
+        g.addEventListener('click', () => showNode(n));
         g.addEventListener('mouseenter', () => showNode(n));
         gNode.append(g);
       }
@@ -510,7 +570,17 @@ export default {
       const owned = nodes.filter((n) => n.owned).length;
       const canP = A.canPrestige();
       const gain = A.essencePreview();
+      const cheapest = (list) => list.slice().sort((a, b) => num(a.cost) - num(b.cost))[0];
+      showNode(
+        (preselect && nodes.find((n) => n.id === preselect))
+        ?? cheapest(nodes.filter((n) => n.affordable && !n.owned))
+        ?? cheapest(nodes.filter((n) => n.available))
+        ?? nodes.filter((n) => n.owned).pop()
+        ?? nodes[0]);
       mount(p.body, sky, legend, detail);
+      /* The card lives OUTSIDE the scrolling body: at 82vh the star map alone
+         filled the modal and pushed the AWAKEN button below the fold. */
+      p.root.append(h('div.sk-nodebar', nodeHost));
       p.root.append(h('div.sk-panel-foot',
         h('span.sk-hint.num', `${owned} / ${nodes.length} nodes · ${A.fmt(A.essence())} 桜精 held`),
         canP
@@ -722,6 +792,15 @@ export default {
     let dirty = true;
     function refresh() { dirty = true; }
 
+    /** Bottom fade while there is more list below. One layout read per 125 ms. */
+    function markScroll(body) {
+      if (!body) return;
+      setClass(body, 'more', body.scrollHeight - body.scrollTop - body.clientHeight > 4);
+    }
+    for (const b of [tenderPanel.body, upgradePanel.body]) {
+      b.addEventListener('scroll', () => markScroll(b), { passive: true });
+    }
+
     function syncStage() {
       const st = A.stage();
       const cur = A.bloom() ?? STAGE_DEFS[st];
@@ -764,13 +843,17 @@ export default {
         }
         if (!r.revealed) continue;
         shown++;
-        const cost = num(v.bulkCost ?? v.cost);
-        const cnt = num(v.bulkCount ?? 1);
+        /* MAX with nothing affordable resolves to 0 of them, whose price is 0 —
+           showing "0" as a cost is a lie, so fall back to the single unit. */
+        let cnt = num(v.bulkCount ?? 1);
+        let cost = num(v.bulkCost ?? v.cost);
+        if (cnt <= 0 || !(cost > 0)) { cnt = 1; cost = num(v.cost); }
         setText(r.cnt, String(num(v.owned)));
         setText(r.outEach, A.rate(num(v.each)));
         setText(r.outTotal, A.rate(num(v.total)));
         r.btn.set(A.fmt(cost), '×' + cnt);
         const can = petals >= cost && cnt > 0;
+        r.btn.setEnabled(can);
         setClass(r.row, 'buy', can);
         setClass(r.row, 'poor', !can);
         const owned = num(v.owned);
@@ -807,6 +890,7 @@ export default {
       for (const r of upgradeRows) {
         const have = r.currency === 'blossoms' ? bloss : petals;
         const can = have >= r.cost;
+        r.btn.setEnabled(can);
         setClass(r.row, 'buy', can);
         setClass(r.row, 'poor', !can);
       }
@@ -860,7 +944,12 @@ export default {
       setText(elCrit, Math.round(num(r.critChance) * 100) + '%');
 
       pumpToasts(dt);
-      if (stageCard) { stageCardT -= dt; if (stageCardT <= 0) { stageCard.remove(); stageCard = null; } }
+      /* In shot mode the harness warms hundreds of frames after the scenario
+         runs, which used to expire the set piece before the shutter opened. */
+      if (stageCard && !ctx.shotMode) {
+        stageCardT -= dt;
+        if (stageCardT <= 0) { stageCard.remove(); stageCard = null; }
+      }
 
       slow -= dt;
       if (slow <= 0 || dirty) {
@@ -870,6 +959,8 @@ export default {
         if (activeTab === 'upgrades') syncUpgrades();
         syncEvent();
         syncMisc();
+        markScroll(activeTab === 'upgrades' ? upgradePanel.body : tenderPanel.body);
+        if (scrim?.__body) markScroll(scrim.__body);
       }
 
       if (!welcomeShown) {
@@ -932,6 +1023,7 @@ export default {
       S['ui-upgrades-late'] = () => { base('lategame'); selectTab('upgrades'); };
       S['ui-codex'] = () => { base('rich'); selectTab('codex'); };
       S['ui-codex-full'] = () => { base('lategame'); selectTab('codex'); };
+      S['ui-achievements'] = () => { base('rich'); openModal(buildCodex('achievements'), 'codex'); };
       S['ui-star'] = () => { base('rich'); selectTab('star'); };
       S['ui-star-late'] = () => { base('lategame'); selectTab('star'); };
       S['ui-settings'] = () => { base('rich'); selectTab('set'); };

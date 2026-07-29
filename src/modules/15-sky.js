@@ -77,9 +77,9 @@ const CLOUD_PW = [0.55, 0.58, 0.62, 0.72];
 const CLOUD_V = [0.0135, 0.0115, 0.0090, 0.0062];
 const CLOUD_B = [1.60, 1.40, 0.95, 0.45];   // relief strength (domed vs flat)
 const CLOUD_W = [0.150, 0.130, 0.100, 0.070];
-const CLOUD_D = [0.075, 0.090, 0.130, 0.180];   // fine edge nibble
-const CLOUD_T = [1.00, 1.10, 1.35, 2.10];   // uv stretch along the wind (streaks)
-const CLOUD_A = [1.00, 0.62, 0.36, 0.22];   // per-layer opacity
+const CLOUD_D = [0.075, 0.090, 0.115, 0.130];   // fine edge nibble
+const CLOUD_T = [1.00, 1.10, 1.30, 1.70];   // uv stretch along the wind (streaks)
+const CLOUD_A = [1.00, 0.62, 0.36, 0.15];   // per-layer opacity
 const CLOUD_AER = [0.55, 0.52, 0.46, 0.40]; // how far the deck melts into haze
 const CLOUD_RIM = [1.00, 0.90, 0.72, 0.55];
 /* Coverage. Deliberately HIGH for a cumulus field: fewer, more separate,
@@ -90,8 +90,18 @@ const COV_BASE = [0.605, 0.668, 0.712, 0.762];
  * scaled down so the saturated zenith blue keeps the top of the frame (§8.2).
  * Much gentler than before — the old budget deleted the cumulus decks outright
  * everywhere above 27° and left the cirrus smear as the only cloud in frame. */
-const CLOUD_ZC = [0.035, 0.060, 0.100, 0.145];
-const CLOUD_ZA = [0.90, 0.80, 0.62, 0.46];
+/* MEASURED (shots/sky-r2-day/canopy.png, sky x 1000-1900 y 0-500): with the old
+ * budget the upper-sky decks came back as pale ragged wisps — lumP50 0.53 with
+ * masses whose alpha never reached opacity, i.e. torn tissue paper rather than
+ * cumulus (ART_BIBLE §8.2). Both the threshold penalty and the opacity penalty
+ * were doing the same job twice: a raised threshold ALREADY makes the masses
+ * smaller and more separate, and scaling their opacity on top of that is what
+ * stops the survivors from ever reading as solid. The threshold penalty is now
+ * the only one that bites hard; opacity stays near full so a mass that does
+ * survive is a MASS. The zenith blue still owns the top of frame because aCap
+ * (below, in the compositor) is the real guarantee of that, not these. */
+const CLOUD_ZC = [0.030, 0.048, 0.078, 0.115];
+const CLOUD_ZA = [0.96, 0.92, 0.80, 0.64];
 
 /* Per-band minimum haze fraction. The exponential law alone leaves the nearest
  * band at f≈0.24 at 122 m, which is not enough to kill its chroma — a fully
@@ -337,10 +347,26 @@ export default {
       /* 0.0175 rad ≈ 30 px radius at the hero fov, 26 px at pond — the
        * prescription's 26 px, and small enough that the limb reads as a limb.
        * At 0.030 it was a 44-52 px soft ball. */
-      uMoonSize: { value: 0.0175 },
-      /* peak linear radiance multiplier on uMoonCol; tuned so the highland disc
-       * lands on display L ≈ 0.93 and the maria on ≈ 0.86 after ACES + grade */
-      uMoonBright: { value: 3.3 },
+      uMoonSize: { value: 0.0192 },
+      /* Peak linear radiance multiplier on uMoonCol.
+       * MEASURED: at 3.3 the disc rendered at display L 0.964 with the maria at
+       * 0.964 too — ACES's shoulder has effectively zero slope up there, so the
+       * whole surface collapsed onto one flat white and the moon read as a lens
+       * flare rather than as a body. Swept with `sky-moon-b*` (see below) and
+       * landed on the value that puts the highlands at 0.93 and the maria at
+       * 0.84 — a spread of 0.09, which is what makes the markings visible. */
+      uMoonBright: { value: 1.35 },
+      /* maria value as a fraction of the highlands (swept: `sky-moon-m*`) */
+      uMoonMaria: { value: 0.42 },
+      uMoonHalo: { value: 1.0 },
+      /* night cloud deck — see the block comment in sky-shaders.js */
+      uNightCloudV: { value: 0.66 },
+      uNightCloudA: { value: 0.72 },
+      uNightCloudR: { value: 0.34 },
+      /* cloud value-range calibration (swept: `sky-cloud-lit*` / `-shade*`) */
+      uCloudLitK: { value: 1.0 },
+      uCloudShadeK: { value: 0.50 },
+      uCloudCoreK: { value: 0.88 },
       uDither: { value: 0.0125 },
     };
 
@@ -720,6 +746,31 @@ export default {
       S['sky-sun-dim'] = () => { state.sunMul = 0.08; evalPalette(state.u); };
       S['sky-sun-off'] = () => { state.sunMul = 0.0; evalPalette(state.u); };
       S['sky-hide'] = () => { group.visible = false; };
+      /* ── calibration sweeps ────────────────────────────────────────────
+       * Every one of these is a single uniform mutated on a night/day lock, so
+       * a target display luminance can be MEASURED in the finished graded png
+       * and landed on instead of guessed at through ACES + bloom + grade. */
+      const nightLock = () => { S['night']?.(); S['petals-off']?.(); };
+      for (const v of [80, 100, 115, 130, 150, 180, 220, 330]) {
+        S[`sky-moon-b${v}`] = () => { nightLock(); uni.uMoonBright.value = v / 100; };
+      }
+      for (const v of [40, 50, 60, 70, 80]) {
+        S[`sky-moon-m${v}`] = () => { nightLock(); uni.uMoonMaria.value = v / 100; };
+      }
+      S['sky-moon-nohalo'] = () => { nightLock(); uni.uMoonHalo.value = 0; };
+      for (const v of [0, 45, 66, 85, 100]) {
+        S[`sky-ncloud${v}`] = () => { nightLock(); uni.uNightCloudV.value = v / 100; };
+      }
+      S['sky-ncloud-off'] = () => { nightLock(); uni.uCloudAmt.value = 0; state.cloudAmt = 0; };
+      for (const v of [80, 100, 120, 140]) {
+        S[`sky-cloud-lit${v}`] = () => { uni.uCloudLitK.value = v / 100; };
+      }
+      for (const v of [40, 48, 55, 62]) {
+        S[`sky-cloud-shade${v}`] = () => { uni.uCloudShadeK.value = v / 100; };
+      }
+      for (const v of [55, 70, 85, 100]) {
+        S[`sky-cloud-core${v}`] = () => { uni.uCloudCoreK.value = v / 100; };
+      }
       for (let i = 0; i < 4; i++) {
         S['sky-layer' + i] = () => {
           uni.uAmtL.value.set(i === 0 ? CLOUD_A[0] : 0, i === 1 ? CLOUD_A[1] : 0,

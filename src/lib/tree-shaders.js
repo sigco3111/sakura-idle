@@ -23,7 +23,7 @@
 import * as THREE from 'three';
 import { GLSL_NOISE, ridged3, fbm3, worley2, noise3 } from './noise.js';
 import { GLSL_WIND } from './wind.js';
-import { GLSL_NPR } from './lighting.js';
+import { GLSL_NPR, GLSL_LIGHT_UNIFORMS } from './lighting.js';
 import { makeRng } from './rng.js';
 
 /* ===================================================================== *
@@ -932,10 +932,18 @@ void main(){
    * NARROW, BRIGHT line: a fifth of the area at four times the intensity, with
    * a hot core so it survives the tonemap as metal rather than as dirt. */
   float veinRun = ridged(vec3(vWorldPos.x * 2.4, vWorldPos.y * 0.34, vWorldPos.z * 2.4), 3);
-  float veinCore = smoothstep(0.62, 0.90, veinRun);
+  /* MEASURED r5 of this round: at window (0.62, 0.90) x amplitude 1.85 the veins
+   * covered ~35 % of the trunk and, because #E8C56A's linear blue is only 0.152,
+   * that much addition over #6A5344 bark drives G up while B stays put — the
+   * trunk printed LIME, which is exactly the "gold-veined bark reads as khaki
+   * mould" failure an earlier round already recorded. A vein is a NARROW BRIGHT
+   * line: a fifth of the area, and the intensity goes into the hot core (which
+   * carries blue and therefore survives the tonemap as metal) rather than into
+   * the broad wash. */
+  float veinCore = smoothstep(0.71, 0.93, veinRun);
   float vein = mix(crack, 1.0, 0.35) * veinCore;
-  col += uGoldCol * vein * uGold * (1.85 + 1.30 * rimTerm(N4, V, 2.0));
-  col += vec3(1.0, 0.92, 0.72) * pow(veinCore, 3.0) * uGold * 0.55;
+  col += uGoldCol * vein * uGold * (1.10 + 0.95 * rimTerm(N4, V, 2.0));
+  col += vec3(1.0, 0.94, 0.80) * pow(veinCore, 2.4) * uGold * 0.78;
 
   // ---- blossom bounce on wood inside the crown ------------------------
   // Measured r1: the outer twigs rendered as hard brown dashes at L 0.20 against
@@ -1006,6 +1014,12 @@ const CANOPY_COMMON = /* glsl */`
 attribute vec4 aInst;
 attribute vec4 aInst2;
 attribute vec3 aTint;
+/* 1.0 for a FLOATING ISLAND card (常桜 Everblossom, GAME_DESIGN.md stage 5):
+ * a cluster detached from the tree that orbits and bobs above the crown. Islands
+ * ignore cardGrow/treeSway entirely and are gated on uIsland instead, so they
+ * appear only as the Everblossom comes in rather than half-grown at stage 4. */
+attribute float aIsle;
+uniform float uIsland;        // 0..1 island reveal, driven by the bloom stage
 
 uniform float uCoverage;      // 0..1 how much of the canopy has opened
 uniform float uBudMix;        // 0..1 fraction of open sites that are still buds
@@ -1018,6 +1032,27 @@ uniform vec3  uEyePos;        // the BEAUTY camera, in both passes (see cardFram
 /** growth: each card opens when the coverage front passes its order value */
 float cardGrow(float order){
   return smoothstep(order - 0.20, order + 0.03, uCoverage);
+}
+
+`;
+
+/** The half of the shared canopy code that depends on GLSL_WIND (uWindTime), so
+ *  it has to be injected AFTER it. Both canopy vertex shaders include it. */
+const CANOPY_COMMON2 = /* glsl */`
+/** An island's own slow orbit + bob, so it reads as suspended rather than stuck.
+ *  Returns a WORLD offset that is identical for every vertex of the card, so the
+ *  cluster translates rigidly (a per-vertex version would shear it). */
+vec3 isleDrift(vec3 centre, float phase, float seed){
+  float t = uWindTime;
+  float ip = phase * 6.2831853;
+  vec3 bob = vec3(sin(t * 0.187 + ip),
+                  sin(t * 0.263 + ip * 1.7) * 0.62,
+                  cos(t * 0.171 + ip * 0.8)) * (0.42 + 0.85 * seed);
+  float ang = t * 0.0215 * (0.55 + 0.9 * seed);
+  vec3 rel = centre - uCanopyCentre;
+  vec3 rot = vec3(rel.x * cos(ang) - rel.z * sin(ang), 0.0,
+                  rel.x * sin(ang) + rel.z * cos(ang)) - vec3(rel.x, 0.0, rel.z);
+  return bob + rot;
 }
 
 /**
@@ -1070,6 +1105,7 @@ varying float vGrow;
 varying float vCrownT;   // 0 at the bottom of the crown, 1 at the top
 varying float vShell;    // 0 = deep interior, 1 = outer shell (radial)
 varying vec3  vRel;      // (worldPos - crownCentre) / crownRadius
+varying float vIsle;     // 1 = a floating island card (stage 5)
 
 uniform float uNormalBlend;
 
@@ -1078,11 +1114,16 @@ uniform float uNormalBlend;
 ${GLSL_NOISE}
 ${GLSL_WIND}
 ${WIND_BLOCK}
+${CANOPY_COMMON2}
 
 void main(){
   float order = aInst.z;
-  float grow = cardGrow(order);
-  float isBud = step(aInst.w, uBudMix);
+  // An island card is gated on uIsland, not on the coverage front: mapping it
+  // onto an order above 1.0 would have made it half-grown at stage 4 (the growth
+  // window is 0.23 wide and stage 4's coverage is 1.115), and the Everblossom's
+  // floating islands must arrive WITH the Everblossom.
+  float grow = mix(cardGrow(order), smoothstep(0.0, 0.42, uIsland), aIsle);
+  float isBud = step(aInst.w, uBudMix) * (1.0 - aIsle);
   vBud = isBud;
   vGrow = grow;
 
@@ -1102,12 +1143,16 @@ void main(){
   vec3 nrm = normalize(nx * normal.x + ny * normal.y + nz * normal.z);
 
   // ---- wind: cards ride their host twig, then flutter individually ----
-  wp.xyz += treeSway(wp.xyz, aInst.y, aInst.x);
+  // ...unless the card is a floating island, which is attached to nothing and
+  // carries its own orbit + bob instead.
+  wp.xyz += treeSway(wp.xyz, aInst.y, aInst.x) * (1.0 - aIsle);
+  wp.xyz += isleDrift(centre, aInst.x, aInst2.w) * aIsle;
   float f = sin(uWindTime * 2.35 + aInst.x * 24.0) * 0.5
           + sin(uWindTime * 3.71 + aInst.x * 51.0) * 0.5;
   wp.xyz += nrm * f * uFlutter * (0.35 + 0.85 * uWindGust) * aInst2.z;
 
   vWorldPos = wp.xyz;
+  vIsle = aIsle;
 
   // read as VOLUME, not as a shell: blend the card normal toward the canopy's
   // own outward normal so the whole crown shades like one soft mass
@@ -1166,7 +1211,10 @@ varying float vGrow;
 varying float vCrownT;   // 0 at the bottom of the crown, 1 at the top
 varying float vShell;    // 0 = deep interior, 1 = outer shell (radial)
 varying vec3  vRel;      // (worldPos - crownCentre) / crownRadius
+varying float vIsle;     // 1 = a floating island card (stage 5)
 
+uniform float uWindTime;  // GLSL_WIND is vertex-only here; the aurora needs time
+uniform float uAurora;    // stage 5 常桜: aurora sheen through the crown
 uniform sampler2D uAtlas;
 uniform vec3  uTintRef;    // the atlas's dominant painted value (#FFD9E6, linear)
 uniform float uNormalBlend;
@@ -1175,9 +1223,21 @@ uniform float uTransAmt;
 uniform float uDeepClamp;  // floor on the interior value ladder
 uniform float uCoverage;   // 0..1 how much of the canopy has opened
 uniform float uInterior;   // master strength of the crown-volume shading
-uniform vec3  uDeepTint;   // multiplier that carries albedo toward #C25F86
+uniform float uDeepWalk;   // how far the interior albedo walks onto uDeepCol's HUE
+uniform float uDeepValue;  // ...and how far its VALUE drops, as a separate fact
 uniform vec3  uDeepCol;    // #C25F86 — the interior re-chromatisation target
-uniform float uChromaFix;
+uniform vec3  uMidCol;     // #FFB6CE — the lit mass's palette anchor
+uniform float uChromaFix;  // palette lock, everywhere
+uniform float uChromaDeep; // ...plus this much more in the interior
+/* ---- the three library knobs the canopy has to override, as UNIFORMS -------
+ * They are #define'd from uniforms rather than from literals so a runtime probe
+ * can A/B them and diff the rendered pixels — which is how the violet interior
+ * was finally localised (see the note on uShTint in 30-tree.js). */
+uniform float uShTint;     // -> NPR_SHADOW_TINT
+uniform float uShFloor;    // -> NPR_SHADOW_FLOOR
+uniform float uRimSky;     // -> NPR_RIM_SKY
+uniform float uHueGuard;   // strength of the "sakura is never bluer than red" cap
+uniform vec2  uGuardCap;   // linear B:R ceiling at the shell (x) and in the deep (y)
 uniform float uAlbedoScale;
 uniform float uOpticalDepth;
 uniform float uDeepFloor;
@@ -1198,6 +1258,34 @@ uniform vec3  uGlowCol;
 uniform bool receiveShadow;
 #include <shadowmap_pars_fragment>
 #include <shadowmask_pars_fragment>
+/* ==== THE VIOLET CANOPY, ROOT-CAUSED AND MEASURED ======================
+ * The crown rendered as saturated orchid/mauve (hero crown interior measured
+ * rgb(170,124,160), B/R 0.939, median hue 302 deg) where ART_BIBLE §3's deep
+ * interior #C25F86 is (194,95,134) — B/R 0.69, hue 333.
+ *
+ * It was NOT post-processing, NOT the sky ambient and NOT the albedo constants
+ * (all three ruled out by measurement in RESUME.md). It is
+ * lighting.js nprShadowHue(): it multiplies the albedo by uShadowTint
+ * renormalised to unit luminance, and at the shipped tint (#6E76A8, linear
+ * 0.106/0.215/0.457, luma 0.2096) that unit tint is
+ *
+ *     (0.507, 1.028, 2.182)      <- blue x2.18, red x0.51
+ *
+ * Run #C25F86 through it at the strength the canopy was asking for and the
+ * shadow albedo comes out (0.372, 0.135, 0.537): linear B/R 1.44, i.e. BLUER
+ * THAN IT IS RED. That colour is a lavender, and shDiff is what fills the whole
+ * unlit interior of the crown. The two legacy dampers cannot stop it —
+ * nprTintStrength() FLOORS NPR_SHADOW_HUE * NPR_SHADOW_CHROMA at 0.78, by
+ * design ("a material may ask for a little less violet, never for none"), so the
+ * 0.26 x 0.62 the canopy asked for still bought 0.816 of the multiply.
+ *
+ * NPR_SHADOW_TINT is the knob that actually scales it, and for sakura it is
+ * legitimately near zero: ART_BIBLE §3 hands the blossom its OWN shadow ramp
+ * (#FFB6CE -> #EE8CAF -> #C25F86), so the canopy's cool shift is authored in the
+ * palette ladder and does not need — must not take — the generic violet.
+ * Every value in that ramp has blue BELOW red. */
+#define NPR_SHADOW_TINT uShTint
+#define NPR_SHADOW_FLOOR uShFloor
 // A sakura petal in shadow is #EE8CAF — still unmistakably pink. Barely rotate
 // the hue; the level drop does the work.
 #define NPR_SHADOW_HUE 0.26
@@ -1206,7 +1294,7 @@ uniform bool receiveShadow;
 // #FAD6D7 (measured sat 0.14 against a 0.29 target). The warm KEY rim inside
 // nprKeyG is untouched, so backlit edges still glow. r2: trimmed again after the
 // far crown edge measured hue 264 / sat 0.19 — a lavender muddy patch.
-#define NPR_RIM_SKY 0.20
+#define NPR_RIM_SKY uRimSky
 ${GLSL_NOISE}
 ${GLSL_NPR}
 
@@ -1313,8 +1401,25 @@ void main(){
   // darkening in canopy interiors"), but stays PINK, never grey — and never a
   // bruise-coloured slash showing through the front face of the crown
   albedo *= mix(0.62, 1.0, vAo);
-  // deeper INTO the palette, not just darker: #FFB6CE -> #EE8CAF -> #C25F86
-  albedo = mix(albedo, albedo * uDeepTint, occ * 0.70);
+  /* ---- deeper INTO the palette: #FFB6CE -> #EE8CAF -> #C25F86 ----------
+   * This used to be mix(albedo, albedo * uDeepTint, occ * 0.70) with
+   * uDeepTint = (0.90, 0.69, 0.77). That vector conflates two facts and gets
+   * both wrong. Normalised to its own luminance it is (1.216, 0.932, 1.040),
+   * whereas the palette's ACTUAL #FFB6CE -> #C25F86 chroma walk (both linear,
+   * value divided out) is (1.529, 0.662, 1.048) — so it barely reddened, barely
+   * de-greened, and spent the rest of itself on an unasked-for value drop of
+   * 0.74. Crushing green without gaining red walks a 340 deg pink toward 300 deg
+   * MAGENTA, which is the second half of the violet crown.
+   *
+   * Split the two facts. The HUE walk lands exactly on uDeepCol's chroma at the
+   * albedo's own luminance (no guessing, no drift off-palette), and the VALUE
+   * drop is a separate scalar underneath it. */
+  {
+    float aL = max(nprLuma(albedo), 1e-5);
+    vec3 deepHue = uDeepCol * (aL / max(nprLuma(uDeepCol), 1e-5));
+    albedo = mix(albedo, deepHue, clamp(occ * uDeepWalk, 0.0, 1.0));
+    albedo *= mix(1.0, uDeepValue, clamp(occ / 0.90, 0.0, 1.0));
+  }
   // ...and genuinely DARKER. Measured r2: the crown's p25/p95 luminance ratio
   // came out at 0.939 — one flat pale mass, exactly the defect this round has to
   // clear. uDeepTint alone only re-hues; this is the value drop, applied to the
@@ -1383,16 +1488,32 @@ void main(){
          * max(0.24, mix(0.24, 1.0, trans));
   }
 
-  // ---- interior re-chromatisation ------------------------------------
-  // uDeepTint multiplies the ALBEDO, but the sky ambient is added afterwards
-  // and it is blue, so the interior measured out at HSL sat 0.21 — grey mauve.
-  // Putting the palette's own deep value back on at the luminance the shading
-  // arrived at keeps every bit of the value structure above and restores the
-  // chroma. Target: sat >= 0.36 on the darkest quarter of the crown.
+  /* ---- ART_BIBLE §3 PALETTE LOCK --------------------------------------
+   * This used to be gated entirely on occ, so only the deep interior was ever
+   * re-chromatised and the SHELL — which is most of what the hero camera sees —
+   * kept whatever hue the shading left it with. MEASURED after the shadow-tint
+   * fix: the crown's median hue was still 324 deg against #EE8CAF's 342 and
+   * #C25F86's 333, because the hemisphere ambient adds uSkyColor (linear
+   * 0.076/0.135/0.288, blue:red 3.8) on top of every card, and on the shell that
+   * term is at nearly full strength.
+   *
+   * So run the SAME operation everywhere, with the target walking down the
+   * palette as the crown deepens: #FFB6CE for the lit mass, #C25F86 for the
+   * interior. It is luminance-preserving, so every bit of the value ladder built
+   * above survives untouched and only the chroma is pinned. Placed BEFORE the
+   * through-glow / halo terms so the warm #FFE7EE backlit rim is added after the
+   * lock and keeps its own warmth. */
   {
+    // 0.90, not all the way: the post grade crushes GREEN in the shadows
+    // (measured, darkest crown quartile, raw vs graded G:R 0.753 -> 0.693), so
+    // pinning the deep chroma to #C25F86 outright lands the graded pixel a further
+    // 6 deg round toward magenta. Stopping between #EE8CAF and #C25F86 lets the
+    // grade finish the walk.
+    vec3 pal = mix(uMidCol, uDeepCol, clamp(occ / 0.90, 0.0, 1.0) * 0.90);
     float lum = max(nprLuma(col), 1e-4);
-    vec3 target = uDeepCol * (lum / max(nprLuma(uDeepCol), 1e-4));
-    col = mix(col, target, clamp(occ * uChromaFix, 0.0, 0.80));
+    vec3 target = pal * (lum / max(nprLuma(pal), 1e-4));
+    col = mix(col, target, clamp(uChromaFix + occ * uChromaDeep, 0.0, 0.85)
+                         * (1.0 - clamp(uNightMix, 0.0, 1.0)));
   }
 
   // ---- light coming THROUGH the petal, explicitly warm pink. The library's
@@ -1442,11 +1563,78 @@ void main(){
     col *= max(1.0, fl / max(lumF, 1e-6));
   }
 
-  // stage 4 "Radiant": the petals themselves carry a little light
-  col += uLuminCol * uLumin * (0.35 + 0.65 * vAo) * tx.a;
+  // stage 4 "Radiant": the petals themselves carry a little light. A floating
+  // island is suspended in open air with nothing shading it, so it carries the
+  // glow at nearly double — that is what makes it read as an island of light.
+  col += uLuminCol * uLumin * (0.35 + 0.65 * vAo) * (1.0 + 1.05 * vIsle) * tx.a;
   // stage 5 "Everblossom": gold along the petal edges
   float edge = smoothstep(0.55, 0.95, 1.0 - clamp(dot(N, V), 0.0, 1.0));
   col += uGoldCol * uGold * (edge * 0.9 + 0.25) * tx.a;
+
+  /* ---- the sakura hue guard ------------------------------------------
+   * A backstop, not the fix — the fix is uShTint and the palette walk above.
+   * But the canopy also receives a blue sky ambient, a mix(sky,key) Fresnel rim
+   * and the grade's own cool pedestal, and every one of those pushes blue up on
+   * a surface whose entire authored palette has blue BELOW red:
+   *
+   *   #FFF2F6 0.905 | #FFD9E6 0.760 | #FFB6CE 0.638 | #EE8CAF 0.503 | #C25F86 0.437
+   *                                          (linear B:R)
+   *
+   * So a canopy pixel whose blue has overtaken its red is, by construction, not a
+   * sakura colour. Cap the ratio — tightening with crown depth, since the deep
+   * values are the ones with the least blue in them — and renormalise luminance,
+   * which moves the removed blue energy into red and green instead of just
+   * darkening. Off at night, where a moonlit crown SHOULD read cool. */
+  {
+    float l0 = nprLuma(col);
+    /* The ceiling is relative to THIS CARD'S OWN AUTHORED ALBEDO RATIO, which is
+     * the only reference frame that works here. Two earlier keyings were MEASURED
+     * INERT and are recorded so nobody spends the shot budget on them again:
+     *   - keyed on occ: a pixel can be dark from the terminator or the shadow map
+     *     without being deep in the crown, so most of the drift was missed;
+     *   - keyed on the fragment's own luminance against the palette's linear luma
+     *     knots (0.213 .. 0.965): col here is SCENE-referred and routinely above
+     *     1.0, so the curve saturated at its loose end for every fragment in
+     *     frame. uHueGuard 0.40 / 0.65 / 1.00 all rendered byte-identical.
+     *
+     * The albedo, by this point, has already been walked onto the palette, so its
+     * blue:red IS the authored ratio (0.437 at #C25F86 up to 0.905 at #FFF2F6).
+     * Light may legitimately push a petal's blue up a little — sky ambient and
+     * the sky Fresnel are real — but not by a factor of two, which is what the
+     * violet crown was. */
+    float aBR = albedo.b / max(albedo.r, 1e-4);
+    float capB = clamp(aBR * uGuardCap.x + uGuardCap.y, 0.34, 1.0);
+    float bMax = col.r * capB + 0.0035;
+    if (col.b > bMax) {
+      col.b = mix(col.b, bMax, uHueGuard * (1.0 - clamp(uNightMix, 0.0, 1.0)));
+      col *= clamp(l0 / max(nprLuma(col), 1e-5), 1.0, 1.5);
+    }
+  }
+
+  /* ---- 常桜 EVERBLOSSOM: AURORA PETALS (GAME_DESIGN.md stage 5) ---------
+   * ADDITIVE, so the blossom keeps its authored sakura albedo and the aurora
+   * reads as light moving THROUGH the crown rather than as repainted petals.
+   * Three bands 120 deg apart in phase — mint, violet, gold — drifting along the
+   * crown's vertical axis on a slow warped field, so the crown breathes colour
+   * the way an aurora curtain does instead of strobing.
+   *
+   * Deliberately AFTER the hue guard: the guard exists to stop the generic
+   * violet shadow tint leaking into the sakura palette, not to veto an authored
+   * effect. And weighted toward the grazing silhouette, because a veil shows
+   * where you look through the most of it. */
+  if (uAurora > 0.0015) {
+    float grz = pow(1.0 - clamp(abs(dot(N, V)), 0.0, 1.0), 2.3);
+    float ph = vRel.y * 1.55 - vShell * 0.95 + uWindTime * 0.075
+             + snoise(vRel * 1.30 + vec3(0.0, uWindTime * 0.045, 0.0)) * 0.85;
+    float a = ph * 6.2831853;
+    // ^1.7 tightens each band into a readable CURTAIN; at ^1.0 the three lobes
+    // overlap into a flat pale wash that measured as no structure at all.
+    vec3 aur = vec3(0.34, 0.92, 0.83) * pow(max(0.0, sin(a)), 1.7)
+             + vec3(0.73, 0.62, 1.00) * pow(max(0.0, sin(a - 2.0944)), 1.7)
+             + vec3(1.00, 0.86, 0.55) * pow(max(0.0, sin(a - 4.1888)), 1.7);
+    float veil = mix(0.26, 1.0, grz) * mix(0.30, 1.0, smoothstep(0.12, 0.92, vShell));
+    col += aur * uAurora * (veil + 0.42 * vIsle) * tx.a * (1.0 - uNightMix * 0.30);
+  }
 
   col = applyAerial(col, dist, vWorldPos.y, V);
 
@@ -1464,9 +1652,10 @@ varying vec2 vHighPrecisionZW;
 ${GLSL_NOISE}
 ${GLSL_WIND}
 ${WIND_BLOCK}
+${CANOPY_COMMON2}
 void main(){
-  float grow = cardGrow(aInst.z);
-  float isBud = step(aInst.w, uBudMix);
+  float grow = mix(cardGrow(aInst.z), smoothstep(0.0, 0.42, uIsland), aIsle);
+  float isBud = step(aInst.w, uBudMix) * (1.0 - aIsle);
   float tile = mix(aInst2.x, ${ATLAS_BUD_FIRST}.0 + mod(aInst2.x, ${ATLAS_BUD_COUNT}.0), isBud);
   float tx = mod(tile, uAtlasCols);
   float ty = floor(tile / uAtlasCols);
@@ -1478,12 +1667,94 @@ void main(){
   vec3 lp = position * sizeMul;
   vec4 wp = vec4(centre + nx * lp.x + ny * lp.y + nz * lp.z, 1.0);
   vec3 nrm = normalize(nx * normal.x + ny * normal.y + nz * normal.z);
-  wp.xyz += treeSway(wp.xyz, aInst.y, aInst.x);
+  wp.xyz += treeSway(wp.xyz, aInst.y, aInst.x) * (1.0 - aIsle);
+  wp.xyz += isleDrift(centre, aInst.x, aInst2.w) * aIsle;
   float f = sin(uWindTime * 2.35 + aInst.x * 24.0) * 0.5
           + sin(uWindTime * 3.71 + aInst.x * 51.0) * 0.5;
   wp.xyz += nrm * f * uFlutter * (0.35 + 0.85 * uWindGust) * aInst2.z;
   gl_Position = projectionMatrix * viewMatrix * wp;
   vHighPrecisionZW = gl_Position.zw;
+}
+`;
+
+/* ===================================================================== *
+ * 6. 常桜 Everblossom light shafts (GAME_DESIGN.md stage 5)
+ *
+ * "light shafts" through the crown. 90-postfx owns the screen-space god rays;
+ * these are the OBJECT-space complement — a small instanced set of soft additive
+ * blades that begin inside the crown's gaps and fall away from the key, so the
+ * shafts are anchored to the tree and move with it instead of smearing off the
+ * sun sprite. They are pure emission: there is no surface to ramp-shade, so
+ * nprShadeN would be meaningless, but the colour is the SHARED uSunColor and the
+ * result still goes through applyAerial so the shafts sit in the same air as
+ * everything else.
+ *
+ * aShaft = (phase, length in crown radii, width, seed)
+ * ===================================================================== */
+export const SHAFT_VERT = /* glsl */`
+attribute vec4 aShaft;
+uniform vec3  uEyePos;
+uniform float uShaftLen;
+${GLSL_LIGHT_UNIFORMS}
+varying vec2  vSt;        // x = across the blade (-1..1), y = along it (0..1)
+varying vec3  vWorldPos;
+varying float vSeed;
+#include <common>
+${GLSL_NOISE}
+${GLSL_WIND}
+void main(){
+  vec3 origin = (modelMatrix * instanceMatrix * vec4(0.0, 0.0, 0.0, 1.0)).xyz;
+  // travel direction: away from the key. uSunDir points FROM the surface TO the
+  // sun, so a shaft runs along -uSunDir.
+  vec3 dir = -normalize(uSunDir);
+  vec3 toEye = normalize(uEyePos - origin + vec3(0.0, 1e-4, 0.0));
+  vec3 right = cross(dir, toEye);
+  float rl = length(right);
+  right = rl > 1e-4 ? right / rl : normalize(cross(dir, vec3(0.0, 1.0, 0.0) + vec3(1e-3)));
+
+  float st = uv.y;                       // 0 at the crown, 1 at the far end
+  float sx = uv.x * 2.0 - 1.0;
+  // a shaft widens slightly as it travels and frays at the end
+  float wid = aShaft.z * (0.62 + 0.85 * st);
+  // a slow lateral wander so no shaft is a ruled line
+  float wob = snoise(vec3(origin.x, origin.z, uWindTime * 0.10) + vec3(st * 2.4)) * 0.36 * st;
+  vec3 wp = origin + dir * (st * aShaft.y * uShaftLen)
+          + right * (sx * wid + wob);
+  vSt = vec2(sx, st);
+  vSeed = aShaft.w;
+  vWorldPos = wp;
+  gl_Position = projectionMatrix * viewMatrix * vec4(wp, 1.0);
+}
+`;
+
+export const SHAFT_FRAG = /* glsl */`
+uniform float uShafts;      // master strength, driven by the bloom stage
+uniform vec3  uShaftCol;
+varying vec2  vSt;
+varying vec3  vWorldPos;
+varying float vSeed;
+#include <common>
+${GLSL_NOISE}
+${GLSL_NPR}
+void main(){
+  if (uShafts <= 0.002) discard;
+  vec3 toCam = cameraPosition - vWorldPos;
+  float dist = length(toCam);
+  vec3 V = toCam / max(dist, 1e-4);
+  // A volumetric shaft is only visible looking INTO the light. This is the same
+  // forward-scatter lobe applyAerial uses, so the shafts strengthen and fade with
+  // the rest of the scene's haze rather than on their own schedule.
+  float fwd = pow(clamp(dot(-V, normalize(uSunDir)), 0.0, 1.0), 2.2);
+  // soft across, and fading out along the length
+  float across = pow(max(0.0, 1.0 - vSt.x * vSt.x), 1.7);
+  float along  = smoothstep(0.0, 0.11, vSt.y) * (1.0 - smoothstep(0.40, 1.0, vSt.y));
+  float flick  = 0.62 + 0.38 * (snoise(vec3(vSt.y * 3.1, vSeed * 21.0, uWindTime * 0.22)) * 0.5 + 0.5);
+  float a = across * along * flick * fwd * uShafts * (1.0 - uNightMix);
+  vec3 col = uShaftCol * uSunColor * a;
+  col = applyAerial(col, dist, vWorldPos.y, V);
+  gl_FragColor = vec4(col, 1.0);
+  #include <tonemapping_fragment>
+  #include <colorspace_fragment>
 }
 `;
 

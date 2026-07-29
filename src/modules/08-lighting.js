@@ -5,6 +5,8 @@ import {
   createNprMaterial, applyNprToStandard, createSkyUniforms, createSkyMaterial,
   DAY_LENGTH, DEFAULT_DAY_T, PHASE_ANCHORS, GROUND_BOUNCE, DAPPLE_FREQ, MAX_LAMPS,
   NPR_KEY_DESAT,
+  AERIAL_LEVEL, AERIAL_KEEP_MID, AERIAL_KEEP_FAR, AERIAL_POW,
+  AMB_OCC_POW, CANOPY_SKY, CANOPY_KEY,
 } from '../lib/lighting.js';
 
 /**
@@ -101,6 +103,21 @@ const CAL_CORE_SCALE = 1.00;
 const CAL_RIM_BASE = 0.75;
 const CAL_RIM_PER_INT = 0.50;
 const CAL_RIM_MAX = 1.60;
+
+/* ---------------------------------------------------------------------- *
+ * Aerial perspective -> uAerial  (see GLSL_LIGHT_UNIFORMS / nprAerialTint).
+ *
+ * ART_BIBLE §8.3 says "no aerial perspective on distance" is an instant fail and
+ * §8.9 says "washed-out or muddy midtones" is another, and this uniform is the
+ * only place both are decided. The numbers below are the shipped defaults from
+ * src/lib/lighting.js; the per-phase deltas are the ones this rig adds on top.
+ *
+ * NIGHT gets a slightly HIGHER haze level and a lower far-value keep: the night
+ * fog is #1B2440, which is already darker than every land surface in frame, so
+ * pushing land further under it inverts the depth cue instead of creating it.
+ * ---------------------------------------------------------------------- */
+const CAL_AERIAL_NIGHT_LEVEL = 1.06;   // multiplier on AERIAL_LEVEL at full night
+const CAL_AERIAL_NIGHT_KEEP = 0.72;    // multiplier on the keeps at full night
 
 export default {
   name: 'lighting',
@@ -507,7 +524,11 @@ export default {
     let shadowOff = false;          // 'noshadow' debug A/B only
     let poolOff = false;            // 'nopool' / 'noshade' debug A/B only
     /* Live overrides for the calibration sweep — see the `cal-*` scenarios. */
-    const calOverride = { ratio: null, core: null, rim: null, desat: null };
+    const calOverride = {
+      ratio: null, core: null, rim: null, desat: null,
+      aerLevel: null, aerKeep: null, aerPow: null, fogScale: null,
+      occPow: null, aoScale: null, pool: null,
+    };
 
     /** Write the four global shading knobs into the shared bag. */
     function writeShadowCal() {
@@ -520,6 +541,33 @@ export default {
         calOverride.rim ?? rim,
         calOverride.desat ?? NPR_KEY_DESAT,
       );
+    }
+
+    /** Aerial + occlusion calibration into the shared bag. */
+    function writeAerialCal() {
+      const n = THREE.MathUtils.clamp(pal.night ?? 0, 0, 1);
+      const a = L.uAerial?.value;
+      if (a) {
+        const lvl = (calOverride.aerLevel ?? AERIAL_LEVEL)
+                  * THREE.MathUtils.lerp(1, CAL_AERIAL_NIGHT_LEVEL, n);
+        const kk = (calOverride.aerKeep ?? 1) * THREE.MathUtils.lerp(1, CAL_AERIAL_NIGHT_KEEP, n);
+        a.set(
+          Math.max(lvl, 0.02),
+          Math.max(AERIAL_KEEP_MID * kk, 0.01),
+          Math.max(AERIAL_KEEP_FAR * kk, 0.01),
+          Math.max(calOverride.aerPow ?? AERIAL_POW, 0.2),
+        );
+      }
+      const s = L.uShadeCal?.value;
+      if (s) {
+        const poolK = poolOff ? 0.0 : (calOverride.pool ?? 1);
+        s.set(
+          Math.max(calOverride.occPow ?? AMB_OCC_POW, 0.1),
+          Math.max(calOverride.aoScale ?? 1, 0.01),
+          Math.max(CANOPY_SKY * poolK, 0.0001),
+          Math.max(CANOPY_KEY * poolK, 0.0001),
+        );
+      }
     }
 
     /* ---------------------------------------------------------------- *
@@ -567,6 +615,11 @@ export default {
     function apply(emit = true) {
       samplePalette(dayT, pal);
       writePhaseColors(L, pal);
+      // live density sweep (cal-fog* scenarios) — applied AFTER the palette write
+      // so a sweep never has to fight the per-frame palette refresh.
+      if (calOverride.fogScale != null && L.uFogParams?.value) {
+        L.uFogParams.value.x *= calOverride.fogScale;
+      }
 
       // ---- key light: whichever body is above the horizon owns the shadow.
       const keyDir = pal.keyAboveHorizon ? pal.sunDir : pal.moonDir;
@@ -621,6 +674,9 @@ export default {
 
       // ---- global shading calibration (shadow ratio / core / rim / key desat)
       writeShadowCal();
+
+      // ---- aerial perspective + occlusion calibration
+      writeAerialCal();
 
       // ---- local warm lamps (stone lanterns) into the shared bag
       lampCount = writeLamps();
@@ -799,6 +855,31 @@ export default {
         sc_[`cal-desat${v}-dusk`] = () => {
           calOverride.desat = v / 100; setDayT(PHASE_ANCHORS.dusk);
         };
+      }
+      /* ---- aerial-perspective sweeps. ART_BIBLE §8.3 and §8.9 pull in opposite
+         directions (no haze = no depth, too much haze = a milky band), so the
+         only honest way to place these is to render the sweep and measure the
+         luminance of each receding plane against the sky above it.
+           cal-aer<N>   haze target LEVEL as a % of uFogColor
+           cal-keep<N>  % scale on BOTH value-preservation keeps
+           cal-fog<N>   % scale on the palette's own fog density
+           cal-occ<N>   ambient occlusion exponent x100 (the frame's dark anchor)
+           cal-pool<N>  % scale on the canopy shade pool (the tree's grounding) */
+      for (const v of [50, 62, 70, 78, 86, 94, 100]) {
+        sc_[`cal-aer${v}`] = () => { calOverride.aerLevel = v / 100; apply(false); };
+      }
+      for (const v of [0, 40, 70, 100, 130, 170]) {
+        sc_[`cal-keep${v}`] = () => { calOverride.aerKeep = v / 100; apply(false); };
+      }
+      for (const v of [0, 40, 60, 80, 100, 130]) {
+        sc_[`cal-fog${v}`] = () => { calOverride.fogScale = v / 100; apply(false); };
+        sc_[`cal-fog${v}-wide`] = () => { calOverride.fogScale = v / 100; apply(false); };
+      }
+      for (const v of [100, 135, 185, 240, 300]) {
+        sc_[`cal-occ${v}`] = () => { calOverride.occPow = v / 100; apply(false); };
+      }
+      for (const v of [0, 60, 100, 140, 180, 220]) {
+        sc_[`cal-pool${v}`] = () => { calOverride.pool = v / 100; apply(false); };
       }
       sc_['golden'] = () => { setDayT(DEFAULT_DAY_T); };
       sc_['noon'] = () => { setDayT(0.5); };

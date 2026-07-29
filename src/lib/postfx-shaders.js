@@ -366,6 +366,8 @@ export const ATMOS_SHADER = {
     uRayFalloff: { value: null }, // vec4 (innerStart, innerEnd, outerStart, outerEnd)
     uRayDamp: { value: null },    // vec2 (linear-HDR luma where damping starts, amount)
     uRayStruct: { value: null },  // vec2 (flat-field floor, contrast gain)
+    uRayContrast: { value: null },// vec2 (gated multiplicative contrast gain, perp width)
+    uRaySolo: { value: 0.0 },     // debug: 1 = output the ray contribution alone
   },
   vertexShader: FS_VERT,
   fragmentShader: /* glsl */`
@@ -379,32 +381,45 @@ uniform vec2  uSunUV;
 uniform vec4  uRayFalloff;
 uniform vec2  uRayDamp;
 uniform vec2  uRayStruct;
+uniform vec2  uRayContrast;
+uniform float uRaySolo;
 uniform float uAspect;
 
 /**
- * How much STRUCTURE the shaft field has at this pixel, measured ACROSS the ray.
+ * The shaft field measured ACROSS the ray: .x = signed deviation of this pixel from
+ * the local cross-ray baseline (positive = inside a shaft, negative = inside a gap),
+ * .y = |deviation|, i.e. how much STRUCTURE there is here at all.
  *
- * This is the difference between god rays and fog. Where the sky near the source is
- * unoccluded there is nothing to make shafts out of, so the march returns r ~ 1 over
- * a large area and a plain composite paints a solid lobe of maximum add: measured at
- * dawn (sun on the left border, clear sky above it) that lobe was responsible for 14
- * of the frame's 18 flat 200x200 blocks above L 0.90 — the pass was manufacturing
- * instant-fail tell 8.2. Sampling the ray buffer PERPENDICULAR to the ray direction
- * at two baselines gives exactly "is this pixel on the edge of a shaft", and scaling
- * the add by it keeps every shaft while collapsing the flat wash to a floor.
+ * The magnitude is the difference between god rays and fog. Where the sky near the
+ * source is unoccluded there is nothing to make shafts out of, so the march returns
+ * r ~ 1 over a large area and a plain composite paints a solid lobe of maximum add:
+ * measured at dawn (sun on the left border, clear sky above it) that lobe was
+ * responsible for 14 of the frame's 18 flat 200x200 blocks above L 0.90 — the pass
+ * was manufacturing instant-fail tell 8.2.
+ *
+ * The SIGN is what makes the shafts survive a bright sky (see main()). Six taps at
+ * three baselines, so a shaft roughly 2-6% of frame width across is resolved without
+ * the widest baseline swallowing it.
  */
-float rayStructure( vec2 uv, float r0 ) {
+vec2 rayStructure( vec2 uv, float r0 ) {
   vec2 d = uv - uSunUV;
   float len = max( length( d * vec2( uAspect, 1.0 ) ), 1e-4 );
   vec2 perp = normalize( vec2( -d.y * uAspect, d.x ) ) * vec2( 1.0 / uAspect, 1.0 );
-  float c = 0.0;
-  for ( int i = 0; i < 2; i ++ ) {
-    float s = ( i == 0 ? 0.009 : 0.021 ) * min( len * 3.0, 1.0 );
+  float mag = 0.0;
+  float base = 0.0;
+  float bw = 0.0;
+  for ( int i = 0; i < 3; i ++ ) {
+    float s = ( i == 0 ? 0.010 : i == 1 ? 0.024 : 0.048 ) * uRayContrast.y
+            * min( len * 3.0, 1.0 );
     float a = texture2D( tRays, uv + perp * s ).r;
     float b = texture2D( tRays, uv - perp * s ).r;
-    c = max( c, max( abs( r0 - a ), abs( r0 - b ) ) );
+    mag = max( mag, max( abs( r0 - a ), abs( r0 - b ) ) );
+    // the wider the baseline the more it counts as "the surrounding level"
+    float w = 1.0 + float( i );
+    base += ( a + b ) * 0.5 * w;
+    bw += w;
   }
-  return mix( uRayStruct.x, 1.0, sat( c * uRayStruct.y ) );
+  return vec2( r0 - base / max( bw, 1e-4 ), mag );
 }
 
 void main() {
@@ -426,18 +441,52 @@ void main() {
     // meant to dramatise. Glare AT the source is the bloom's job (it has a sun-disc
     // pre-multiply for exactly that); the shafts start a little way out, where there
     // is finally something for them to be shafts BETWEEN.
-    r *= smoothstep( uRayFalloff.x, uRayFalloff.y, dist )
-       * ( 1.0 - smoothstep( uRayFalloff.z, uRayFalloff.w, dist ) )
-       * rayStructure( vUv, r );
+    float win = smoothstep( uRayFalloff.x, uRayFalloff.y, dist )
+              * ( 1.0 - smoothstep( uRayFalloff.z, uRayFalloff.w, dist ) );
+    vec2 st = rayStructure( vUv, r );
+
     // A shaft is only VISIBLE where the frame has display range left for it. The
-    // bright sky beside the sun is already past ACES's shoulder, so adding there
+    // bright sky beside the sun is already past ACES's shoulder, so ADDING there
     // buys clipping instead of contrast (instant-fail tell 8.12), while the same
     // add across the canopy, trunk and grass — the midtones the shafts rake over —
-    // is worth 4-6x as much display luminance. Damping the add by the destination's
-    // own luminance is therefore what turns a flat glow into readable shafts, and
-    // it is exactly the direction real in-scatter goes once the eye adapts.
+    // is worth 4-6x as much display luminance.
     float dampT = smoothstep( uRayDamp.x, uRayDamp.x + 0.9, luma( c ) );
-    c += uRayColor * r * ( 1.0 - uRayDamp.y * dampT );
+
+    // ...and this is where three rounds of this pass went wrong: the two gates were
+    // ANTI-CORRELATED. The ray buffer only has values where the march can see bright
+    // sky — which is the bright half of the frame — and that is exactly where the
+    // headroom damp threw the add away, so the net delta was a 2-8/255 wash with no
+    // shaft in it anywhere. So the pass now spends its signal two different ways and
+    // the split follows the destination:
+    //   * ADD, weighted by the headroom that is left (1 - damp*dampT), which owns
+    //     the midtones: canopy, trunk, grass, hills.
+    //   * MULTIPLICATIVE CONTRAST about the local cross-ray baseline, weighted by
+    //     dampT, which owns the near-clipped sky. A relative modulation cannot
+    //     clip: the shaft is brighter than its neighbour and the gap between two
+    //     shafts is darker, the local mean barely moves, and THAT is what reads as
+    //     a crepuscular ray over a blown dusk sky.
+    vec3 add = uRayColor * r * mix( uRayStruct.x, 1.0, sat( st.y * uRayStruct.y ) )
+             * win * ( 1.0 - uRayDamp.y * dampT );
+
+    // Signed, so gaps darken as much as shafts brighten. Tinted toward the key so a
+    // shaft over the sky is warmer than the sky it crosses, never a grey band.
+    //
+    // MEASURED (pipeline.histogram('scene')): the ATMOS input is scene-linear
+    // PRE-exposure and its p50 is only 0.33 at dusk / 0.36 at day, so a dampT that
+    // starts at 0.42 is exactly 0 over more than half of every frame. Gating the
+    // contrast term on dampT alone therefore switched it off everywhere it was
+    // needed — sweeping the gain 0.62 -> 1.1 moved the frame's cross-ray gradient
+    // by 0.0004. So dampT only AMPLIFIES it (a relative modulation is worth most
+    // where the absolute add is worth least); the floor keeps it live everywhere.
+    vec3 tint = mix( vec3( 1.0 ), normalize( max( uRayColor, vec3( 1e-3 ) ) ) * 1.732, 0.55 );
+    float sgn = clamp( st.x, -0.5, 0.5 );
+    float cw = mix( 0.55, 1.0, dampT );
+    vec3 mul = vec3( 1.0 ) + uRayContrast.x * sgn * win * cw * tint;
+
+    c = max( c * mul + add, vec3( 0.0 ) );
+    // debug: show only what this pass contributed (the add plus the signed
+    // modulation, re-based so gaps are visible against black)
+    c = mix( c, add + max( mul - 1.0, vec3( 0.0 ) ) * 2.0, uRaySolo );
   #endif
 
   gl_FragColor = vec4( c, 1.0 );

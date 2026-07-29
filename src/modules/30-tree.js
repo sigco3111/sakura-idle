@@ -7,6 +7,7 @@ import {
   buildBarkTextures, buildBlossomAtlas,
   TRUNK_VERT, TRUNK_FRAG, TRUNK_DEPTH_VERT, DEPTH_FRAG,
   CANOPY_VERT, CANOPY_FRAG, CANOPY_DEPTH_VERT, CANOPY_DEPTH_FRAG,
+  SHAFT_VERT, SHAFT_FRAG,
   ATLAS_COLS, ATLAS_BLOSSOM_COUNT, ATLAS_SPARSE_FIRST, ATLAS_SPARSE_COUNT,
 } from '../lib/tree-shaders.js';
 
@@ -55,11 +56,22 @@ const STAGE = {
   coverage: [0.125, 0.330, 0.590, 1.000, 1.115, 1.235],
   budMix: [1.000, 0.560, 0.210, 0.045, 0.020, 0.000],
   lumin: [0.000, 0.000, 0.000, 0.015, 0.105, 0.195],
-  gold: [0.000, 0.000, 0.000, 0.000, 0.045, 0.360],
+  // 0.360 -> 0.260: see the vein block in TRUNK_FRAG. At 0.36 x the old broad
+  // vein mask the trunk printed lime.
+  gold: [0.000, 0.000, 0.000, 0.000, 0.038, 0.260],
   // "bare" greys + cools the bark. 1.0 at stage 0 used to crush it to near
   // black; the shader tint it drives is much lighter now (see TRUNK_FRAG).
   bare: [1.000, 0.300, 0.080, 0.000, 0.000, 0.000],
   moss: [0.520, 0.700, 0.860, 0.940, 0.940, 0.900],
+  /* ---- stage 5 常桜 Everblossom, GAME_DESIGN.md line by line -------------
+   * "gold-veined bark, aurora petals, light shafts, floating islands of blossom".
+   * A review measured stage 5's crown at luminance sd 0.040 over 90x90 px —
+   * FLATTER than stage 1 — and none of these four features present. This is the
+   * game's long-term reward, so all four are here, and stage 4 gets a deliberate
+   * foretaste of each so the jump reads as an escalation rather than a switch. */
+  aurora: [0.000, 0.000, 0.000, 0.000, 0.085, 0.500],
+  island: [0.000, 0.000, 0.000, 0.000, 0.130, 1.000],
+  shafts: [0.000, 0.000, 0.000, 0.000, 0.160, 1.000],
 };
 const stageAt = (arr, s) => {
   const t = THREE.MathUtils.clamp(s, 0, 5);
@@ -663,14 +675,24 @@ export default {
     const rng = makeRng(SEED ^ 0x2f10c);
     const anchors = { outer: [], mid: [], inner: [] };
     const tips = [];
+    /* LEVEL 1 IS INCLUDED NOW. It used to be skipped, so a primary limb carried
+     * blossom only where its own children happened to sprout — and in the hero
+     * frame the two thick right-hand limbs ran 4 m of naked grey wood through the
+     * middle of a flowering crown, reading as dead branches (blocker: "bare grey
+     * limbs read as dead wood"). Real ancient sakura flower on SPURS along the old
+     * wood as well as at the tips, so clusters directly on the primaries are both
+     * the fix and the botanically correct answer. Their anchors go to the `inner`
+     * bucket: big, deep, low-value clusters hugging the limb. */
     for (const br of skel.branches) {
-      if (br.level < 2) continue;
+      if (br.level < 1) continue;
       const pts = br.pts;
       const last = pts[pts.length - 1];
       if (br.level >= 3) tips.push(last.p.clone());
       const bucket = br.level >= 4 ? anchors.outer : (br.level === 3 ? anchors.mid : anchors.inner);
-      const from = br.level >= 4 ? 0.10 : 0.35;
-      const n = br.level >= 4 ? 5 : (br.level === 3 ? 4 : 3);
+      // a primary limb is 4.5-5.5 m long, so it needs more spur sites than a
+      // 30 cm twig does, spread from just past the trunk out to the tip.
+      const from = br.level >= 4 ? 0.10 : (br.level === 1 ? 0.18 : 0.35);
+      const n = br.level >= 4 ? 5 : (br.level === 3 ? 4 : (br.level === 1 ? 7 : 3));
       for (let i = 0; i < n; i++) {
         const t = from + (1 - from) * ((i + 0.5) / n);
         const f = t * (pts.length - 1);
@@ -681,8 +703,19 @@ export default {
           d: br.dir,
           stiff: THREE.MathUtils.clamp(THREE.MathUtils.lerp(pts[j].dist, pts[j + 1].dist, fr) / skel.maxDist, 0, 1),
           phase: br.phase,
+          // Low-discrepancy growth rank, assigned per bucket index. Anchors of one
+          // branch are pushed consecutively, so the golden-ratio sequence spreads
+          // their growth orders right across the range and every branch is
+          // guaranteed an early-opening site. See the `order` block below.
+          seq: 0,
+          lvl: br.level,
         });
       }
+    }
+    const PHI = 0.61803398875;
+    for (const key of ['outer', 'mid', 'inner']) {
+      const arr = anchors[key];
+      for (let i = 0; i < arr.length; i++) arr[i].seq = (i * PHI) % 1;
     }
 
     /* crown bounds from the anchor cloud (the crown IS the branch cloud) */
@@ -708,11 +741,19 @@ export default {
     // cover the largest instance or the crown pops out of frustum at the edges
     cardGeo.computeBoundingSphere();
     cardGeo.boundingSphere.radius *= 2.2;
-    const COUNT = CARDS;
+    /* Floating islands of blossom (常桜 Everblossom): extra cards in the SAME
+     * InstancedMesh — one more draw call for a stage-5 hero feature is not worth
+     * it, and they need the identical atlas, wind and shading path. They live at
+     * the end of the buffer and are flagged with aIsle. */
+    const ISLE_CLUSTERS = { ultra: 8, high: 7, medium: 5, low: 4 }[tier] ?? 6;
+    const ISLE_PER = { ultra: 30, high: 26, medium: 20, low: 15 }[tier] ?? 22;
+    const ISLES = ISLE_CLUSTERS * ISLE_PER;
+    const COUNT = CARDS + ISLES;
     const inst = new THREE.InstancedMesh(cardGeo, null, COUNT);
     const aInst = new Float32Array(COUNT * 4);
     const aInst2 = new Float32Array(COUNT * 4);
     const aTint = new Float32Array(COUNT * 3);
+    const aIsle = new Float32Array(COUNT);
 
     // ART_BIBLE §3 — all FIVE sakura values, edge to deep interior. A canopy
     // painted from two of them reads as one pale mass; the mid and deep values
@@ -797,13 +838,46 @@ export default {
       { key: 'inner', frac: 0.16, push: [-0.30, 0.10], ao: [0.28, 0.58], size: [0.88, 1.48], jitter: 1.05, lerpIn: [0.08, 0.64] },
     ];
 
+    /** largest stride < N that is coprime with N and near the golden fraction. */
+    const coprimeStride = (N) => {
+      const gcd = (x, y) => (y ? gcd(y, x % y) : x);
+      if (N < 4) return 1;
+      let s = Math.max(1, Math.round(N * 0.61803398875));
+      for (let k = 0; k < N; k++) {
+        const t = ((s + k) % N) || 1;
+        if (gcd(t, N) === 1) return t;
+      }
+      return 1;
+    };
+    /* Where the growth front starts and ends. Solved against STAGE.coverage and
+     * cardGrow()'s smoothstep(order-0.20, order+0.03, coverage) window so each
+     * stage lands on a deliberate fraction of the crown:
+     *   stage 0 (cov 0.125) ~5 % barely-swelling buds   stage 1 (0.330) ~15 % full
+     *   stage 2 (0.590) ~50 %   stage 3 (1.000) all non-reserve. */
+    const ORDER_LO = 0.22, ORDER_HI = 0.965;
+
     let w = 0;
     for (let li = 0; li < LAYERS.length; li++) {
       const Ly = LAYERS[li];
       const src = anchors[Ly.key].length ? anchors[Ly.key] : all;
-      const n = li === LAYERS.length - 1 ? COUNT - w : Math.round(COUNT * Ly.frac);
-      for (let i = 0; i < n && w < COUNT; i++, w++) {
-        const a = src[Math.floor(rng.next() * src.length)];
+      const n = li === LAYERS.length - 1 ? CARDS - w : Math.round(CARDS * Ly.frac);
+      /* ---- STRATIFIED anchor assignment ---------------------------------
+       * `src[floor(rng()*N)]`, repeated n times, is sampling WITH REPLACEMENT:
+       * it leaves e^-(n/N) of the anchors with no card at all (37 % at n == N)
+       * and hands others four. Combined with the old position-driven growth order
+       * that is exactly how whole limbs ended up naked. Striding the list by a
+       * value coprime with its length visits every anchor either floor(n/N) or
+       * floor(n/N)+1 times — no gaps by construction — and because the stride is
+       * ~0.618 N while the list is ordered by branch, consecutive cards land on
+       * branches far apart in the crown. */
+      const N = src.length;
+      const stride = coprimeStride(N);
+      const perAnchor = Math.max(1, Math.ceil(n / N));
+      let ai = Math.floor(rng.next() * N) % N;
+      for (let i = 0; i < n && w < CARDS; i++, w++) {
+        const a = src[ai];
+        const rank = Math.floor(i / N);        // this anchor's own card index
+        ai = (ai + stride) % N;
         out.copy(a.p).sub(cCentre);
         const rLen = Math.max(0.001, out.length());
         out.divideScalar(rLen);
@@ -839,19 +913,35 @@ export default {
         mat4.compose(pp, qt, scl);
         inst.setMatrixAt(w, mat4);
 
-        // Growth order: the crown still fills from the outside in and the top
-        // down (light reaches the tips first), but the DOMINANT term is now
-        // random. The old formula was 74 % deterministic, so at stage 0-1
-        // coverage the only sites whose order cleared the front were the
-        // outer-top ones — every early blossom landed in a single blob on one
-        // side of the crown. Stage 1 is the first thing a new player sees, so
-        // its blossoms have to be SCATTERED over the whole canopy.
+        /* ---- Growth order: the crown must THIN, never STRIP ----------------
+         * The old formula was `rng()*0.74 + (1 - (radial*0.6 + height*0.4))*0.40`,
+         * i.e. a random draw plus a 0.40-wide POSITIONAL pedestal. Any card deep
+         * or low in the crown started at order >= 0.40 and therefore could not
+         * open at all until coverage 0.43 — past stage 1 — so the fresh-save tree
+         * flowered only on its outer top and every low limb was bare wood. Add
+         * random-with-replacement anchor picking on top and whole branches drew
+         * zero cards.
+         *
+         * Now the order is a LOW-DISCREPANCY sequence: `a.seq` is the golden-ratio
+         * walk over the anchor's index within its bucket, and a branch's anchors
+         * are consecutive in that bucket, so a branch with k >= 3 anchors always
+         * owns an order in the lowest third of the range. Additional cards on the
+         * same anchor are offset by rank so they open in succession. The
+         * outside-in / top-down feel survives as a 0.12 nudge instead of the
+         * dominant term. Result: at any coverage the open set is spread evenly
+         * over the whole crown and no major limb is ever bare at stage >= 1. */
         const heightT = THREE.MathUtils.clamp((pp.y - (cCentre.y - cRadius)) / (2 * cRadius), 0, 1);
         const radialT = THREE.MathUtils.clamp(pp.distanceTo(cCentre) / cRadius, 0, 1);
+        const strat = ((a.seq ?? rng.next()) + rank * 0.3820 + rng.range(-0.035, 0.035) + 1) % 1;
+        const bias = (1 - (radialT * 0.60 + heightT * 0.40)) - 0.5;
         let order = THREE.MathUtils.clamp(
-          rng.next() * 0.74 + (1 - (radialT * 0.60 + heightT * 0.40)) * 0.40, 0.0, 0.99);
-        // the stage 4/5 reserve: these cards only open once coverage passes 1.0
-        if (rng.next() < 0.155) order = 1.00 + rng.next() * 0.215;
+          ORDER_LO + (ORDER_HI - ORDER_LO) * strat + bias * 0.12, 0.03, 0.985);
+        /* the stage 4/5 reserve, taken from the TOP of the order range rather
+         * than by a coin flip: a random 15.5 % chance could (and did) steal a
+         * branch's only early-opening card, and the reserve then clumped. This
+         * maps the last 14 % of the front onto 1.00-1.22, so stages 4 and 5 add
+         * card COUNT at constant card SIZE, evenly, everywhere. */
+        if (order > 0.845) order = 1.00 + (order - 0.845) * 1.57;
 
         aInst[w * 4 + 0] = a.phase;
         aInst[w * 4 + 1] = THREE.MathUtils.clamp(a.stiff * 1.06, 0, 1);
@@ -899,10 +989,70 @@ export default {
         aTint[w * 3 + 2] = TC.b;
       }
     }
+
+    /* ---- 常桜 Everblossom: FLOATING ISLANDS OF BLOSSOM -------------------
+     * Detached clusters suspended around and above the crown, revealed by
+     * uIsland and animated by isleDrift() in the vertex shader (a slow orbit
+     * about the crown axis plus a per-cluster bob). They are placed on a golden-
+     * angle spiral over the upper hemisphere at 1.20-1.85 crown radii so they
+     * break the silhouette in every direction instead of clumping, and they are
+     * painted from the LIGHT end of the palette (#FFF2F6 / #FFD9E6 / #FFB6CE)
+     * with a wide-open AO — an island has nothing above it to shade it. */
+    {
+      const isleC = new THREE.Vector3();
+      for (let ci = 0; ci < ISLE_CLUSTERS; ci++) {
+        const az = ci * 2.39996 + rng.range(-0.35, 0.35);
+        /* MEASURED r5: at 1.20-1.85 crown radii these sat 11-17 m clear of the
+         * crown and read as separate pink CLOUDS, not as islands of the tree's own
+         * blossom. Pulled in so they hug the silhouette and break it, which is what
+         * makes the relationship legible. */
+        const el = rng.range(0.04, 0.80);                       // mostly above the equator
+        const rad = cRadius * rng.range(1.02, 1.34);
+        isleC.set(Math.cos(az) * Math.cos(el * 1.35), Math.sin(el * 1.15), Math.sin(az) * Math.cos(el * 1.35))
+          .multiplyScalar(rad).add(cCentre);
+        const spread = rng.range(0.55, 1.10);
+        const phase = rng.next();
+        const seed = rng.next();
+        for (let k = 0; k < ISLE_PER && w < COUNT; k++, w++) {
+          pp.set(rng.gauss(0, spread), rng.gauss(0, spread * 0.55), rng.gauss(0, spread))
+            .add(isleC);
+          nrm.copy(pp).sub(isleC).normalize()
+            .addScaledVector(jit.set(rng.gauss(0, 0.5), rng.gauss(0, 0.5), rng.gauss(0, 0.5)), 0.9)
+            .normalize();
+          qt.setFromUnitVectors(ZP, nrm);
+          qRoll.setFromAxisAngle(nrm, rng.range(0, Math.PI * 2));
+          qt.premultiply(qRoll);
+          scl.set(1, 1, 1);
+          mat4.compose(pp, qt, scl);
+          inst.setMatrixAt(w, mat4);
+
+          aInst[w * 4 + 0] = phase;              // one drift phase per cluster
+          aInst[w * 4 + 1] = 0;                  // no host twig, so no sway
+          aInst[w * 4 + 2] = 0;                  // grow comes from uIsland
+          aInst[w * 4 + 3] = 1;                  // never a bud
+          aInst2[w * 4 + 0] = rng.next() < 0.30
+            ? ATLAS_SPARSE_FIRST + Math.floor(rng.next() * ATLAS_SPARSE_COUNT)
+            : Math.floor(rng.next() * ATLAS_BLOSSOM_COUNT);
+          aInst2[w * 4 + 1] = rng.range(0.92, 1.00);
+          aInst2[w * 4 + 2] = rng.range(0.88, 1.52) * CARD_SCALE;
+          aInst2[w * 4 + 3] = seed;              // shared, so a cluster moves as one
+          const c = TINT_RATIO[Math.floor(rng.next() * 3)];
+          const j2 = 1 + THREE.MathUtils.clamp(rng.gauss(0, 0.045), -0.11, 0.11);
+          TC.setRGB(c.x * j2, c.y * j2, c.z * j2, THREE.LinearSRGBColorSpace);
+          TC.offsetHSL(rng.range(-8, 8) / 360, 0, 0);
+          aTint[w * 3 + 0] = TC.r;
+          aTint[w * 3 + 1] = TC.g;
+          aTint[w * 3 + 2] = TC.b;
+          aIsle[w] = 1;
+        }
+      }
+    }
+
     inst.count = w;
     cardGeo.setAttribute('aInst', new THREE.InstancedBufferAttribute(aInst, 4));
     cardGeo.setAttribute('aInst2', new THREE.InstancedBufferAttribute(aInst2, 4));
     cardGeo.setAttribute('aTint', new THREE.InstancedBufferAttribute(aTint, 3));
+    cardGeo.setAttribute('aIsle', new THREE.InstancedBufferAttribute(aIsle, 1));
 
     const canopyUniforms = {
       uAtlas: { value: atlas },
@@ -989,7 +1139,45 @@ export default {
       // r3: (0.88,0.60,0.70) walked the interior below #C25F86's own saturation
       // (measured 0.60 HSL against the palette value's 0.45), which is what made
       // the interior read as a bruise. This lands ON the palette.
-      uDeepTint: { value: new THREE.Vector3(0.90, 0.69, 0.77) },
+      /* ---- THE VIOLET CANOPY: root cause and fix -------------------------
+       * Full derivation in the comment block above `#define NPR_SHADOW_TINT` in
+       * tree-shaders.js. In one line: lighting.js's nprShadowHue() multiplies the
+       * albedo by uShadowTint (#6E76A8) renormalised to unit luminance, which is
+       * (0.507, 1.028, 2.182) — blue x2.18, red x0.51 — and that turns the
+       * palette's own deep interior #C25F86 into linear (0.372, 0.135, 0.537),
+       * i.e. BLUER than it is red. The legacy NPR_SHADOW_HUE / NPR_SHADOW_CHROMA
+       * dampers cannot reach it because nprTintStrength() floors their product at
+       * 0.78 on purpose. NPR_SHADOW_TINT is the knob that does.
+       *
+       * MEASURED, hero crown interior (x 790-1010, y 260-700 of 1920x1080),
+       * mean over blossom pixels:
+       *   uShTint 1.00 (was)  rgb(170,124,160)  B/R 0.939  hue 302  violet 53.1 %
+       *   uShTint 0.22        see r1 numbers in the report
+       * ART_BIBLE's #C25F86 is B/R 0.69; the whole-crown target is 0.72-0.80.
+       *
+       * Sakura is the one material in the scene that must NOT take the generic
+       * violet: ART_BIBLE §3 gives the blossom its own shadow ramp (#FFB6CE ->
+       * #EE8CAF -> #C25F86) and every value on it has blue below red, so the cool
+       * shift is authored in the palette ladder instead. */
+      uShTint: { value: 0.20 },
+      // the "never black" pedestal is 55 % raw #6E76A8; on a crown whose darkest
+      // value is already floored by uDeepFloor it buys nothing but lavender.
+      uShFloor: { value: 0.016 },
+      uRimSky: { value: 0.20 },
+      // how far the interior albedo walks onto uDeepCol's own chroma (1.0 = all
+      // the way at full occlusion) and how far its value drops. Two facts, two
+      // numbers — the old single uDeepTint vector conflated them and got the
+      // chroma direction wrong (it crushed green without gaining red, which walks
+      // pink toward magenta).
+      uDeepWalk: { value: 0.86 },
+      uDeepValue: { value: 0.70 },
+      // Sakura hue guard, as (slope, offset) on the CARD'S OWN authored albedo
+      // blue:red ratio — the reference frame that actually works (see the guard
+      // itself for the two keyings that measured inert). 1.10x + 0.04 allows a
+      // real sky-ambient lift while capping the 2x blue gain that made the crown
+      // violet: #C25F86 (0.437) -> 0.52, #FFB6CE (0.638) -> 0.74, #FFF2F6 -> 1.0.
+      uGuardCap: { value: new THREE.Vector2(1.10, 0.04) },
+      uHueGuard: { value: 1.0 },
       // Measured r0 of this round: the crown's shaded interior came out
       // rgb(116,76,95), HSL sat 0.21 — grey mauve, the muddy midtone
       // ART_BIBLE §8 tell 9 forbids. uDeepTint alone cannot win, because the
@@ -997,9 +1185,17 @@ export default {
       // own #C25F86 hue on the interior at whatever luminance the shading
       // arrived at, so value structure survives and the chroma comes back.
       uDeepCol: { value: col(0xC25F86) },
-      uChromaFix: { value: 0.36 },
+      uMidCol: { value: col(0xFFB6CE) },
+      // base palette lock (everywhere) + the extra the deep interior takes. Both
+      // are luminance-preserving, so they buy chroma at zero cost to the value
+      // ladder. Swept live via the `tree-lock*` scenarios.
+      uChromaFix: { value: 0.34 },
+      uChromaDeep: { value: 0.30 },
       uFlutter: { value: 0.035 },
       uWindAmp: { value: 1.05 },
+      // stage 5 常桜 Everblossom
+      uAurora: { value: 0 },
+      uIsland: { value: 0 },
     };
 
     const canopyMat = new THREE.ShaderMaterial({
@@ -1030,6 +1226,10 @@ export default {
         uAtlasCols: canopyUniforms.uAtlasCols,
         uFlutter: canopyUniforms.uFlutter,
         uWindAmp: canopyUniforms.uWindAmp,
+        // shared BY REFERENCE, so the shadow pass sizes the island cards exactly
+        // as the beauty pass does — otherwise stage 5 casts shadows from clusters
+        // that are not there yet.
+        uIsland: canopyUniforms.uIsland,
       },
       vertexShader: CANOPY_DEPTH_VERT,
       fragmentShader: CANOPY_DEPTH_FRAG,
@@ -1045,6 +1245,73 @@ export default {
     inst.computeBoundingSphere();
     if (inst.boundingSphere) inst.boundingSphere.radius *= 1.22;
     group.add(inst);
+
+    /* ---- 常桜 Everblossom: LIGHT SHAFTS ----------------------------------
+     * 90-postfx owns the screen-space god rays; these are the object-space
+     * complement, anchored INSIDE the crown's gaps and falling away from the key,
+     * so they move with the tree instead of smearing off a sun sprite. One
+     * instanced additive mesh — 1 draw call, and it is skipped entirely (visible
+     * false) below stage 4, so nothing pays for it until the Everblossom.
+     *
+     * Pure emission: nprShadeN would be meaningless on a volume with no surface,
+     * but the colour is the SHARED uSunColor and the result goes through
+     * applyAerial, so the shafts sit in the same air as everything else. */
+    const SHAFT_N = { ultra: 16, high: 14, medium: 10, low: 7 }[tier] ?? 12;
+    const shaftGeo = new THREE.PlaneGeometry(1, 1, 1, 7);
+    const shaftData = new Float32Array(SHAFT_N * 4);
+    const shaftInst = new THREE.InstancedMesh(shaftGeo, null, SHAFT_N);
+    {
+      const rs = makeRng(SEED ^ 0x5A17F);
+      for (let i = 0; i < SHAFT_N; i++) {
+        // origin: inside the upper crown, where the gaps between clusters are
+        const az = i * 2.39996 + rs.range(-0.4, 0.4);
+        const rr = cRadius * rs.range(0.20, 0.86);
+        pp.set(Math.cos(az) * rr, rs.range(-0.15, 0.72) * cRadius, Math.sin(az) * rr).add(cCentre);
+        mat4.compose(pp, new THREE.Quaternion(), scl.set(1, 1, 1));
+        shaftInst.setMatrixAt(i, mat4);
+        shaftData[i * 4 + 0] = rs.next();                 // phase
+        shaftData[i * 4 + 1] = rs.range(0.60, 1.35);      // length, in uShaftLen
+        shaftData[i * 4 + 2] = rs.range(0.26, 0.80);      // half-width, metres
+        shaftData[i * 4 + 3] = rs.next();                 // flicker seed
+      }
+    }
+    shaftGeo.setAttribute('aShaft', new THREE.InstancedBufferAttribute(shaftData, 4));
+    const shaftUniforms = {
+      uEyePos: canopyUniforms.uEyePos,
+      uShafts: { value: 0 },
+      uShaftLen: { value: cRadius * 2.4 },
+      uShaftCol: { value: col(0xFFE9CF) },
+      uWindTime: W.uWindTime,
+    };
+    const shaftMat = new THREE.ShaderMaterial({
+      uniforms: { ...L, ...shaftUniforms },
+      vertexShader: SHAFT_VERT,
+      fragmentShader: SHAFT_FRAG,
+      transparent: true,
+      depthWrite: false,
+      side: THREE.DoubleSide,
+      // Pure additive, independent of the fragment's alpha (THREE.AdditiveBlending
+      // multiplies by src alpha, which would double-count the intensity the
+      // shader already baked into the colour). Alpha itself is left alone so the
+      // post chain still owns the buffer's alpha channel.
+      blending: THREE.CustomBlending,
+      blendEquation: THREE.AddEquation,
+      blendSrc: THREE.OneFactor,
+      blendDst: THREE.OneFactor,
+      blendEquationAlpha: THREE.AddEquation,
+      blendSrcAlpha: THREE.ZeroFactor,
+      blendDstAlpha: THREE.OneFactor,
+    });
+    shaftMat.userData.noNpr = true;
+    shaftInst.material = shaftMat;
+    shaftInst.name = 'sakura-shafts';
+    shaftInst.castShadow = false;
+    shaftInst.receiveShadow = false;
+    shaftInst.frustumCulled = false;
+    shaftInst.renderOrder = 4;
+    shaftInst.visible = false;
+    shaftInst.instanceMatrix.needsUpdate = true;
+    group.add(shaftInst);
 
     /* ---- published surface --------------------------------------- *
      * Everything above is built in the tree's LOCAL space, and the group
@@ -1087,6 +1354,11 @@ export default {
       sampleBranchPoint,
       get stage() { return stage; },
       cardCount: w,
+      // published so tools/probe.mjs can mutate a single term and diff the
+      // rendered pixels — far cheaper than reading shader source, and the way the
+      // violet-canopy bug was finally localised.
+      canopyUniforms,
+      trunkUniforms,
     };
     ctx.assets.tree = tree;
     ctx.clickTargets.push(trunkMesh, inst);
@@ -1102,6 +1374,13 @@ export default {
       trunkUniforms.uGold.value = stageAt(STAGE.gold, s);
       trunkUniforms.uBare.value = stageAt(STAGE.bare, s);
       trunkUniforms.uMossAmt.value = stageAt(STAGE.moss, s);
+      // ---- stage 5 常桜 Everblossom -----------------------------------
+      canopyUniforms.uAurora.value = stageAt(STAGE.aurora, s);
+      canopyUniforms.uIsland.value = stageAt(STAGE.island, s);
+      const sh = stageAt(STAGE.shafts, s);
+      shaftUniforms.uShafts.value = sh * 1.05;
+      // one draw call, but there is no reason to pay for it below stage 4
+      shaftInst.visible = sh > 0.004;
     }
     writeStage(stageT);
 
@@ -1139,6 +1418,28 @@ export default {
           stage = s; stageTarget = s; stageT = s; writeStage(s);
         };
       }
+      /* ---- violet-canopy A/B rig ----------------------------------------
+       * `tree-violet-old` restores the exact pre-fix chain (full library shadow
+       * tint, no hue guard) so the before/after can be measured from ONE build
+       * with one --scenario flag, which is the only thing shot.mjs accepts. The
+       * three `-t1 / -g0 / -w0` variants isolate the terms one at a time. */
+      sc['tree-violet-old'] = () => {
+        canopyUniforms.uShTint.value = 1.0;
+        canopyUniforms.uShFloor.value = 0.045;
+        canopyUniforms.uHueGuard.value = 0.0;
+        canopyUniforms.uDeepWalk.value = 0.0;
+        canopyUniforms.uDeepValue.value = 0.74;
+      };
+      sc['tree-violet-t1'] = () => { canopyUniforms.uShTint.value = 1.0; };
+      sc['tree-lock0'] = () => { canopyUniforms.uChromaFix.value = 0; canopyUniforms.uChromaDeep.value = 0; };
+      sc['tree-g40'] = () => { canopyUniforms.uHueGuard.value = 0.40; };
+      // stage 5 feature isolation: crank one term so it can be confirmed present
+      sc['tree-shafts-max'] = () => { stage = 5; stageTarget = 5; stageT = 5; writeStage(5); shaftUniforms.uShafts.value = 4.0; shaftInst.visible = true; };
+      sc['tree-s5-noextra'] = () => { stage = 5; stageTarget = 5; stageT = 5; writeStage(5); shaftUniforms.uShafts.value = 0; shaftInst.visible = false; canopyUniforms.uAurora.value = 0; canopyUniforms.uIsland.value = 0; };
+      sc['tree-g65'] = () => { canopyUniforms.uHueGuard.value = 0.65; };
+      sc['tree-lock-hi'] = () => { canopyUniforms.uChromaFix.value = 0.55; canopyUniforms.uChromaDeep.value = 0.30; };
+      sc['tree-violet-g0'] = () => { canopyUniforms.uHueGuard.value = 0.0; };
+      sc['tree-violet-w0'] = () => { canopyUniforms.uDeepWalk.value = 0.0; };
       sc.treeCalm = () => { WIND.uniforms.uWindStrength.value = 0.25; };
       sc.treeGust = () => { WIND.uniforms.uWindStrength.value = 1.9; };
       // Judging tree GEOMETRY through a heavy depth-of-field is guesswork, so
@@ -1184,6 +1485,7 @@ export default {
       dispose() {
         woodGeo.dispose();
         cardGeo.dispose();
+        shaftGeo.dispose(); shaftMat.dispose();
         trunkMat.dispose(); trunkDepthMat.dispose();
         canopyMat.dispose(); canopyDepthMat.dispose();
         bark.dispose(); atlas.dispose();

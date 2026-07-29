@@ -482,6 +482,7 @@ export default {
     atmosPass.uniforms.uRayFalloff.value = new THREE.Vector4(0.02, 0.24, 2.50, 6.00);
     atmosPass.uniforms.uRayDamp.value = new THREE.Vector2(0.85, 0.55);
     atmosPass.uniforms.uRayStruct.value = new THREE.Vector2(0.22, 4.0);
+    atmosPass.uniforms.uRayContrast.value = new THREE.Vector2(0, 1);
     atmosPass.uniforms.uAspect.value = W / H;
 
     focusPass.uniforms.tPrev.value = focusRT[0].texture;
@@ -548,7 +549,7 @@ export default {
         // which is exactly what the critic measured. strength and shape are the two
         // knobs that convert ray-buffer contrast into display contrast; the struct
         // floor is what was throwing it away.
-        strength: 1.30, duskBoost: 1.15, density: 0.92, decay: 0.985, shape: 3.0,
+        strength: 0.95, duskBoost: 1.15, density: 0.92, decay: 0.985, shape: 3.0,
         // (linear-HDR luma where the add starts being damped, damping amount).
         // Damping starts later and takes less: at dusk the destination beside the
         // sun is a peach sky at luma 0.4-0.7, so a 0.85 damp starting at 0.25 was
@@ -561,6 +562,14 @@ export default {
         // 1.6:1). 0.09 with a higher gain keeps full weight wherever the field
         // genuinely has cross-ray structure and roughly halves the wash.
         struct: new THREE.Vector2(0.09, 10.0),
+        // MULTIPLICATIVE cross-ray contrast (gain, perpendicular-baseline width
+        // scale). This is the term that finally made the shafts visible, and the
+        // reason the previous three rounds could not: `strength` and `damp` only
+        // ever ADD, and the ray buffer only carries signal where the march can see
+        // bright sky — i.e. precisely the region `damp` was built to protect from
+        // clipping. Measured, dusk/hero, shafts.mjs on the (rays - no-rays) delta,
+        // arc peaks at >= 0.10 L prominence over four radii: see the ROUND 4 log.
+        contrast: 1.50, contrastWidth: 6.0,
         // `threshold` is the linear-HDR luma at which sky counts as a full-strength
         // shaft source, and `floor` how much a dimmer patch of visible sky still
         // seeds. Measured with pipeline.sample('scene', u, v): the sky right beside
@@ -837,6 +846,8 @@ export default {
     let sunOverride = false;
     /** debug: bypass the temporal resolve (the per-frame enable is recomputed) */
     let taaOff = false;
+    /** debug: ATMOS outputs the god-ray contribution ALONE, over black */
+    let raySolo = 0;
 
     function findSunLight() {
       const rig = ctx.assets?.lightRig?.sun;
@@ -895,6 +906,8 @@ export default {
 
     /** 1 when the radial origin is the ANTISOLAR point, 0 when it is the sun. */
     let rayAnti = 0;
+    /** the ray gates (behind / off-frame / night / phase) WITHOUT rays.strength. */
+    let rayGate = 0;
     const rayDirV = new THREE.Vector3();
 
     /**
@@ -944,40 +957,77 @@ export default {
       rayDirV.copy(sunDir).multiplyScalar(rayAnti > 0.5 ? -1 : 1);
       const facing = rayAnti > 0.5 ? -sunFacing : sunFacing;
 
-      // Screen position from the ANGLE, not from a perspective divide. A source a
-      // few degrees off the frustum plane divides by a near-zero w and lands
-      // hundreds of NDC units away, which is why a projection-based gate deletes
-      // the shafts in every preset. Angle / half-diagonal-FOV is well behaved
-      // everywhere: 0 at the view axis, 1.0 exactly at the frame corner, and it
-      // grows linearly past that.
+      // Screen position. MEASURED against ground truth (project a point 5000 units
+      // along uSunDir through the real camera matrix — .tmp-postfx/p-sunproj.js):
+      // the previous ANGLE-based estimate, `angle / halfDiagFov` along the
+      // view-space lateral direction, was wrong in two independent ways, and the
+      // error is what stopped the shafts radiating from the right place.
+      //   (1) it used the raw view-space (x, y) as the screen direction, but three's
+      //       projection divides x by tan(fov/2)*ASPECT and y by tan(fov/2) — so on
+      //       a 16:9 frame every horizontal offset came out 1.78x too large
+      //       relative to the vertical one, i.e. the shaft direction was skewed.
+      //   (2) `angle / halfDiag` maps the frame CORNER to a UV distance of 0.5,
+      //       which is the frame EDGE, so the whole estimate sat ~30% too close to
+      //       the centre. Measured on hero/dusk: estimate (0.975, 0.700) against a
+      //       true (1.049, 0.914) — a 0.21 UV error, ~14 degrees of shaft rotation.
+      // So project properly, and handle the two failure modes a perspective divide
+      // has explicitly instead of avoiding it: a source near the frustum plane
+      // divides by ~0 (radius clamp below), and one behind the camera flips sign
+      // (the `z > eps` branch).
       tmpV.copy(rayDirV).transformDirection(cam.matrixWorldInverse);   // view space
       const fovR = THREE.MathUtils.degToRad(cam.fov) * 0.5;
-      const halfDiag = Math.atan(Math.tan(fovR) * Math.hypot(cam.aspect, 1));
-      const rrRaw = Math.acos(THREE.MathUtils.clamp(facing, -1, 1)) / Math.max(halfDiag, 1e-4);
-      const len = Math.hypot(tmpV.x, tmpV.y);
-      const ux = len > 1e-6 ? tmpV.x / len : 0;
-      const uy = len > 1e-6 ? tmpV.y / len : 1;
-      const rr = Math.min(rrRaw, 2.2);          // keep the origin near the border
+      const tanY = Math.tan(fovR);
+      const tanX = tanY * cam.aspect;
+      const halfDiag = Math.atan(tanY * Math.hypot(cam.aspect, 1));
+      const z = -tmpV.z;                 // view space looks down -Z
+      let nx, ny;
+      if (z > 1e-3) {
+        nx = (tmpV.x / z) / tanX;        // NDC, 1.0 = frame edge on that axis
+        ny = (tmpV.y / z) / tanY;
+      } else {
+        // behind / on the frustum plane: direction only, parked well outside
+        const lat = Math.hypot(tmpV.x / tanX, tmpV.y / tanY) || 1;
+        nx = (tmpV.x / tanX) / lat * 9.0;
+        ny = (tmpV.y / tanY) / lat * 9.0;
+      }
+      // 1.0 = exactly the frame corner, matching what the old rrRaw claimed to mean.
+      const rNdc = Math.hypot(nx, ny);
+      const rrRaw = rNdc / Math.SQRT2;
+      // Pull the ORIGIN back toward the border without rotating it: the march has to
+      // reach the source, and a source 20 frames away makes `delta` per tap so large
+      // that the 64-tap march samples nothing but the sun's own blob.
+      const rMax = 2.6;
+      const k = rNdc > rMax ? rMax / rNdc : 1;
       sunUV.set(
-        THREE.MathUtils.clamp(ux * rr * 0.5 + 0.5, -0.6, 1.6),
-        THREE.MathUtils.clamp(uy * rr * 0.5 + 0.5, -0.6, 1.6),
+        THREE.MathUtils.clamp(nx * k * 0.5 + 0.5, -0.8, 1.8),
+        THREE.MathUtils.clamp(ny * k * 0.5 + 0.5, -0.8, 1.8),
       );
 
       // How far outside the frame the source is, in frame-corner radii.
       sunOutside = Math.max(0, rrRaw - 1);
-      const offFrame = 1 - THREE.MathUtils.smoothstep(rrRaw, 1.0, 3.4);
+      // Wider than the old (1.0, 3.4): rrRaw is now a true projected radius, which
+      // grows much faster than the angular estimate it replaces (hero/day measures
+      // 2.12 against the old 1.32 for the same sun), so the same window would have
+      // silently halved the daylight shafts.
+      const offFrame = 1 - THREE.MathUtils.smoothstep(rrRaw, 1.2, 5.0);
       // fully behind the ORIGIN still kills them, but a raking side key does not
       const behind = THREE.MathUtils.smoothstep(facing, -0.30, 0.12);
       const lowSun = THREE.MathUtils.smoothstep(-sunDir.y, -0.62, -0.03);   // 1 near the horizon
       lastLowSun = lowSun;
       const nightFade = 1 - 0.78 * night;
-      let s = params.rays.strength * behind * offFrame * nightFade
+      let g = behind * offFrame * nightFade
             * (1 + (params.rays.duskBoost - 1) * lowSun);
       // Converging shafts are a subtler phenomenon than radiating ones and their
       // source is the dim half of the sky, so they get their own scale rather than
       // borrowing the sun-side number.
-      s *= 1 + (params.rays.antiScale - 1) * rayAnti;
-      if (night > 0.62) s *= 0.42;
+      g *= 1 + (params.rays.antiScale - 1) * rayAnti;
+      if (night > 0.62) g *= 0.42;
+      // The gate alone, WITHOUT params.rays.strength — the ATMOS contrast term is a
+      // relative modulation and must not be scaled by the additive term's amplitude,
+      // but it does have to disappear with the same gates (behind camera, off frame,
+      // night) or a switched-off pass would still be printing bands on the sky.
+      rayGate = Math.max(0, g);
+      const s = params.rays.strength * g;
       // The bloom sun-disc boost needs the REAL sun genuinely on screen — it hazes
       // the sky around the source, and the antisolar point contains no source.
       const sunRR = Math.acos(THREE.MathUtils.clamp(sunFacing, -1, 1)) / Math.max(halfDiag, 1e-4);
@@ -1112,6 +1162,9 @@ export default {
       atmosPass.uniforms.uRayFalloff.value.copy(params.rays.falloff);
       atmosPass.uniforms.uRayDamp.value.copy(params.rays.damp);
       atmosPass.uniforms.uRayStruct.value.copy(params.rays.struct);
+      atmosPass.uniforms.uRayContrast.value.set(
+        useRays ? params.rays.contrast * rayGate : 0, params.rays.contrastWidth);
+      atmosPass.uniforms.uRaySolo.value = raySolo;
       // Shafts are tinted to the key. At dusk that is #FF9E5E; the published
       // uSunColor already carries the phase, so we only push it further toward the
       // warm end as the sun drops, so the shafts never read as a neutral wash.
@@ -1368,6 +1421,8 @@ export default {
           sunUV: { x: sunUV.x, y: sunUV.y },
           sunOutside,
           rayAnti,
+          rayGate,
+          rayContrast: atmosPass.uniforms.uRayContrast.value.x,
           bloomSunVisible,
           bloomWeightSum: bloomPass.weightSum(),
           bloomStrength: bloomPass.strength / bloomPass.weightSum(),
@@ -1461,6 +1516,23 @@ export default {
         window.__game.scenarios[`postfx-${ph}-rays-view`] = chain(ph, 'postfx-view-rays');
         window.__game.scenarios[`postfx-${ph}-plain`] = chain(ph);
       }
+      // The two scenarios that answer "do the god rays render at all", in isolation:
+      //   postfx-rays-buffer — the raw quarter-res shaft buffer straight to screen
+      //                        (`r` after the march, before any windowing/tinting)
+      //   postfx-rays-solo   — what ATMOS actually ADDS to the frame: the tinted
+      //                        additive term plus the positive half of the contrast
+      //                        modulation, over black, with every window, structure
+      //                        gate and headroom damp applied. If this frame is
+      //                        black, the pass is contributing nothing.
+      window.__game.scenarios['postfx-rays-buffer'] = view(() => raysRT.texture);
+      window.__game.scenarios['postfx-rays-solo'] = () => { raySolo = 1; };
+      for (const ph of ['dawn', 'day', 'golden', 'dusk', 'night']) {
+        window.__game.scenarios[`postfx-${ph}-rays-buffer`] = chain(ph, 'postfx-rays-buffer');
+        window.__game.scenarios[`postfx-${ph}-rays-solo`] = chain(ph, 'postfx-rays-solo');
+        window.__game.scenarios[`postfx-${ph}-no-contrast`] =
+          chain(ph, 'postfx-no-ray-contrast');
+      }
+      window.__game.scenarios['postfx-no-ray-contrast'] = () => { params.rays.contrast = 0; };
       window.__game.scenarios['postfx-no-taa'] = () => { taaOff = true; };
       window.__game.scenarios['postfx-no-taa-no-grain'] = chain('postfx-no-taa', 'postfx-no-grain');
       window.__game.scenarios['postfx-sun-in-view'] = () => { sunOverride = true; };
