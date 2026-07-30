@@ -62,6 +62,14 @@ const H = Number(arg('h', 1080));
 const ROOT = path.resolve(import.meta.dirname, '..');
 const KEEP = has('keep-frames');
 const CRF = String(arg('crf', 18));
+/** --master produces a high-quality DELIVERY MASTER, not a social-ready file:
+ *  near-transparent video and 320k audio, intended to be compressed later by hand.
+ *  Squeezing at capture time is what made the first demo look soft. */
+const MASTER = has('master');
+/** --lossless is mathematically lossless video + PCM audio in an MKV. Huge. Use
+ *  when the master will be re-graded or re-encoded several times. */
+const LOSSLESS = has('lossless');
+const ABR = String(arg('audio-bitrate', MASTER ? '320k' : '192k'));
 
 const sb = await import(pathToFileURL(SB_PATH).href);
 const FPS = Number(arg('fps', sb.fps ?? 30));
@@ -104,6 +112,15 @@ try {
   await page.goto(`${base}?shot=1&q=${QUALITY}`, { waitUntil: 'domcontentloaded', timeout: 120000 });
   await page.waitForFunction('window.__READY !== undefined', { timeout: 120000, polling: 100 });
   await page.evaluate((ui) => window.__game.setUI(ui), UI);
+
+  // Capture mode: we ARE in shot mode (fixed timestep, deterministic) but we want
+  // the transient DOM feedback that shot mode normally suppresses — the floating
+  // petal-gain numbers that fly to the HUD counter. Modules should treat
+  // `window.__CAPTURE` as "shot mode, but render live UI feedback normally":
+  //   const suppress = ctx.shotMode && !window.__CAPTURE;
+  // Without this the gameplay shot has no visible click reward, which is the whole
+  // point of showing the game being played.
+  await page.evaluate(() => { window.__CAPTURE = true; });
 
   // install the storyboard
   if (sb.pageScript) await page.evaluate(sb.pageScript);
@@ -171,19 +188,40 @@ function run(cmd, args) {
   });
 }
 
-const mp4 = OUT + '.mp4';
+const ext = LOSSLESS ? '.mkv' : '.mp4';
+const outFile = OUT + ext;
 const vf = 'scale=trunc(iw/2)*2:trunc(ih/2)*2';
 const common = ['-y', '-framerate', String(FPS), '-i', path.join(FRAMES, '%05d.png')];
-const venc = ['-vf', vf, '-c:v', 'libx264', '-preset', 'slow', '-crf', CRF,
-  '-pix_fmt', 'yuv420p', '-movflags', '+faststart', '-r', String(FPS)];
 
-if (wavPath) {
-  await run('ffmpeg', [...common, '-i', wavPath, ...venc,
-    '-c:a', 'aac', '-b:a', '192k', '-shortest', mp4]);
+let venc;
+if (LOSSLESS) {
+  // qp 0 = mathematically lossless. yuv444p so chroma is not subsampled either.
+  venc = ['-vf', vf, '-c:v', 'libx264', '-preset', 'veryfast', '-qp', '0',
+    '-pix_fmt', 'yuv444p', '-r', String(FPS)];
+} else if (MASTER) {
+  // Near-transparent master. crf 12 + veryslow + a high bitrate ceiling so the
+  // petal-heavy shots keep their detail instead of being the first thing crushed.
+  venc = ['-vf', vf, '-c:v', 'libx264', '-preset', 'veryslow', '-crf', '12',
+    '-pix_fmt', 'yuv420p', '-profile:v', 'high', '-level', '4.2',
+    '-movflags', '+faststart', '-r', String(FPS)];
 } else {
-  await run('ffmpeg', [...common, ...venc, mp4]);
+  venc = ['-vf', vf, '-c:v', 'libx264', '-preset', 'slow', '-crf', CRF,
+    '-pix_fmt', 'yuv420p', '-movflags', '+faststart', '-r', String(FPS)];
 }
 
+// IMPORTANT: never apply loudness gain here. The first demo was boosted +2.5 dB on
+// top of an already-hot render and read as harsh. The mix should leave this tool at
+// exactly the level the game plays at; normalise later, deliberately, if a platform
+// needs it.
+const aenc = LOSSLESS ? ['-c:a', 'pcm_s16le'] : ['-c:a', 'aac', '-b:a', ABR];
+
+if (wavPath) await run('ffmpeg', [...common, '-i', wavPath, ...venc, ...aenc, '-shortest', outFile]);
+else await run('ffmpeg', [...common, ...venc, outFile]);
+
 if (!KEEP) await rm(FRAMES, { recursive: true, force: true });
-const size = (await readFile(mp4)).length;
-log(`ok -> ${mp4}  (${(size / 1e6).toFixed(2)} MB, ${DURATION}s, ${FPS}fps${wavPath ? ', with audio' : ', silent'})`);
+const size = (await readFile(outFile)).length;
+log(`ok -> ${outFile}  (${(size / 1e6).toFixed(2)} MB, ${DURATION}s, ${FPS}fps, ` +
+  `${LOSSLESS ? 'LOSSLESS' : MASTER ? 'MASTER crf12' : 'crf' + CRF}` +
+  `${wavPath ? `, audio ${LOSSLESS ? 'pcm' : ABR}` : ', silent'})`);
+if (wavPath) log(`     wav kept alongside -> ${wavPath} (remux from this, do not re-gain)`);
+if (KEEP) log(`     frames kept -> ${FRAMES}`);
