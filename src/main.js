@@ -1,6 +1,7 @@
 import * as THREE from 'three';
 import { createCtx } from './core/ctx.js';
 import { applyPreset } from './core/cameras.js';
+import { inject } from '@vercel/analytics';
 
 /* ------------------------------------------------------------------ *
  * Module auto-registry.
@@ -13,6 +14,9 @@ const ctx = createCtx();
 window.__ctx = ctx;
 const errors = [];
 window.__errors = errors;
+
+// Initialize Vercel Web Analytics
+inject();
 
 const descriptors = Object.entries(found)
   .map(([path, mod]) => {
