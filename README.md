@@ -4,6 +4,8 @@ An incremental idle game about growing one ancient cherry tree, rendered in Thre
 anime-styled non-photorealistic shading. Click the tree to shake petals loose, hire spirits to
 gather them, and carry the tree from a bare winter bud to the Everblossom.
 
+**▶ Play it in your browser: [sakura-idle.vercel.app](https://sakura-idle.vercel.app)**
+
 **Everything you see is generated in code.** No textures, no models, no HDRIs, no audio files, no
 fonts, no network requests at runtime. The bark, the blossom atlas, the grass, the stone, the
 water, the clouds, the UI filigree and the music are all procedural.
