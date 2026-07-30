@@ -55,6 +55,8 @@ Then open the printed URL. `Space` shakes the tree, `1`–`9` buy Tenders, `Esc`
 
 ## How it was built
 
+It all started with one single [prompt](prompt.md), Claude Code + Opus 5 did the rest.
+
 This was built by a fleet of Claude subagents under an orchestrator, and the repo keeps the
 scaffolding that made that work:
 
