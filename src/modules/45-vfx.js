@@ -17,10 +17,24 @@ import {
  * vertex shader — no CPU work and no allocation per frame.
  *
  * Screen-space elements (floating gain numbers, crit flash, stage-up wash) live
- * in their own DOM layer `#vfx-layer`, deliberately OUTSIDE `#ui-root` so 65-ui
- * owns that subtree exclusively. The layer mirrors #ui-root's display so
- * `--ui 0` hides both, and in shot mode it is never created unless a debug
- * scenario asks for it.
+ * in their own DOM layers, deliberately OUTSIDE `#ui-root` so 65-ui owns that
+ * subtree exclusively. There are two, because they need to sit on opposite sides
+ * of the HUD in the z stack:
+ *   #vfx-layer    z 9  — the full-screen wash and the calm vignette, UNDER the
+ *                        HUD plate so a stage-up flash never bleaches the ink.
+ *   #vfx-numbers  z 11 — the floating gain numbers, OVER the HUD plate, because
+ *                        they fly INTO the bank counter and would otherwise be
+ *                        clipped by the parchment on the last fifth of the arc.
+ * Both mirror #ui-root's display so `--ui 0` hides everything.
+ *
+ * SHOT MODE vs CAPTURE MODE. Neither layer is created in shot mode (a screenshot
+ * must not catch a half-faded number) unless a debug scenario asks for it — with
+ * one exception: `window.__CAPTURE`, set by tools/capture.mjs, means "we are in
+ * deterministic shot mode but live DOM feedback should render normally". Video
+ * needs the click reward on camera; a still frame does not. See `suppressDom()`.
+ * Everything the numbers animate from is the SIMULATION clock (`fxTime`, fed by
+ * update(dt)), never Date.now() — under capture the page advances by one fixed
+ * 1/30 s step per frame, so a wall-clock animation would freeze at a fixed age.
  *
  * Published:
  *   ctx.assets.vfx = {
@@ -339,7 +353,10 @@ export default {
       hudCache.at = fxTime;
       let el = null;
       try {
-        el = document.querySelector('#ui-root [data-hud-anchor], #ui-root .sk-bank');
+        // `.sk-bank-val` first: the gain flies to the TOTAL, so it should land on
+        // the digits themselves, not on the centre of the whole bank block (which
+        // sits a row and a half lower, under the rate/shake/crit line).
+        el = document.querySelector('#ui-root [data-hud-anchor], #ui-root .sk-bank-val, #ui-root .sk-bank');
       } catch { /* selector unsupported */ }
       const rc = el?.getBoundingClientRect?.();
       if (rc && rc.width > 0) { hudCache.x = rc.left + rc.width * 0.5; hudCache.y = rc.top + rc.height * 0.5; }
@@ -347,10 +364,23 @@ export default {
       return hudCache;
     }
 
+    /**
+     * True when transient DOM feedback must be withheld. A still screenshot must
+     * never catch a number mid-flight, so shot mode drops the layer entirely —
+     * but a VIDEO capture is shot mode too, and there the click reward is the
+     * whole point. tools/capture.mjs sets `window.__CAPTURE` to say so.
+     */
+    /** Read live, never cached: capture.mjs sets the flag AFTER boot. */
+    const captureMode = () => typeof window !== 'undefined' && !!window.__CAPTURE;
+    function suppressDom() {
+      if (!ctx.shotMode || domForced) return false;
+      return !captureMode();
+    }
+
     function ensureDom() {
       if (dom) return dom;
       if (typeof document === 'undefined') return null;
-      if (ctx.shotMode && !domForced) return null;
+      if (suppressDom()) return null;
       const el = document.createElement('div');
       el.id = 'vfx-layer';
       el.style.cssText = 'position:fixed;inset:0;pointer-events:none;z-index:9;' +
@@ -371,18 +401,39 @@ export default {
         'background:radial-gradient(52% 52% at 50% 50%,' +
         'rgba(38,22,30,0) 58%,rgba(34,20,28,.46) 86%,rgba(26,14,22,.80) 100%)';
       el.appendChild(vig);
+      // Numbers get their own layer ABOVE #ui-root (z 11 vs the HUD's 10): they
+      // fly into the bank counter, and at z 9 the last fifth of every arc
+      // vanished behind the opaque parchment plate instead of landing on it.
+      const nums = document.createElement('div');
+      nums.id = 'vfx-numbers';
+      nums.style.cssText = 'position:fixed;inset:0;pointer-events:none;z-index:11;' +
+        'overflow:hidden;contain:layout paint';
       for (let i = 0; i < B.numbers; i++) {
         const s = document.createElement('div');
+        // clamp() rather than a fixed px so a 1440p master and a 720p test clip
+        // read the same; tabular-nums so a counting digit never jitters the width
         s.style.cssText = 'position:absolute;left:0;top:0;opacity:0;white-space:nowrap;' +
-          'transform-origin:50% 50%;' +
-          'font:600 23px/1 "Hiragino Mincho ProN","Songti SC",Georgia,serif;' +
+          'transform-origin:50% 50%;text-align:center;' +
+          'font:600 clamp(21px,2.4vh,34px)/1 "Hiragino Mincho ProN","Songti SC",Georgia,serif;' +
           'letter-spacing:.03em;font-variant-numeric:tabular-nums;' +
           'transform:translate3d(-9999px,-9999px,0)';
-        el.appendChild(s);
-        NUM.push({ el: s, active: false, t0: 0, dur: 1, x0: 0, y0: 0, x1: 0, y1: 0, cx: 0, cy: 0, scale: 1 });
+        // Two children so a crit can be labelled without re-parsing innerHTML on
+        // every spawn: a tag line above (hidden for ordinary gains) and the value.
+        const tag = document.createElement('div');
+        tag.textContent = 'CRIT';
+        tag.style.cssText = 'display:none;font-size:.46em;font-weight:700;' +
+          'letter-spacing:.34em;text-indent:.34em;margin-bottom:.18em;color:#FFD98A';
+        const val = document.createElement('div');
+        s.append(tag, val);
+        nums.appendChild(s);
+        NUM.push({
+          el: s, tag, val, active: false, t0: 0, dur: 1,
+          x0: 0, y0: 0, x1: 0, y1: 0, cx: 0, cy: 0, scale: 1, crit: false,
+        });
       }
       document.body.appendChild(el);
-      dom = { el, flash, vig };
+      document.body.appendChild(nums);
+      dom = { el, nums, flash, vig };
       return dom;
     }
 
@@ -415,20 +466,29 @@ export default {
       const ua = resolveHud(w, h);
       const hx = ua.x, hy = ua.y;
       slot.active = true;
-      slot.t0 = fxTime;
+      slot.t0 = fxTime;                  // SIM clock — see the module header
       slot.dur = crit ? 1.5 : 1.1;
+      slot.crit = crit;
       slot.x0 = sx + (r() - 0.5) * 26;
       slot.y0 = sy + (r() - 0.5) * 18;
       slot.x1 = hx; slot.y1 = hy;
+      // Quadratic-bezier control point: pulled toward the HUD and lifted above
+      // both ends, so the gain leaves the branch on an upward curve and comes
+      // DOWN into the counter. A straight lerp reads as a UI tooltip.
+      // The lift is clamped into the viewport: the bank plate sits ~40 px from
+      // the top, so an unclamped 150 px lift put the control point ABOVE the
+      // frame and the whole apex of the arc — the most legible part of it — was
+      // cropped by the top edge. Measured at 720p: apex y went from -12 to 109.
       slot.cx = slot.x0 * 0.55 + hx * 0.45 + (r() - 0.5) * 60;
-      slot.cy = Math.min(slot.y0, hy) - (crit ? 150 : 92);
+      slot.cy = Math.max(h * 0.045, Math.min(slot.y0, hy) - (crit ? 150 : 92));
       // With the kick gone the number carries more of the punch (brief §3).
-      slot.scale = (crit ? 1.6 : 1) * (SETTINGS.motion.shake ? 1 : 1.16);
-      slot.el.textContent = o.text ?? ('+' + fmt(amount));
-      slot.el.style.color = crit ? '#FFF3CF' : '#FFEAF2';
+      slot.scale = (crit ? 1.75 : 1) * (SETTINGS.motion.shake ? 1 : 1.16);
+      slot.val.textContent = o.text ?? ('+' + fmt(amount));
+      slot.tag.style.display = crit && !o.text ? 'block' : 'none';
+      slot.el.style.color = crit ? '#FFF6DA' : '#FFEAF2';
       slot.el.style.fontWeight = crit ? '700' : '600';
       slot.el.style.textShadow = crit
-        ? '0 0 12px rgba(255,206,110,.95),0 0 32px rgba(255,168,60,.6),0 2px 0 rgba(74,64,52,.8)'
+        ? '0 0 14px rgba(255,214,126,.98),0 0 40px rgba(255,168,60,.72),0 2px 0 rgba(74,64,52,.85)'
         : '0 0 9px rgba(255,178,206,.85),0 2px 0 rgba(74,64,52,.7)';
     }
 
@@ -771,10 +831,15 @@ export default {
 
     function updateNumbers() {
       if (!dom) return;
+      // `holdNumbers` pins every number at one phase so a STILL can be composed.
+      // Under video capture that would be the v1 bug — numbers frozen at a fixed
+      // age — so a storyboard that pokes a vfx-* scenario for its rings still gets
+      // moving numbers.
+      const hold = holdNumbers >= 0 && !captureMode() ? holdNumbers : -1;
       for (let i = 0; i < NUM.length; i++) {
         const n = NUM[i];
         if (!n.active) continue;
-        const t = holdNumbers >= 0 ? holdNumbers : (fxTime - n.t0) / n.dur;
+        const t = hold >= 0 ? hold : (fxTime - n.t0) / n.dur;
         if (t >= 1) {
           n.active = false;
           n.el.style.opacity = '0';
@@ -785,11 +850,19 @@ export default {
         const iv = 1 - e;
         const x = iv * iv * n.x0 + 2 * iv * e * n.cx + e * e * n.x1;
         const y = iv * iv * n.y0 + 2 * iv * e * n.cy + e * e * n.y1;
-        const s = n.scale * (0.55 + 0.65 * Math.min(1, t * 6) - 0.30 * e);
+        // Birth pop, then shrink into the counter so the arrival reads as the
+        // gain being absorbed by the total rather than as a label switching off.
+        // A crit gets a visible overshoot on top of its larger base scale.
+        const born = Math.min(1, t * 6);
+        const pop = n.crit ? 0.22 * Math.sin(Math.PI * Math.min(1, t * 3.2)) : 0;
+        const s = n.scale * (0.55 + 0.65 * born + pop - 0.42 * e);
         const fade = t < 0.62 ? 1 : 1 - Math.pow((t - 0.62) / 0.38, 1.6);
         const o = Math.min(1, t * 8) * Math.max(0, fade);
         n.el.style.opacity = o.toFixed(3);
-        n.el.style.transform = `translate3d(${x.toFixed(1)}px,${y.toFixed(1)}px,0) scale(${s.toFixed(3)})`;
+        // trailing translate(-50%,-50%) centres the glyphs ON the arc point (it
+        // is inside the scale, so it stays centred as the number grows/shrinks)
+        n.el.style.transform = `translate3d(${x.toFixed(1)}px,${y.toFixed(1)}px,0) ` +
+          `scale(${s.toFixed(3)}) translate(-50%,-50%)`;
       }
     }
 
@@ -834,6 +907,7 @@ export default {
           if ((domSync++ & 15) === 0 && uiRoot) {
             const want = uiRoot.style.display === 'none' ? 'none' : '';
             if (dom.el.style.display !== want) dom.el.style.display = want;
+            if (dom.nums.style.display !== want) dom.nums.style.display = want;
           }
           updateNumbers();
           if (flashA > 0.001) {
@@ -859,6 +933,7 @@ export default {
         const i = ctx.clickTargets.indexOf(goldMesh);
         if (i >= 0) ctx.clickTargets.splice(i, 1);
         dom?.el.remove();
+        dom?.nums.remove();
         ctx.assets.vfx = null;
       },
     };
