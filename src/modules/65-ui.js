@@ -21,6 +21,7 @@ import {
   makeTicker, panel, bar, stars, corners, goldBtn,
   buyBtn, segmented, stageCapsule, rarityOf, groupRule, sealedRow,
   slider, toggleRow, groupHead, noteBox,
+  focusables, focusIt, uid,
 } from '../lib/ui-widgets.js';
 
 const SVGNS = 'http://www.w3.org/2000/svg';
@@ -43,6 +44,27 @@ const PHASE_META = {
   dusk: { kanji: '夕', name: 'DUSK', note: '黄金時 +15%' },
   night: { kanji: '夜', name: 'NIGHT', note: '満月 +25%' },
 };
+/**
+ * Keyboard map — the whole of it, in one place, so a new binding cannot quietly
+ * collide with an old one.
+ *
+ * Owned by 60-game.js:  Space (shake the bough), 1–9 / 0 (buy Tender n).
+ * Owned here:           Esc (close / back), S or , (settings), [ and ] (cycle panels).
+ *
+ * Tab is owned by NOBODY. It used to be bound here to cycle panels, with
+ * `preventDefault()` on a window listener — which meant the browser's own focus
+ * navigation never ran and NOTHING in this UI could be reached without a mouse,
+ * including the accessibility controls this panel exists for. Panel cycling moved
+ * to [ and ]. Do not bind Tab, Shift+Tab, or the arrow keys at window level.
+ */
+const KEY_HELP = [
+  ['Space', 'shake the bough'],
+  ['1–9', 'buy a Tender'],
+  ['S', 'these settings'],
+  ['[  ]', 'cycle panels'],
+  ['Esc', 'close'],
+  ['Tab', 'move between controls'],
+];
 const EVENT_META = {
   storm: { kanji: '花嵐', name: 'Petal Storm', desc: '×10 petals per second · the whole hillside is in the air' },
   rain: { kanji: '春雨', name: 'Spring Rain', desc: '+10% petals per second · the fall slows to a drift' },
@@ -186,9 +208,19 @@ export default {
       if (muteBtn) {
         setClass(muteBtn, 'off', !!s.muteAll);
         muteBtn.setAttribute('aria-pressed', s.muteAll ? 'true' : 'false');
-        muteBtn.setAttribute('aria-label', s.muteAll ? 'Unmute all sound' : 'Mute all sound');
+        muteBtn.setAttribute('aria-label', s.muteAll
+          ? 'Sound is off. Unmute all sound'
+          : 'Sound is on. Mute all sound');
         muteBtn.title = s.muteAll ? 'Sound is off — click to bring it back' : 'Mute all sound  音';
       }
+      /* Both states are announced, not just recoloured. One string covers both so
+         `announce`'s de-dupe means the many no-change syncs cost nothing, and
+         switching a state back OFF is spoken as clearly as switching it on. */
+      announce(
+        (s.muteAll ? 'All sound muted.' : 'Sound on.') + ' '
+        + (s.reducedMotion
+          ? 'Reduced motion on — screen shake, camera drift and flashes are held off.'
+          : 'Motion effects on.'));
 
       /* No isConnected test here: buildSoundAndMotion() paints its controls
          before they are mounted, and an isConnected check would drop the handle
@@ -230,6 +262,20 @@ export default {
     const ui = h('div.sk-ui', { style: { position: 'absolute', inset: '0' } });
     root.append(ui);
 
+    /* Polite live region. Mute and Reduce motion are the two states a player
+       flips *because something is hurting*, and both used to be reported by
+       colour alone (a dimmed slider, a gold capsule). Say them out loud. */
+    const liveEl = h('div.sk-sr', { role: 'status', 'aria-live': 'polite', 'aria-atomic': 'true' });
+    ui.append(liveEl);
+    let lastSaid = '';
+    function announce(msg) {
+      if (!msg || msg === lastSaid) return;
+      lastSaid = msg;
+      /* clear first: identical consecutive text is not re-announced */
+      liveEl.textContent = '';
+      liveEl.textContent = msg;
+    }
+
     const elBank = h('span.sk-bank-val.num', '0');
     const elRate = h('b.num', '0.00');
     const elShake = h('b.num', '1');
@@ -243,8 +289,10 @@ export default {
     const elStageA = h('span.num', '0');
     const elStageB = h('span.num', '1,000');
 
-    const seasonChip = h('button.sk-chip.season', { onclick: () => selectTab('star'), title: 'Turn the Season' },
-      h('i'), h('span', 'SEASON READY'));
+    const seasonChip = h('button.sk-chip.season', {
+      type: 'button', onclick: () => selectTab('star'),
+      title: 'Turn the Season', 'aria-label': 'Season ready — open the Constellation',
+    }, h('i', { 'aria-hidden': 'true' }), h('span', 'SEASON READY'));
     seasonChip.style.display = 'none';
 
     /* Bloom capsule: the whole 0 → 常桜 run in log space, one tick per stage
@@ -294,13 +342,21 @@ export default {
     );
     ui.append(hud);
 
-    const shakeBtn = h('div.sk-shake', { onclick: () => doShake(), title: 'Shake the bough' },
-      h('div.tip', 'start here — the bough drops petals when you shake it'),
-      h('kbd', 'SPACE'),
+    /* A real <button>, not a div with an onclick. It is the game's primary verb;
+       a primary verb that only a mouse can press is not a verb. Enter and Space
+       come free from the element, and the gate on `ui` (§13) stops the Space that
+       activates it from ALSO reaching 60-game's window handler and double-shaking. */
+    const shakeBtn = h('button.sk-shake', {
+      type: 'button', onclick: () => doShake(),
+      title: 'Shake the bough  (Space)',
+      'aria-label': 'Shake the bough — Space',
+    },
+      h('div.tip', { 'aria-hidden': 'true' }, 'start here — the bough drops petals when you shake it'),
+      h('kbd', { 'aria-hidden': 'true' }, 'SPACE'),
       h('span', 'shake the bough'),
-      h('div.bar'),
+      h('div.bar', { 'aria-hidden': 'true' }),
       elShake2,
-      h('span', { style: { opacity: '.66', letterSpacing: '.16em' } }, '花びら'));
+      h('span', { style: { opacity: '.66', letterSpacing: '.16em' }, 'aria-hidden': 'true' }, '花びら'));
     ui.append(shakeBtn);
 
     /* One-click mute, bottom-left, always on screen. The full mix lives behind
@@ -313,7 +369,7 @@ export default {
       'aria-label': 'Mute all sound',
       title: 'Mute all sound  音',
       onclick: (e) => { e.stopPropagation(); SETTINGS.set('muteAll', !SETTINGS.get('muteAll')); },
-    }, h('i'));
+    }, h('i', { 'aria-hidden': 'true' }));
     ui.append(muteBtn);
 
     const goldenHint = h('div.sk-golden', h('i'), h('span', '金花弁 — catch it'));
@@ -331,16 +387,59 @@ export default {
      * 3.  Right rail + tabs
      * ============================================================== */
     const TABS = [
-      { id: 'tenders', kanji: '世', title: 'Tenders', jp: '世話' },
-      { id: 'upgrades', kanji: '強', title: 'Upgrades', jp: '強化' },
-      { id: 'codex', kanji: '図', title: 'Codex', jp: '桜図鑑' },
-      { id: 'star', kanji: '星', title: 'Constellation', jp: '星屑ノ樹' },
-      { id: 'set', kanji: '設', title: 'Settings', jp: '設定' },
+      { id: 'tenders', kanji: '世', title: 'Tenders', jp: '世話', key: null },
+      { id: 'upgrades', kanji: '強', title: 'Upgrades', jp: '強化', key: null },
+      { id: 'codex', kanji: '図', title: 'Codex', jp: '桜図鑑', key: null },
+      { id: 'star', kanji: '星', title: 'Constellation', jp: '星屑ノ樹', key: null },
+      { id: 'set', kanji: '設', title: 'Settings', jp: '設定', key: 'S' },
     ];
+    const TAB_ORDER = TABS.map((t) => t.id);
     const tabEls = new Map();
-    const tabStrip = h('div.sk-tabs');
+    /**
+     * A real ARIA tablist, vertical, with the roving-tabindex pattern: ONE tab
+     * stop for the whole rail, and Up/Down (or Left/Right, forgivingly) move
+     * between the five tabs, Home/End jump to the ends, Enter/Space open.
+     *
+     * Each tab is a `<button>`, so activation is the browser's job, not ours.
+     * The kanji is the visible glyph but a useless accessible name, hence the
+     * explicit aria-label on every one.
+     */
+    const tabStrip = h('div.sk-tabs', {
+      role: 'tablist', 'aria-label': 'Grove panels', 'aria-orientation': 'vertical',
+    });
+    function railKey(e) {
+      let d = 0;
+      switch (e.key) {
+        case 'ArrowDown': case 'ArrowRight': d = 1; break;
+        case 'ArrowUp': case 'ArrowLeft': d = -1; break;
+        case 'Home': d = -99; break;
+        case 'End': d = 99; break;
+        default: return;
+      }
+      e.preventDefault();
+      e.stopPropagation();
+      const els = TAB_ORDER.map((id) => tabEls.get(id));
+      const i = els.indexOf(document.activeElement);
+      const n = els.length;
+      const j = d === -99 ? 0 : d === 99 ? n - 1 : ((i < 0 ? 0 : i) + d + n) % n;
+      /* focus only — following focus with activation would fling the player
+         through four panels on the way to the fifth */
+      els[j].setAttribute('tabindex', '0');
+      focusIt(els[j]);
+      syncTabs();
+    }
     for (const t of TABS) {
-      const b = h('button.sk-tab', { onclick: () => selectTab(t.id, true), title: `${t.title} ${t.jp}` }, t.kanji);
+      const b = h('button.sk-tab', {
+        type: 'button',
+        role: 'tab',
+        id: 'sk-tab-' + t.id,
+        tabindex: '-1',
+        'aria-selected': 'false',
+        'aria-label': `${t.title} ${t.jp}` + (t.key ? ` — shortcut ${t.key}` : ''),
+        title: `${t.title} ${t.jp}` + (t.key ? `  (${t.key})` : ''),
+        onclick: () => selectTab(t.id, true),
+        onkeydown: railKey,
+      }, h('span', { 'aria-hidden': 'true' }, t.kanji));
       tabEls.set(t.id, b);
       tabStrip.append(b);
     }
@@ -348,10 +447,53 @@ export default {
     ui.append(h('div.sk-rail', railHost, tabStrip));
 
     let scrim = null;
-    function openModal(node, tag) {
-      closeModal();
+    /** The control that opened the current modal. Focus goes back to it on close —
+     *  landing on `<body>` after Esc means a keyboard player has to start their
+     *  whole Tab journey again. */
+    let modalOpener = null;
+
+    /**
+     * Tab must cycle INSIDE an open dialog and never fall through to the 3D
+     * canvas behind it. This wraps at both ends rather than blocking Tab, so the
+     * browser's own chrome (address bar, F6, Ctrl-Tab) stays reachable — a trap
+     * that eats every Tab is its own accessibility failure.
+     */
+    function trapTab(e) {
+      if (e.key !== 'Tab' || !scrim) return;
+      const list = focusables(scrim);
+      if (!list.length) { e.preventDefault(); return; }
+      const first = list[0], last = list[list.length - 1];
+      const a = document.activeElement;
+      if (!scrim.contains(a)) { e.preventDefault(); focusIt(e.shiftKey ? last : first); return; }
+      /* the dialog SHELL holds focus on open (tabindex="-1", so it is not in
+         `list`). Forward Tab from there falls into `first` by itself, but
+         Shift+Tab would walk backwards straight out of the dialog — measured. */
+      const onShell = !list.includes(a);
+      if (e.shiftKey && (a === first || onShell)) { e.preventDefault(); focusIt(last); }
+      else if (!e.shiftKey && a === last) { e.preventDefault(); focusIt(first); }
+    }
+
+    function openModal(node, tag, opts = {}) {
+      /* remember the opener BEFORE closeModal() tears the old dialog down and
+         moves focus; `rebuild` is a same-dialog refresh, which must keep it */
+      const prev = document.activeElement;
+      const keep = opts.rebuild ? modalOpener : null;
+      closeModal({ restore: false });
+      modalOpener = keep
+        ?? (prev && prev !== document.body && ui.contains(prev) && prev.isConnected ? prev : null)
+        ?? tabEls.get(tag)
+        ?? null;
+
       scrim = h('div.sk-scrim', { onclick: (e) => { if (e.target === scrim) closeModal(); } }, node);
       scrim.__tab = tag;
+      /* a modal dialog, declared as one: role + aria-modal so a screen reader
+         stops reading the HUD behind it, labelled by the panel's own title */
+      node.setAttribute('role', 'dialog');
+      node.setAttribute('aria-modal', 'true');
+      node.setAttribute('tabindex', '-1');
+      const tid = opts.titleId ?? node.__titleId;
+      if (tid) node.setAttribute('aria-labelledby', tid);
+      scrim.addEventListener('keydown', trapTab);
       ui.append(scrim);
       /* same bottom-fade cue the rail panels use — a modal list that ends in a
          sliced row reads as a clipping bug */
@@ -362,11 +504,24 @@ export default {
         markScroll(body);
       }
       syncTabs();
+      /* focus the dialog itself, not its first control: the title is then the
+         first thing announced, and Tab from here walks the panel in DOM order */
+      if (!ctx.shotMode) focusIt(node);
       return scrim;
     }
-    function closeModal() {
+
+    function closeModal({ restore = true } = {}) {
       if (!scrim) return;
+      const back = modalOpener;
+      const had = scrim.contains(document.activeElement);
+      scrim.removeEventListener('keydown', trapTab);
       scrim.remove(); scrim = null; setCtl = null;
+      if (restore) {
+        modalOpener = null;
+        /* only steal focus back if it was ours to begin with */
+        if (had && back?.isConnected) focusIt(back);
+        else if (had) focusIt(tabEls.get(activeTab) ?? tabEls.get('tenders'));
+      }
       syncTabs();
     }
 
@@ -424,7 +579,7 @@ export default {
       tenderPanel.body.append(teaser);
 
       bulkSeg = segmented([['×1', 1], ['×10', 10], ['×25', 25], ['MAX', -1]],
-        (v) => { A.setBulk(v); refresh(); });
+        (v) => { A.setBulk(v); refresh(); }, { ariaLabel: 'How many to buy at once' });
       tenderTotalEl = h('span.sk-hint.num', '');
       tenderPanel.root.append(h('div.sk-panel-foot', bulkSeg.root, tenderTotalEl));
     }
@@ -536,22 +691,40 @@ export default {
          inside an 82vh modal at any size we ship — the bottom row sat under the
          fold. See the .sk-codex block in ui-style.js for the measurements. */
       const p = panel({ title: 'SAKURA CODEX', kanji: '桜 図 鑑', cls: 'sk-modal codexw', close: closeModal });
+      p.root.__titleId = p.titleId;
       const list = A.codexViews();
-      const detail = h('div.sk-detail',
+      /* the reading pane is a live region: selecting a card by keyboard updates
+         text well away from the focus, which a screen reader would otherwise miss */
+      const detail = h('div.sk-detail', { role: 'status', 'aria-live': 'polite' },
         h('div.sk-title', { style: { fontSize: 'calc(var(--u)*1.0)' } }, '十二の桜'),
         h('div.sk-flavour', 'Twelve varieties answer to the Everblossom. Select one to read it.'));
-      const grid = h('div.sk-codex');
+      const grid = h('div.sk-codex', { role: 'list' });
       list.forEach((d, i) => {
         const r = d.rarity ?? 3;
         const found = !!(d.found ?? d.unlocked);
+        const pick = () => {
+          clear(detail).append(
+            h('div.sk-title', { style: { fontSize: 'calc(var(--u)*1.05)' } }, found ? `${d.kanji}  ${d.name}` : '？？？'),
+            h('div.sk-flavour', found ? d.desc : 'Not yet found. The grove keeps its own counsel.'));
+          card.classList.remove('flip'); void card.offsetWidth; card.classList.add('flip');
+        };
+        /* role=button + tabindex=0 rather than a real <button>: .sk-rc is an
+           aspect-ratio card with absolutely-positioned art, and reparenting it
+           into a button element loses that layout. The Enter/Space a button
+           would have given us is reimplemented below, because a collection screen
+           you can only read with a mouse is not a collection screen. */
         const card = h('div.sk-rc', {
           class: 'r' + r + (found ? '' : ' locked'),
           style: { animationDelay: (i * 35) + 'ms' },
-          onclick: () => {
-            clear(detail).append(
-              h('div.sk-title', { style: { fontSize: 'calc(var(--u)*1.05)' } }, found ? `${d.kanji}  ${d.name}` : '？？？'),
-              h('div.sk-flavour', found ? d.desc : 'Not yet found. The grove keeps its own counsel.'));
-            card.classList.remove('flip'); void card.offsetWidth; card.classList.add('flip');
+          role: 'button',
+          tabindex: '0',
+          'aria-label': found
+            ? `${d.name} ${d.kanji} — ${r} star, found`
+            : `Variety ${i + 1} of ${list.length} — undiscovered`,
+          onclick: pick,
+          onkeydown: (e) => {
+            if (e.key !== 'Enter' && e.key !== ' ' && e.key !== 'Spacebar') return;
+            e.preventDefault(); e.stopPropagation(); pick();
           },
         },
           h('div.art', { style: found && d.tint ? { color: d.tint, textShadow: `0 2px 8px rgba(0,0,0,.45), 0 0 calc(var(--u)*1.6) ${d.tint}` } : null },
@@ -565,16 +738,22 @@ export default {
 
       const achs = A.achievements();
       const got = achs.filter((a) => a.got).length;
-      const achWrap = h('div.sk-achs');
+      const achWrap = h('div.sk-achs', { role: 'list' });
       for (const a of achs) {
-        achWrap.append(h('div.sk-ach', { class: a.got ? 'got' : '', title: a.desc },
-          h('i'), h('span', a.got ? a.name : (a.secret ? '???' : a.name))));
+        /* "earned" is a gold seal visually; the word has to be in the name too */
+        achWrap.append(h('div.sk-ach', {
+          class: a.got ? 'got' : '', title: a.desc, role: 'listitem',
+          'aria-label': `${a.got ? a.name : (a.secret ? 'Secret achievement' : a.name)} — `
+            + (a.got ? 'earned' : 'not yet earned') + (a.desc ? '. ' + a.desc : ''),
+        },
+          h('i', { 'aria-hidden': 'true' }), h('span', a.got ? a.name : (a.secret ? '???' : a.name))));
       }
 
       /* Two views behind a segmented control. Stacked, the 48-row achievement
          grid sat below the modal's 82vh fold and read as unbuilt. */
       const nav = segmented([['桜 図鑑', 'varieties'], [`実績 ${got}/${achs.length}`, 'achievements']],
-        (v) => openModal(buildCodex(v), 'codex'));
+        (v) => openModal(buildCodex(v), 'codex', { rebuild: true }),
+        { ariaLabel: 'Codex view' });
       nav.set(view);
 
       if (view === 'achievements' && achs.length) {
@@ -603,6 +782,7 @@ export default {
      * ============================================================== */
     function buildConstellation(preselect = null) {
       const p = panel({ title: 'CONSTELLATION', kanji: '星 屑 ノ 樹', cls: 'sk-modal wide', close: closeModal });
+      p.root.__titleId = p.titleId;
       const nodes = A.nodeViews();
       const branches = A.branches();
       const byId = new Map(nodes.map((n) => [n.id, n]));
@@ -627,8 +807,15 @@ export default {
             <feGaussianBlur stdDeviation="1.3" result="b"/><feMerge><feMergeNode in="b"/><feMergeNode in="SourceGraphic"/></feMerge>
           </filter>
         </defs><g opacity=".9">${STARFIELD}</g>`;
-      const gEdge = svg('g', {}); const gNode = svg('g', {});
+      const gEdge = svg('g', { 'aria-hidden': 'true' });
+      /* The star map is a single-tab-stop listbox with a roving tabindex: thirty
+         separate tab stops would make Tab useless inside this dialog, and arrow
+         keys are what a star map wants anyway. */
+      const gNode = svg('g', { role: 'listbox', 'aria-label': 'Constellation stars', tabindex: null });
+      s.setAttribute('role', 'group');
+      s.setAttribute('aria-label', 'Star map');
       s.append(gEdge, gNode);
+      const starEls = [];
 
       // core
       gNode.append(svg('circle', { cx: 50, cy: 37, r: 8, fill: 'url(#neb)', opacity: '.55' }));
@@ -653,11 +840,18 @@ export default {
       /* The star map on its own left a player nothing to press — a node was a
          1.5%-of-width SVG circle. Selecting a star now fills a real card with a
          real AWAKEN button, which is also the only way to read what a node does. */
-      const nodeHost = h('div');
+      const nodeHost = h('div', { role: 'status', 'aria-live': 'polite' });
       const detail = h('div.sk-detail', { style: { minHeight: '0' } },
-        h('div.sk-flavour', 'Pick a star. Essence spent here still counts toward the +2% it grants — spend freely.'));
+        h('div.sk-flavour', 'Pick a star with the arrow keys, then Enter. Essence spent here still counts toward the +2% it grants — spend freely.'));
+      let selectedNode = null;
       const showNode = (n) => {
         if (!n) return;
+        selectedNode = n;
+        for (const e of starEls) {
+          const on = e.__n === n;
+          e.setAttribute('aria-selected', on ? 'true' : 'false');
+          e.setAttribute('tabindex', on ? '0' : '-1');
+        }
         const hue = hueOf(n);
         let action;
         if (n.owned) {
@@ -666,7 +860,7 @@ export default {
           const b = buyBtn(() => {
             if (!n.affordable) return;
             A.buyNode(n.id);
-            openModal(buildConstellation(n.id), 'star');
+            openModal(buildConstellation(n.id), 'star', { rebuild: true });
             refresh();
           }, n.available ? `Awaken ${n.name}` : 'Take the star before it first', n.available ? 'AWAKEN' : 'SEALED');
           b.set(A.fmt(n.cost), '桜精');
@@ -684,7 +878,19 @@ export default {
       for (const n of nodes) {
         const [x, y] = pos(n);
         const rr = n.tier >= 4 ? 1.9 : n.tier >= 2 ? 1.5 : 1.2;
-        const g = svg('g', { style: 'cursor:pointer' });
+        const g = svg('g', {
+          style: 'cursor:pointer',
+          role: 'option',
+          tabindex: '-1',
+          'aria-selected': 'false',
+          /* the state a sighted player reads from the halo, spoken instead */
+          'aria-label': `${n.name ?? n.id} ${n.kanji ?? ''} — ${n.branchName ?? ''} tier `
+            + `${ROMAN[Math.max(0, num(n.tier))] ?? '?'}, `
+            + (n.owned ? 'awakened' : n.affordable ? `available for ${A.fmt(n.cost)} essence`
+              : n.available ? `costs ${A.fmt(n.cost)} essence, not enough held` : 'sealed'),
+        });
+        g.__n = n;
+        starEls.push(g);
         /* halos were rr*3.0 / rr*2.6 — on a 100-unit viewBox a tier-4 node threw
            a 5.7-unit smudge that swallowed its neighbours. Tight glow plus a
            crisp ring reads as "available" instead of as a blur artefact. */
@@ -717,6 +923,33 @@ export default {
            purchase affordance, so a mis-aimed click can't spend Essence. */
         g.addEventListener('click', () => showNode(n));
         g.addEventListener('mouseenter', () => showNode(n));
+        g.addEventListener('focus', () => showNode(n));
+        /* arrow keys walk the star list, Home/End jump to the ends, Enter/Space
+           awakens the selected star through the SAME guarded path the AWAKEN
+           button uses, so a mis-keyed press can no more spend Essence than a
+           mis-aimed click can */
+        g.addEventListener('keydown', (e) => {
+          let d = 0;
+          switch (e.key) {
+            case 'ArrowRight': case 'ArrowDown': d = 1; break;
+            case 'ArrowLeft': case 'ArrowUp': d = -1; break;
+            case 'Home': d = -99; break;
+            case 'End': d = 99; break;
+            case 'Enter': case ' ': case 'Spacebar': {
+              e.preventDefault(); e.stopPropagation();
+              const btn = nodeHost.querySelector('button.sk-buy:not(.off)');
+              btn?.click();
+              return;
+            }
+            default: return;
+          }
+          e.preventDefault(); e.stopPropagation();
+          const i = starEls.indexOf(g);
+          const m = starEls.length;
+          const j = d === -99 ? 0 : d === 99 ? m - 1 : (i + d + m) % m;
+          showNode(starEls[j].__n);
+          focusIt(starEls[j]);
+        });
         gNode.append(g);
       }
       sky.append(s);
@@ -796,7 +1029,7 @@ export default {
       const HELD = 'held off by Reduce motion';
       const reduced = toggleRow({
         label: 'Reduce motion', kanji: '動きを控える',
-        desc: 'holds all three below off at once, whatever they are set to',
+        desc: 'holds the three below off, whatever they are set to',
         value: s.reducedMotion, onChange: write('reducedMotion'),
       });
       const shake = toggleRow({
@@ -849,9 +1082,22 @@ export default {
 
     function buildSettings() {
       const p = panel({ title: 'SETTINGS', kanji: '設 定', cls: 'sk-modal wide', close: closeModal });
-      const io = h('textarea.sk-io', { spellcheck: 'false', placeholder: 'paste a save here, or press EXPORT to read yours out' });
-      const confirmIn = h('input.sk-in', { type: 'text', placeholder: 'type ERASE' });
-      const status = h('div.sk-hint', { style: { textAlign: 'right', minHeight: '1.3em' } }, '');
+      p.root.__titleId = p.titleId;
+      const io = h('textarea.sk-io', {
+        spellcheck: 'false',
+        placeholder: 'paste a save here, or press EXPORT to read yours out',
+        'aria-label': 'Save data, base64. Press EXPORT to fill this box, or paste a save in and press IMPORT.',
+      });
+      const confirmIn = h('input.sk-in', {
+        type: 'text', placeholder: 'type ERASE',
+        'aria-label': 'Type the word ERASE to arm the hard reset',
+      });
+      /* every EXPORT / IMPORT / ERASE outcome is a one-line message a long way
+         from the button that caused it — live, or it may as well not be there */
+      const status = h('div.sk-hint', {
+        style: { textAlign: 'right', minHeight: '1.3em' },
+        role: 'status', 'aria-live': 'polite',
+      }, '');
       const say = (m) => { status.textContent = m; };
       const st = A.state();
       mount(p.body,
@@ -881,6 +1127,12 @@ export default {
         h('div.sk-row', h('div.lbl', 'Time in the grove'), h('b.num', A.time(num(st.stats?.playTime)))),
         h('div.sk-flavour', { style: { marginTop: 'calc(var(--u)*.9)', textAlign: 'center' } },
           'Autosaves every ten seconds and whenever you look away.'),
+        /* The shortcut list lives HERE because this is the panel a keyboard
+           player opens first, and a shortcut nobody wrote down is a shortcut
+           nobody has. Kept last so it never pushes the audio controls down. */
+        groupHead('Keys', '鍵'),
+        h('div.sk-keys', KEY_HELP.map(([k, what]) =>
+          h('span', h('kbd', k), what))),
       );
       return p.root;
     }
@@ -889,26 +1141,55 @@ export default {
      * 9.  Tabs
      * ============================================================== */
     let activeTab = 'tenders';
+    const MODAL_TABS = new Set(['codex', 'star', 'set']);
     /** `toggle` is true only for a real click on the tab button, so a
      *  programmatic selectTab() never collapses the panel it was asked to open. */
     function selectTab(id, toggle = false) {
-      if (id === 'codex' || id === 'star' || id === 'set') {
+      if (MODAL_TABS.has(id)) {
         if (toggle && scrim && scrim.__tab === id) { closeModal(); return; }
         openModal(id === 'codex' ? buildCodex() : id === 'star' ? buildConstellation() : buildSettings(), id);
         return;
       }
       const hadModal = !!scrim;
       closeModal();
+      /* if focus is standing in the panel we are about to tear out, it would land
+         on <body> and a keyboard player would have to Tab in from the top again */
+      const rescue = railHost.contains(document.activeElement);
       activeTab = (toggle && !hadModal && activeTab === id && railHost.firstChild) ? null : id;
       clear(railHost);
       if (activeTab === 'tenders') railHost.append(tenderPanel.root);
       else if (activeTab === 'upgrades') { buildUpgrades(); railHost.append(upgradePanel.root); }
       syncTabs();
+      if (rescue) focusIt(tabEls.get(id));
       refresh();
     }
     function syncTabs() {
-      for (const [id, el] of tabEls) setClass(el, 'on', id === activeTab || !!(scrim && scrim.__tab === id));
+      const open = scrim && scrim.__tab;
+      const current = open || activeTab;
+      /* roving tabindex: exactly ONE tab stop for the rail, and it is whichever
+         tab is showing. With no panel open at all the first tab holds the stop,
+         so the rail is never unreachable. */
+      const focusHolder = tabEls.has(current) ? current : TAB_ORDER[0];
+      const railHas = tabStrip.contains(document.activeElement);
+      for (const [id, el] of tabEls) {
+        const on = id === current;
+        setClass(el, 'on', on);
+        const a = on ? 'true' : 'false';
+        if (el.__as !== a) { el.__as = a; el.setAttribute('aria-selected', a); }
+        /* never move the tab stop out from under a tab the player is standing on */
+        const t = (railHas ? el === document.activeElement : id === focusHolder) ? '0' : '-1';
+        if (el.getAttribute('tabindex') !== t) el.setAttribute('tabindex', t);
+      }
     }
+    /* the two rail tabs drive a real tabpanel; the other three open dialogs */
+    tenderPanel.root.setAttribute('role', 'tabpanel');
+    tenderPanel.root.setAttribute('aria-labelledby', 'sk-tab-tenders');
+    tenderPanel.root.id = uid('sk-panel');
+    upgradePanel.root.setAttribute('role', 'tabpanel');
+    upgradePanel.root.setAttribute('aria-labelledby', 'sk-tab-upgrades');
+    upgradePanel.root.id = uid('sk-panel');
+    tabEls.get('tenders').setAttribute('aria-controls', tenderPanel.root.id);
+    tabEls.get('upgrades').setAttribute('aria-controls', upgradePanel.root.id);
     railHost.append(tenderPanel.root);
     syncTabs();
 
@@ -1012,6 +1293,7 @@ export default {
       const away = num(r.awayS ?? r.seconds);
       const gained = num(r.gained ?? r.petals);
       const p = panel({ title: 'WELCOME BACK', kanji: 'お か え り', cls: 'sk-modal sk-wb', close: dismiss });
+      p.root.__titleId = p.titleId;
       function dismiss() { A.clearOffline(); closeModal(); }
       const stages = A.stages();
       mount(p.body,
@@ -1281,20 +1563,81 @@ export default {
     ];
 
     /* ============================================================== *
-     * 13.  Keyboard — 60-game owns Space and 1–0; we own the panels.
+     * 13.  Keyboard
+     *
+     * 60-game owns Space and 1–0. We own Esc, S / , (settings) and [ ] (panels).
+     *
+     * TAB IS NOT BOUND. It used to be — `e.key === 'Tab'` with preventDefault()
+     * on a window listener, cycling the panels. That single line meant the
+     * browser's focus navigation never ran, so not one control in this UI could
+     * be reached without a mouse: the sliders, the mute switches, the reduced-
+     * motion toggles — the entire accessibility panel, unreachable by the players
+     * it was built for. Panel cycling now lives on [ and ], which nothing else
+     * uses. Never bind Tab, Shift+Tab or the arrow keys at window level; arrow
+     * keys belong to whichever widget has focus (tab rail, slider, star map).
      * ============================================================== */
+
+    /**
+     * Gate. Space and the digits are gameplay keys on `window`, but while a
+     * control has focus they belong to that control — Space on a focused toggle
+     * must flip it, not shake the tree (and 60-game calls preventDefault() on
+     * Space, which would have cancelled the button activation outright).
+     *
+     * Stopping propagation HERE, on our own container, is what makes that work:
+     * the default action still runs on the target, and neither window listener
+     * (60-game's or ours) ever sees the event. Escape is deliberately not gated —
+     * it has to reach the window handler to close the panel.
+     */
+    const CTL_SEL = 'button,input,textarea,select,[role="slider"],[role="switch"],'
+      + '[role="tab"],[role="option"],[role="dialog"],[tabindex]';
+    /* ONLY the keys that would otherwise fight the focused control for the same
+       press. S, ',', '[' and ']' are deliberately NOT here: they are panel
+       navigation and must keep working wherever focus happens to be standing,
+       which after any amount of tabbing is always some button. Gating them once
+       cost us the settings shortcut entirely — measured, not guessed. Text fields
+       are protected by the tagName check in onKey instead. */
+    const GATED = new Set(['Space', 'Enter', 'NumpadEnter',
+      'Digit0', 'Digit1', 'Digit2', 'Digit3', 'Digit4',
+      'Digit5', 'Digit6', 'Digit7', 'Digit8', 'Digit9']);
+    const onUiKey = (e) => {
+      const t = e.target;
+      if (!(t instanceof Element)) return;
+      if (!GATED.has(e.code)) return;
+      if (t.closest(CTL_SEL)) e.stopPropagation();
+    };
+    ui.addEventListener('keydown', onUiKey);
+
     const onKey = (e) => {
       const t = e.target;
       if (t && (t.tagName === 'INPUT' || t.tagName === 'TEXTAREA' || t.isContentEditable)) return;
-      if (e.key === 'Escape') { if (scrim) closeModal(); else if (activeTab) selectTab(activeTab, true); return; }
-      if (e.key === 'Tab') {
-        e.preventDefault();
-        const order = TABS.map((x) => x.id);
-        const cur = (scrim && scrim.__tab) || activeTab || order[order.length - 1];
-        const i = order.indexOf(cur);
-        selectTab(order[(i + (e.shiftKey ? -1 : 1) + order.length) % order.length]);
+
+      if (e.key === 'Escape') {
+        /* Esc closes and hands focus BACK to whatever opened the thing */
+        if (scrim) closeModal();
+        else if (activeTab) selectTab(activeTab, true);
         return;
       }
+
+      /* modified keys belong to the browser and the OS — Cmd+S must still be
+         Save Page, Alt+S must still reach a screen reader */
+      if (e.metaKey || e.ctrlKey || e.altKey) return;
+
+      /* Settings, direct. S because it is mnemonic and unclaimed (60-game holds
+         only Space and the digits), and ',' as the platform convention. Both are
+         written down in the panel's own Keys row, so they are discoverable. */
+      if (e.key === 's' || e.key === 'S' || e.key === ',') {
+        e.preventDefault();
+        selectTab('set', true);
+        return;
+      }
+      if (e.key === '[' || e.key === ']') {
+        e.preventDefault();
+        const cur = (scrim && scrim.__tab) || activeTab || TAB_ORDER[TAB_ORDER.length - 1];
+        const i = TAB_ORDER.indexOf(cur);
+        selectTab(TAB_ORDER[(i + (e.key === ']' ? 1 : -1) + TAB_ORDER.length) % TAB_ORDER.length]);
+        return;
+      }
+
       if (A.ownsKeyboard()) return;              // game module already handles these
       if (e.code === 'Space') { e.preventDefault(); if (!e.repeat) doShake(); return; }
       if (/^[1-9]$/.test(e.key)) {
@@ -1374,6 +1717,7 @@ export default {
       dispose() {
         for (const off of offs) { try { off(); } catch { /* ignore */ } }
         window.removeEventListener('keydown', onKey);
+        ui.removeEventListener('keydown', onUiKey);
         ui.remove();
         document.getElementById('sakura-ui-style')?.remove();
       },

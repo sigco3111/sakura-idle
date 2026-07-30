@@ -4,14 +4,14 @@
  *   node tools/capture.mjs --storyboard storyboards/demo.mjs \
  *        --out .tmp-orch/video/demo --w 1920 --h 1080 --fps 30
  *
- * Six shots, cut on the slow sparse score (4.2–5.6 s each, nothing rushed):
+ * Five shots, cut on the slow sparse score — nothing rushed:
  *
- *   1  0.00 –  4.40   day hero, slow push in — god rays through the canopy
- *   2  4.40 –  8.60   low canopy rise — the sun flaring behind the crown
- *   3  8.60 – 12.80   the pond — sky and blossom in the still water
- *   4 12.80 – 18.00   HUD on: shakes, a purchase, then a Petal Storm lands
- *   5 18.00 – 22.80   the 輝咲 RADIANT bloom-stage set piece
- *   6 22.80 – 28.40   HUD off: day runs to night, hold on the moonlit grove
+ *   1  0.00 –  4.40   day hero: arcs round to frontal while pushing in
+ *   2  4.40 –  8.60   ground level on the west side, pond opening up in front
+ *   3  8.60 – 12.80   down on the water — sky, reeds and blossom in the mirror
+ *   4 12.80 – 22.80   HUD on, one 10 s take: shakes, a purchase, a Petal Storm,
+ *                     then the 輝咲 RADIANT bloom-stage set piece
+ *   5 22.80 – 28.40   HUD off: day runs to night, hold on the moonlit grove
  *
  * Camera notes
  * - The camera rig is switched off (`cameraRig.setEnabled(false)`) and every
@@ -21,7 +21,7 @@
  *   hard cuts never read as a snap. A tiny low-frequency wobble (≤ 4 cm, ~11 s
  *   period) is layered on top so no shot is mechanically dead.
  * - The time-of-day rig is paused and `dayT` is driven from `t` instead, so the
- *   day → dusk → night run in shot 6 is a timed 3.4 s ramp rather than the
+ *   day → dusk → night run in shot 5 is a timed 3.4 s ramp rather than the
  *   game's own multi-minute cycle.
  *
  * Two shot-mode quirks this file works around (neither one fakes anything —
@@ -46,30 +46,38 @@ export const pageScript = `
  * shot table — [t0, t1, posA, tgtA, fovA, posB, tgtB, fovB, dayA, dayB, ui]
  * ------------------------------------------------------------------ */
 const SHOTS = [
-  // Arcs 19 degrees from the 3/4 view round to frontal while pushing in. The
+  // Arcs 14 degrees from the 3/4 view round to frontal while pushing in. The
   // frontal axis is deliberate: the tree's bare east limbs read as dead wood
   // from the 3/4 side, and swing behind the crown as the camera comes round.
   { t0: 0.00,  t1: 4.40,  ui: false,
-    posA: [ 9.50, 5.40, 22.00], tgtA: [-0.30, 7.60, -1.00], fovA: 34.0, dayA: 0.500,
-    posB: [ 1.60, 4.50, 18.60], tgtB: [-0.40, 7.20, -1.00], fovB: 36.0, dayB: 0.520 },
+    posA: [ 9.20, 5.60, 24.20], tgtA: [-0.40, 7.50, -1.00], fovA: 32.0, dayA: 0.500,
+    posB: [ 2.20, 4.90, 21.80], tgtB: [-0.40, 7.10, -1.00], fovB: 34.0, dayB: 0.520 },
 
+  // Ground level on the west side, a slow lateral dolly that opens the pond up
+  // in the near field. Two things ruled out by rendering them: a close shot
+  // under the canopy (the near blossom cards fall inside the DOF near field and
+  // the whole frame goes to mush) and a tight trunk shot (at 7 m the bark sits
+  // in front of the focal plane and never resolves). At 14-16 m everything is
+  // sharp and the foreground reeds do the framing.
   { t0: 4.40,  t1: 8.60,  ui: false,
-    posA: [ 2.60, 1.00, 10.80], tgtA: [-0.30, 9.60, -0.60], fovA: 48.0, dayA: 0.575,
-    posB: [ 1.90, 2.50,  8.80], tgtB: [-0.60,11.30, -1.00], fovB: 46.0, dayB: 0.615 },
+    posA: [-9.20, 1.25, 15.80], tgtA: [-3.00, 4.80,  1.50], fovA: 40.0, dayA: 0.555,
+    posB: [-12.60,1.35, 13.20], tgtB: [-2.20, 5.10,  1.00], fovB: 38.0, dayB: 0.585 },
 
+  // Down onto the water. Reviewers rated the pond the best-looking thing in the
+  // build, so it gets a whole shot: sky and cloud in the mirror, reeds, ripple
+  // rings, and the canopy's reflection coming in at the right.
   { t0: 8.60,  t1: 12.80, ui: false,
     posA: [-5.00, 1.25, 12.00], tgtA: [-9.00, 0.90,  4.80], fovA: 44.0, dayA: 0.620,
     posB: [-6.90, 1.75, 10.00], tgtB: [-9.50, 0.70,  3.60], fovB: 42.0, dayB: 0.640 },
 
-  // HUD shots aim a little right of the trunk so the tree sits at 28% of the
-  // width and the Tenders panel never crosses it.
-  { t0: 12.80, t1: 18.00, ui: true,
-    posA: [ 2.60, 4.80, 19.60], tgtA: [ 2.60, 7.10, -1.00], fovA: 36.0, dayA: 0.500,
-    posB: [ 1.60, 4.45, 17.80], tgtB: [ 2.90, 6.90, -1.00], fovB: 36.0, dayB: 0.505 },
-
-  { t0: 18.00, t1: 22.80, ui: true,
-    posA: [ 1.80, 4.50, 18.20], tgtA: [ 2.20, 7.00, -1.00], fovA: 38.0, dayA: 0.505,
-    posB: [ 1.30, 4.35, 16.80], tgtB: [ 2.30, 6.90, -1.00], fovB: 37.0, dayB: 0.560 },
+  // One unbroken 10 s gameplay take rather than two 5 s ones: the shakes, the
+  // purchase, the Petal Storm and the bloom-stage set piece all escalate inside
+  // the same slow push-in, so nothing has to be re-established by a cut. Aimed
+  // a little right of the trunk so the tree sits at ~36% of the width and the
+  // Tenders panel never crosses it.
+  { t0: 12.80, t1: 22.80, ui: true,
+    posA: [ 3.00, 5.60, 26.40], tgtA: [ 3.40, 7.80, -1.00], fovA: 32.0, dayA: 0.520,
+    posB: [ 1.60, 4.90, 21.40], tgtB: [ 3.40, 7.00, -1.00], fovB: 33.0, dayB: 0.560 },
 
   { t0: 22.80, t1: 28.40, ui: false, camSpan: 3.90, daySpan: 3.40,
     posA: [12.40, 4.40, 17.40], tgtA: [ 0.60, 5.60, -1.60], fovA: 40.0, dayA: 0.560,

@@ -527,7 +527,54 @@ export function uiCss() {
 #ui-root *{box-sizing:border-box;margin:0;padding:0;}
 #ui-root .num{font-variant-numeric:tabular-nums;font-feature-settings:"tnum" 1,"lnum" 1;}
 #ui-root button{font:inherit;color:inherit;background:none;border:0;cursor:pointer;}
-#ui-root button:focus-visible{outline:2px solid rgba(232,197,106,.9);outline-offset:2px;}
+
+/* ================= FOCUS VISIBILITY =================
+   Every control in here is reachable by keyboard, so every control needs a ring
+   you cannot miss — and ART_BIBLE §7 forbids the system-blue one.
+
+   ONE ring colour for the whole UI, chosen so it works on BOTH surfaces: the
+   mid gold ${T.gold} sits at ~3.2:1 against the #F3EBDC parchment and ~8:1
+   against the dark scene behind the rail, where a pale gold would have washed
+   out on paper and a dark gold would have vanished over the trees.
+
+   outline, not box-shadow, because every button here already owns its box-shadow
+   for the gold bevel and an outline draws outside the border box without
+   disturbing it. Offsets stay <=2px: the scroll bodies carry .9u of padding, so a
+   3px ring at 2px offset clears their overflow clip. :focus-visible throughout —
+   a mouse press must not light up the ring. */
+#ui-root :focus{outline:none;}
+#ui-root button:focus-visible,
+#ui-root input:focus-visible,
+#ui-root textarea:focus-visible,
+#ui-root [tabindex]:focus-visible,
+#ui-root [role="slider"]:focus-visible,
+#ui-root [role="switch"]:focus-visible,
+#ui-root [role="option"]:focus-visible{
+  outline:3px solid ${T.gold};outline-offset:2px;}
+/* NEVER set border-radius here: Chrome follows the element's own radius for the
+   outline, so declaring one squares off the round controls. Measured — a 3px
+   radius in this rule turned the circular mute button into a rounded rectangle
+   the moment it took focus, which reads as a rendering fault, not as focus. */
+/* over the 3D scene the ring gets a warm halo so it never dies against a lit
+   sky or a dark canopy. drop-shadow, not box-shadow: these three carry their own. */
+#ui-root .sk-tab:focus-visible,
+#ui-root .sk-shake:focus-visible,
+#ui-root .sk-mute:focus-visible,
+#ui-root .sk-chip.season:focus-visible{
+  outline-color:${T.goldHi};
+  filter:drop-shadow(0 0 calc(var(--u)*.5) rgba(255,214,120,.95))
+         drop-shadow(0 0 calc(var(--u)*.14) rgba(24,14,4,.9));}
+/* .sk-seg clips to its own rounded shell, so its segments ring INWARD */
+#ui-root .sk-seg button:focus-visible{outline-offset:-3px;}
+
+/* visually hidden, still spoken — state that must not be conveyed by colour
+   alone gets a text twin here rather than a second coloured pip */
+#ui-root .sk-sr{position:absolute!important;width:1px;height:1px;padding:0;margin:-1px;
+  overflow:hidden;clip:rect(0 0 0 0);clip-path:inset(50%);white-space:nowrap;border:0;}
+
+/* the export box is the one place text must be selectable — #ui-root turns
+   selection off globally so a stray drag never highlights the HUD */
+#ui-root textarea,#ui-root input{user-select:text;-webkit-user-select:text;}
 #ui-root ::-webkit-scrollbar{width:calc(var(--u)*.42);}
 #ui-root ::-webkit-scrollbar-track{background:rgba(74,64,52,.09);border-radius:99px;}
 #ui-root ::-webkit-scrollbar-thumb{background:linear-gradient(180deg,${T.goldPale},${T.goldDeep});border-radius:99px;}
@@ -1183,6 +1230,23 @@ export function uiCss() {
 #ui-root .sk-btn.danger{background:linear-gradient(180deg,#D98F82,#9B4A3A);color:#FFF1EC;border-color:#6E2E22;}
 #ui-root .sk-btn[disabled]{opacity:.45;filter:grayscale(.5);cursor:default;transform:none!important;}
 
+/* ================= keyboard help =================
+   A shortcut nobody can find is a shortcut nobody has. The settings panel opens
+   with S, so the panel itself is where S has to be written down. */
+#ui-root .sk-keys{display:flex;flex-wrap:wrap;justify-content:center;align-items:center;
+  gap:calc(var(--u)*.3) calc(var(--u)*.75);margin:calc(var(--u)*.5) 0 calc(var(--u)*.2);
+  font-size:var(--t-sec);color:var(--ink-faint);letter-spacing:.05em;}
+#ui-root .sk-keys kbd{font-family:var(--sans);font-size:calc(var(--u)*.68);font-weight:700;
+  letter-spacing:.08em;color:#4A3A1C;padding:calc(var(--u)*.08) calc(var(--u)*.36);
+  border-radius:3px;margin-right:.4em;
+  background:linear-gradient(180deg,rgba(255,250,232,.95),rgba(232,216,178,.9));
+  border:1px solid rgba(122,90,24,.42);box-shadow:0 1px 0 rgba(255,255,255,.7) inset;}
+
+/* constellation stars are keyboard-reachable (roving tabindex over one listbox),
+   so they need a ring too — an SVG <g> takes outline around its bbox in Chrome,
+   and .sk-sky svg is overflow:visible so a ring on an outer star is not sliced */
+#ui-root .sk-sky g[role="option"]:focus-visible{outline:2px solid ${T.goldHi};outline-offset:1px;}
+
 /* ================= settings ================= */
 #ui-root .sk-row{display:flex;align-items:center;justify-content:space-between;gap:calc(var(--u)*.8);
   padding:calc(var(--u)*.5) 0;border-bottom:1px dashed rgba(74,64,52,.22);}
@@ -1252,7 +1316,9 @@ export function uiCss() {
   filter:drop-shadow(0 1px 2px rgba(40,26,6,.55));
   transition:transform .1s var(--ease);}
 #ui-root .sk-sld .trk:hover .thb{transform:scale(1.1);}
-#ui-root .sk-sld:focus-visible{outline:none;}
+/* the shared gold ring (top of this sheet) frames the whole row; the track and
+   thumb take an extra beat on top so the eye lands on the thing that moves */
+#ui-root .sk-sld:focus-visible{outline-offset:1px;}
 #ui-root .sk-sld:focus-visible .trk{border-color:rgba(232,197,106,.95);
   box-shadow:0 2px 4px rgba(60,44,26,.3) inset,0 0 0 2px rgba(232,197,106,.55);}
 #ui-root .sk-sld:focus-visible .thb{transform:scale(1.14);}
@@ -1275,6 +1341,19 @@ export function uiCss() {
 #ui-root .sk-tgl .lk{display:none;font-size:var(--t-sec);font-weight:600;letter-spacing:.06em;
   color:var(--gold-ink);margin-top:3px;}
 #ui-root .sk-tgl.dis .lk{display:block;}
+/* ON / OFF / HELD in words next to the capsule. The gold fill and the knob
+   position already carry the state, but neither survives a colour-blind or
+   low-contrast reading, and this is the group where "is Reduce motion actually
+   on?" has to be answerable at a glance. Tabular-ish fixed width so the switches
+   stay in a column and the row never reflows when the word changes. */
+#ui-root .sk-tgl .swwrap{display:flex;align-items:center;gap:calc(var(--u)*.38);flex:0 0 auto;}
+/* 1.95u is measured, not guessed: HELD is the longest word and this is the
+   narrowest column that holds it on one line. Any wider and "holds all three
+   below off at once…" wrapped to a second line in the Motion column. */
+#ui-root .sk-tgl .st{font-size:calc(var(--u)*.62);font-weight:700;letter-spacing:.1em;
+  color:${T.inkFaint};width:calc(var(--u)*1.95);text-align:right;}
+#ui-root .sk-tgl.on .st{color:${T.goldInk};}
+#ui-root .sk-tgl.dis .st{color:${T.inkFaint};opacity:.85;font-style:italic;letter-spacing:.1em;}
 #ui-root .sk-tgl .sw{position:relative;flex:0 0 auto;
   width:calc(var(--u)*2.75);height:calc(var(--u)*1.35);border-radius:99px;
   background:linear-gradient(180deg,rgba(96,80,58,.32),rgba(150,132,102,.16));
@@ -1295,7 +1374,7 @@ export function uiCss() {
   background:radial-gradient(120% 120% at 34% 26%,#FFFEF6,#FFF3D2 54%,#D5B25A);}
 #ui-root .sk-tgl:hover .sw{border-color:rgba(74,64,52,.8);}
 #ui-root .sk-tgl.on:hover .sw{border-color:#5E4310;}
-#ui-root .sk-tgl:focus-visible{outline:none;}
+#ui-root .sk-tgl:focus-visible{outline-offset:1px;}
 #ui-root .sk-tgl:focus-visible .sw{box-shadow:0 0 0 2px rgba(232,197,106,.7),0 2px 4px rgba(60,44,26,.28) inset;}
 /* forced off by Reduce motion: still legible, plainly not yours to set right now */
 #ui-root .sk-tgl.dis{cursor:not-allowed;}

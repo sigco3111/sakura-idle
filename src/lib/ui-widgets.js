@@ -267,27 +267,81 @@ export function makeTicker(el, fmt = formatNumber, tau = 0.18) {
  * Composite widgets
  * ------------------------------------------------------------------ */
 export function corners(small = false) {
-  const c = (p) => h('div.sk-c' + (small ? '.sm' : ''), { class: p });
+  const c = (p) => h('div.sk-c' + (small ? '.sm' : ''), { class: p, 'aria-hidden': 'true' });
   return [c('tl'), c('tr'), c('bl'), c('br')];
 }
 
-/** Parchment panel with filigree corners, title block and tapered rule. */
+/** Monotonic id source — ARIA relationships (aria-labelledby / describedby) need
+ *  real ids, and a panel can be rebuilt many times in one session. */
+let _uid = 0;
+export const uid = (p = 'sk') => `${p}-${++_uid}`;
+
+/**
+ * Parchment panel with filigree corners, title block and tapered rule.
+ *
+ * Returns `titleId` so a caller mounting this as a modal can point
+ * `aria-labelledby` at the real title instead of duplicating the string.
+ */
 export function panel({ title, kanji, cls = '', foot = null, close = null }) {
   const body = h('div.sk-panel-body');
+  const titleId = uid('sk-title');
   const head = h('div.sk-panel-head',
-    h('h2.sk-title', title),
-    kanji ? h('div.kj', kanji) : null,
-    h('div.fl'),
+    h('h2.sk-title', { id: titleId }, title),
+    kanji ? h('div.kj', { 'aria-hidden': 'true' }, kanji) : null,
+    h('div.fl', { 'aria-hidden': 'true' }),
   );
   const root = h('div.sk-paper' + (cls ? '.' + cls.split(' ').join('.') : ''),
     corners(),
-    close ? h('button.sk-x', { onclick: close, 'aria-label': 'close' }, '✕') : null,
+    close
+      ? h('button.sk-x', {
+        type: 'button', onclick: close,
+        'aria-label': 'Close ' + (title ?? 'panel') + ' — Esc',
+        title: 'Close  (Esc)',
+      }, '✕')
+      : null,
     head,
-    h('div.sk-rule'),
+    h('div.sk-rule', { 'aria-hidden': 'true' }),
     body,
     foot,
   );
-  return { root, body, head };
+  return { root, body, head, titleId };
+}
+
+/* ------------------------------------------------------------------ *
+ * Focus plumbing
+ *
+ * Hand-built widgets mean the focus behaviour a native form would have given us
+ * is our job. These two helpers are what makes a modal keyboard-safe: everything
+ * reachable inside it, and nothing reachable behind it.
+ * ------------------------------------------------------------------ */
+const FOCUS_SEL = [
+  'a[href]', 'button', 'input', 'select', 'textarea',
+  '[tabindex]', '[role="slider"]', '[role="switch"]', '[role="option"]',
+].join(',');
+
+/** Visible, enabled, tabbable descendants of `root`, in DOM order. */
+export function focusables(root) {
+  if (!root?.querySelectorAll) return [];
+  const out = [];
+  for (const el of root.querySelectorAll(FOCUS_SEL)) {
+    if (el.hasAttribute('disabled')) continue;
+    if (el.getAttribute('aria-hidden') === 'true') continue;
+    if (Number(el.getAttribute('tabindex')) < 0) continue;
+    /* offsetParent is null for display:none — cheap and correct here because
+       nothing in this UI is position:fixed. SVG has no offsetParent, so fall
+       back to a bbox test for the constellation nodes. */
+    const box = el.getClientRects?.();
+    if (!box || box.length === 0) continue;
+    out.push(el);
+  }
+  return out;
+}
+
+/** Move focus without the browser scrolling a panel body out from under it. */
+export function focusIt(el) {
+  if (!el) return false;
+  try { el.focus({ preventScroll: true }); return document.activeElement === el; }
+  catch { return false; }
 }
 
 export function bar(cls = 'sk-bar', sheen = true) {
@@ -303,7 +357,10 @@ export function stars(n, of = 5, ink = false) {
 }
 
 export function goldBtn(label, onclick, opts = {}) {
-  return h('button.sk-btn' + (opts.cls ? '.' + opts.cls : ''), { onclick, title: opts.title }, label);
+  return h('button.sk-btn' + (opts.cls ? '.' + opts.cls : ''), {
+    type: 'button', onclick, title: opts.title,
+    'aria-label': opts.ariaLabel ?? null,
+  }, label);
 }
 
 /* ------------------------------------------------------------------ *
@@ -351,13 +408,22 @@ export function buyBtn(onclick, title, verb = 'TEND') {
   const v = h('span.v.num', '0');
   const x = h('span.x.num', '×1');
   const act = h('span.act', verb);
+  /* Affordability is NOT signalled by colour alone: `.sk-buy.off .pl::before`
+     swaps the ＋ sigil for a 錠 padlock (shape), and this line spells it out for
+     a screen reader and for anyone who cannot read the gold-vs-grey difference. */
+  const whyId = uid('sk-why');
+  const why = h('span.sk-sr', { id: whyId }, '');
   const root = h('button.sk-buy', {
     type: 'button',
     onclick: (e) => { e.stopPropagation(); onclick(e); },
     title: title ?? null,
+    'aria-label': title ?? null,
+    /* describedby, NOT the label: an aria-label overrides the subtree, so the
+       "locked" line inside the button would never have been read out. */
+    'aria-describedby': whyId,
   },
-    h('span.gl'), h('span.pl'),
-    h('span.tx', h('span.hd', act, x), v),
+    h('span.gl', { 'aria-hidden': 'true' }), h('span.pl', { 'aria-hidden': 'true' }),
+    h('span.tx', h('span.hd', act, x), v), why,
   );
   return {
     root, v, x, act,
@@ -371,7 +437,11 @@ export function buyBtn(onclick, title, verb = 'TEND') {
     setEnabled(on) {
       setClass(root, 'off', !on);
       const s = on ? 'false' : 'true';
-      if (root.__ad !== s) { root.__ad = s; root.setAttribute('aria-disabled', s); }
+      if (root.__ad !== s) {
+        root.__ad = s;
+        root.setAttribute('aria-disabled', s);
+        setText(why, on ? '' : ' — locked, you cannot afford this yet');
+      }
     },
   };
 }
@@ -417,15 +487,20 @@ export function slider({
     'aria-label': ariaLabel ?? label ?? 'volume',
     'aria-valuemin': '0',
     'aria-valuemax': '100',
+    'aria-orientation': 'horizontal',
+    /* the whole keyboard contract, spoken. A hand-rolled slider that does not
+       say what its arrow keys do is a slider nobody discovers. */
+    title: `${label ?? 'Volume'} — arrows adjust, PgUp/PgDn jumps, Home/End for min/max`,
   },
     h('div.hd',
-      h('span.lbl', label ?? '', kanji ? h('em', kanji) : null),
+      h('span.lbl', label ?? '', kanji ? h('em', { 'aria-hidden': 'true' }, kanji) : null),
       h('span.rt', mu, val)),
     trk,
   );
 
   let v = clamp01(value);
   let dragging = false;
+  let dimmed = false;
 
   function paint() {
     const pct = v * 100;
@@ -434,10 +509,13 @@ export function slider({
     if (thb.__l !== left) { thb.__l = left; thb.style.left = left; }
     setText(val, Math.round(pct) + '%');
     const now = String(Math.round(pct));
-    if (root.__av !== now) {
-      root.__av = now;
+    /* The dimmed-and-muted state must NOT be colour-only: the "MUTED" pill is
+       the visible cue, and aria-valuetext is the spoken one. */
+    const txt = now + '%' + (dimmed ? ' — muted, nothing is audible' : '');
+    if (root.__av !== now + '|' + txt) {
+      root.__av = now + '|' + txt;
       root.setAttribute('aria-valuenow', now);
-      root.setAttribute('aria-valuetext', now + '%');
+      root.setAttribute('aria-valuetext', txt);
     }
   }
   function commit(next, notify = true) {
@@ -494,8 +572,9 @@ export function slider({
     get value() { return v; },
     set(next) { commit(next, false); },
     /** Muted — dim the control but keep the number, so the level reads as
-     *  remembered rather than lost. */
-    setDimmed(on) { setClass(root, 'off', !!on); },
+     *  remembered rather than lost. The "MUTED" pill (never colour alone) and
+     *  aria-valuetext both come from here. */
+    setDimmed(on) { dimmed = !!on; setClass(root, 'off', dimmed); paint(); },
   };
 }
 
@@ -510,26 +589,38 @@ export function slider({
 export function toggleRow({
   label, kanji, desc, value = false, lockNote, ariaLabel, onChange,
 } = {}) {
-  const sw = h('span.sw', h('i'));
+  const sw = h('span.sw', { 'aria-hidden': 'true' }, h('i'));
+  /* ON / OFF in words, beside the capsule. The gold fill and the knob position
+     already say it, but "state by colour alone" is the failure mode this UI was
+     pulled up on, and the switch that says "reduce motion" is exactly the one a
+     colour-blind player must be able to read at a glance. */
+  const stateTx = h('span.st', 'OFF');
+  const descId = desc ? uid('sk-d') : null;
+  const lockId = lockNote ? uid('sk-l') : null;
   const root = h('button.sk-tgl', {
     type: 'button',
     role: 'switch',
     'aria-label': ariaLabel ?? label ?? 'toggle',
+    'aria-describedby': [descId, lockId].filter(Boolean).join(' ') || null,
+    title: (label ?? 'Toggle') + ' — Enter or Space to flip',
   },
     h('span.tx',
-      h('div.lbl', label ?? '', kanji ? h('em', kanji) : null),
-      desc ? h('div.ds', desc) : null,
-      lockNote ? h('div.lk', lockNote) : null),
-    sw,
+      h('div.lbl', label ?? '', kanji ? h('em', { 'aria-hidden': 'true' }, kanji) : null),
+      desc ? h('div.ds', { id: descId }, desc) : null,
+      lockNote ? h('div.lk', { id: lockId }, lockNote) : null),
+    h('span.swwrap', stateTx, sw),
   );
 
   let v = !!value;
   let disabled = false;
   function paint() {
     setClass(root, 'on', v);
+    setText(stateTx, disabled ? 'HELD' : v ? 'ON' : 'OFF');
     const a = v ? 'true' : 'false';
     if (root.__ac !== a) { root.__ac = a; root.setAttribute('aria-checked', a); }
   }
+  /* A real <button role="switch"> gets Enter and Space from the browser as a
+     click — no key handler to reimplement, and none to get wrong. */
   root.addEventListener('click', (e) => {
     e.stopPropagation();
     if (disabled) return;
@@ -548,6 +639,9 @@ export function toggleRow({
       setClass(root, 'dis', disabled);
       const a = disabled ? 'true' : 'false';
       if (root.__ad !== a) { root.__ad = a; root.setAttribute('aria-disabled', a); }
+      /* aria-disabled, never the `disabled` attribute: a held switch must stay
+         focusable so a screen-reader user can find it and hear WHY it is held. */
+      paint();
     },
   };
 }
@@ -565,15 +659,29 @@ export function noteBox(text) {
 }
 
 /** Gold segmented control — one bevelled shell, N inset segments, no flat rects. */
-export function segmented(items, onpick) {
+export function segmented(items, onpick, opts = {}) {
   const btns = new Map();
-  const root = h('div.sk-seg');
+  const root = h('div.sk-seg', { role: 'group', 'aria-label': opts.ariaLabel ?? null });
   for (const [label, val] of items) {
-    const b = h('button', { onclick: (e) => { e.stopPropagation(); onpick(val); } }, label);
+    const b = h('button', {
+      type: 'button', 'aria-pressed': 'false',
+      onclick: (e) => { e.stopPropagation(); onpick(val); },
+    }, label);
     btns.set(val, b);
     root.append(b);
   }
-  return { root, btns, set(v) { for (const [k, b] of btns) setClass(b, 'on', k === v); } };
+  return {
+    root, btns,
+    /** `aria-pressed` alongside the gold fill — the selected segment must not be
+     *  identifiable by colour alone. */
+    set(v) {
+      for (const [k, b] of btns) {
+        setClass(b, 'on', k === v);
+        const a = k === v ? 'true' : 'false';
+        if (b.__ap !== a) { b.__ap = a; b.setAttribute('aria-pressed', a); }
+      }
+    },
+  };
 }
 
 /**
