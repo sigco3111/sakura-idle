@@ -55,7 +55,10 @@ const STAGE = {
    * alternative) is exactly what produces that. */
   coverage: [0.125, 0.330, 0.590, 1.000, 1.115, 1.235],
   budMix: [1.000, 0.560, 0.210, 0.045, 0.020, 0.000],
-  lumin: [0.000, 0.000, 0.000, 0.015, 0.105, 0.195],
+  // MEASURED r9: at 0.195 the stage-5 crown printed at mean display L 0.75, sd
+  // 0.075 — blown to near-white, the opposite of "luminous". The glow has to be a
+  // sheen on a crown that still has a value ladder, not a replacement for it.
+  lumin: [0.000, 0.000, 0.000, 0.015, 0.070, 0.115],
   // 0.360 -> 0.260: see the vein block in TRUNK_FRAG. At 0.36 x the old broad
   // vein mask the trunk printed lime.
   gold: [0.000, 0.000, 0.000, 0.000, 0.038, 0.260],
@@ -69,7 +72,14 @@ const STAGE = {
    * FLATTER than stage 1 — and none of these four features present. This is the
    * game's long-term reward, so all four are here, and stage 4 gets a deliberate
    * foretaste of each so the jump reads as an escalation rather than a switch. */
-  aurora: [0.000, 0.000, 0.000, 0.000, 0.085, 0.500],
+  // MEASURED r5 at 0.500: the stage-5 crown printed HSL sat 0.24 with only 1.7 % of
+  // its pixels outside the pink hue band — i.e. the aurora was not reading at all.
+  // GAME_DESIGN.md names "aurora petals" as a headline Everblossom feature, so it
+  // has to be visible; 0.90 is where the mint/violet/gold curtains resolve.
+  // ...and the aurora is three ADDITIVE bands whose overlap is near-white, so at
+  // 0.90 it was also lifting the crown's level rather than colouring it. 0.45 is
+  // where the mint/violet/gold curtains read without bleaching the blossom.
+  aurora: [0.000, 0.000, 0.000, 0.000, 0.080, 0.450],
   island: [0.000, 0.000, 0.000, 0.000, 0.130, 1.000],
   shafts: [0.000, 0.000, 0.000, 0.000, 0.160, 1.000],
 };
@@ -635,6 +645,14 @@ export default {
       // inside a backlit crown belongs: present, soft, never a hard edge.
       uBlossomAmt: { value: 0.11 },
       uCoverage: { value: 1 },
+      /* Linear-luma floor on bark. MEASURED r1: the wood inside the trunk fork
+       * printed rgb(18,23,59), display L 0.09, hue 233 — a navy void (ART_BIBLE §8
+       * tell 4). Root cause and the paired NPR_SHADOW_TINT fix are documented at
+       * the floor itself in TRUNK_FRAG. */
+      // MEASURED: 0.026 linear still printed at display L 0.08 once the post grade's
+      // shadow S-curve had been through it. 0.058 lands the deepest crotch shadow
+      // at ~0.22 — the darkest mass in a sunlit frame, not a hole in it.
+      uWoodFloor: { value: 0.058 },
     };
     trunkUniforms.uGroundY.value = GROUND_Y;
 
@@ -673,34 +691,54 @@ export default {
 
     /* ---- canopy anchors ------------------------------------------- */
     const rng = makeRng(SEED ^ 0x2f10c);
-    const anchors = { outer: [], mid: [], inner: [] };
+    const anchors = { outer: [], mid: [], spur: [], inner: [] };
     const tips = [];
-    /* LEVEL 1 IS INCLUDED NOW. It used to be skipped, so a primary limb carried
-     * blossom only where its own children happened to sprout — and in the hero
-     * frame the two thick right-hand limbs ran 4 m of naked grey wood through the
-     * middle of a flowering crown, reading as dead branches (blocker: "bare grey
-     * limbs read as dead wood"). Real ancient sakura flower on SPURS along the old
-     * wood as well as at the tips, so clusters directly on the primaries are both
-     * the fix and the botanically correct answer. Their anchors go to the `inner`
-     * bucket: big, deep, low-value clusters hugging the limb. */
+    /* ---- anchors: four buckets, by the KIND of wood the blossom sits on -----
+     * MEASURED r1 of this round (shots/tree-r1/hero.png, wide.png): the crown was
+     * a HALF tree. A dense saturated column of blossom hung around the trunk axis
+     * while the three thick right-hand primaries ran 3-4 m of naked grey wood
+     * through the middle of a flowering crown — "bare grey limbs read as dead
+     * wood", blocker 2, still present.
+     *
+     * ROOT CAUSE, and it was one line: level 1-2 anchors went into the `inner`
+     * layer, and that layer carries `lerpIn: [0.08, 0.64]` — every card assigned
+     * to a primary limb was then LERPED UP TO 64 % OF THE WAY TO THE CROWN CENTRE.
+     * So the 688 cards that were supposed to flower the old wood were physically
+     * dragged off it into one ball in the middle. Both defects, one cause.
+     *
+     * So old wood gets its own bucket (`spur`) whose cards HUG the limb — offset
+     * by the local wood radius plus a few centimetres, rotated freely about the
+     * limb axis so spurs ring it instead of all sprouting one way — and the
+     * interior-volume fill (`inner`) draws from the outer/mid anchors instead,
+     * which is where a real crown's interior mass actually comes from. Ancient
+     * sakura genuinely flower on spurs along old wood, so this is also the
+     * botanically correct answer. */
     for (const br of skel.branches) {
       if (br.level < 1) continue;
       const pts = br.pts;
       const last = pts[pts.length - 1];
       if (br.level >= 3) tips.push(last.p.clone());
-      const bucket = br.level >= 4 ? anchors.outer : (br.level === 3 ? anchors.mid : anchors.inner);
-      // a primary limb is 4.5-5.5 m long, so it needs more spur sites than a
-      // 30 cm twig does, spread from just past the trunk out to the tip.
-      const from = br.level >= 4 ? 0.10 : (br.level === 1 ? 0.18 : 0.35);
-      const n = br.level >= 4 ? 5 : (br.level === 3 ? 4 : (br.level === 1 ? 7 : 3));
+      const bucket = br.level >= 4 ? anchors.outer : (br.level === 3 ? anchors.mid : anchors.spur);
+      // a primary limb is 4.5-5.5 m long, so it needs many more spur sites than a
+      // 30 cm twig does, spread from just past the trunk out to the tip. 7 -> 11
+      // on level 1 puts a site every ~45 cm of limb, which is what it takes for
+      // the limb to read as flowering rather than as decorated at intervals.
+      const from = br.level >= 4 ? 0.10 : (br.level === 1 ? 0.14 : 0.28);
+      const n = br.level >= 4 ? 5 : (br.level === 3 ? 4 : (br.level === 1 ? 13 : 4));
       for (let i = 0; i < n; i++) {
         const t = from + (1 - from) * ((i + 0.5) / n);
         const f = t * (pts.length - 1);
         const j = Math.min(pts.length - 2, Math.floor(f));
         const fr = f - j;
+        const tan = pts[j + 1].p.clone().sub(pts[j].p);
+        if (tan.lengthSq() < 1e-10) tan.copy(br.dir); else tan.normalize();
         bucket.push({
           p: pts[j].p.clone().lerp(pts[j + 1].p, fr),
           d: br.dir,
+          // LOCAL tangent + wood radius: a spur cluster has to sit just off the
+          // bark of the segment it grows from, whatever the branch does elsewhere.
+          tan,
+          r: THREE.MathUtils.lerp(pts[j].r, pts[j + 1].r, fr),
           stiff: THREE.MathUtils.clamp(THREE.MathUtils.lerp(pts[j].dist, pts[j + 1].dist, fr) / skel.maxDist, 0, 1),
           phase: br.phase,
           // Low-discrepancy growth rank, assigned per bucket index. Anchors of one
@@ -713,14 +751,14 @@ export default {
       }
     }
     const PHI = 0.61803398875;
-    for (const key of ['outer', 'mid', 'inner']) {
+    for (const key of ['outer', 'mid', 'spur', 'inner']) {
       const arr = anchors[key];
       for (let i = 0; i < arr.length; i++) arr[i].seq = (i * PHI) % 1;
     }
 
     /* crown bounds from the anchor cloud (the crown IS the branch cloud) */
     const cCentre = new THREE.Vector3();
-    const all = [...anchors.outer, ...anchors.mid, ...anchors.inner];
+    const all = [...anchors.outer, ...anchors.mid, ...anchors.spur];
     for (const a of all) cCentre.add(a.p);
     cCentre.divideScalar(Math.max(1, all.length));
     let cRadius = 1;
@@ -810,6 +848,11 @@ export default {
     const TINT_CDF = {
       outer: [0.09, 0.32, 0.72, 1.00, 1.00],
       mid: [0.03, 0.18, 0.56, 1.00, 1.00],
+      // A spur cluster on old wood sits in the middle of the crown's depth: it
+      // sees sky through the gaps but has blossom above and outside it. Mid/shadow
+      // values with a little of the light one, and none of the deep — the deep
+      // value belongs to the shader's occlusion ladder, not to painted albedo.
+      spur: [0.02, 0.16, 0.62, 1.00, 1.00],
       inner: [0.00, 0.05, 0.26, 0.86, 1.00],
     };
     // a small per-cluster temperature swing: real blossom varies warm (young,
@@ -824,10 +867,19 @@ export default {
     const ZP = new THREE.Vector3(0, 0, 1);
     const nrm = new THREE.Vector3(), out = new THREE.Vector3(), jit = new THREE.Vector3();
     const pp = new THREE.Vector3();
+    // spur frame: the limb's own tangent and two perpendiculars (see `hug` below)
+    const tng = new THREE.Vector3(), bin = new THREE.Vector3();
 
     const LAYERS = [
-      { key: 'outer', frac: 0.62, push: [0.06, 0.50], ao: [0.88, 1.00], size: [0.74, 1.46], jitter: 0.60, lerpIn: [0.00, 0.06] },
-      { key: 'mid', frac: 0.22, push: [-0.20, 0.22], ao: [0.58, 0.84], size: [0.78, 1.34], jitter: 0.70, lerpIn: [0.06, 0.22] },
+      { key: 'outer', frac: 0.48, push: [0.06, 0.50], ao: [0.88, 1.00], size: [0.74, 1.46], jitter: 0.60, lerpIn: [0.00, 0.06] },
+      { key: 'mid', frac: 0.21, push: [-0.20, 0.22], ao: [0.58, 0.84], size: [0.78, 1.34], jitter: 0.70, lerpIn: [0.06, 0.22] },
+      /* SPUR — blossom growing straight off the old wood. `hug` switches the
+       * placement frame from "radially out of the crown" to "radially off THIS
+       * limb", which is the whole point: the offset is the local wood radius plus
+       * 8-40 cm, the azimuth about the limb is free, and lerpIn is ZERO so nothing
+       * drags the cluster off the branch it belongs to. AO stays fairly open —
+       * a spur has sky above it through the gaps in the crown. */
+      { key: 'spur', frac: 0.19, push: [0.08, 0.40], ao: [0.60, 0.90], size: [0.56, 1.08], jitter: 0.20, lerpIn: [0.00, 0.00], hug: true },
       // The crown must read as a VOLUME: interior cards are pulled toward the
       // crown centre rather than just pushed a little way down their own branch,
       // because the mid-height interior has almost no twigs to hang off.
@@ -835,7 +887,10 @@ export default {
       // lerpIn 0.28-0.66 put every interior card in a shell around the crown
       // centre, which rendered as a single flat grey-mauve ball hanging in the
       // middle of the canopy. 0.08-0.64 fills the volume instead.
-      { key: 'inner', frac: 0.16, push: [-0.30, 0.10], ao: [0.28, 0.58], size: [0.88, 1.48], jitter: 1.05, lerpIn: [0.08, 0.64] },
+      // Source is the outer/mid anchor cloud (see the `all` fallback): the
+      // interior of a real crown is filled by the twigs that pass through it, and
+      // drawing it from level 1-2 anchors is what emptied the limbs in r1.
+      { key: 'inner', frac: 0.12, push: [-0.30, 0.10], ao: [0.28, 0.58], size: [0.88, 1.48], jitter: 1.05, lerpIn: [0.08, 0.64] },
     ];
 
     /** largest stride < N that is coprime with N and near the golden fraction. */
@@ -856,10 +911,16 @@ export default {
      *   stage 2 (0.590) ~50 %   stage 3 (1.000) all non-reserve. */
     const ORDER_LO = 0.22, ORDER_HI = 0.965;
 
+    /* The interior-volume fill is drawn from the OUTER + MID anchor cloud, never
+     * from the old-wood spur sites — see the `inner` entry in LAYERS. */
+    const innerSrc = anchors.outer.concat(anchors.mid);
+
     let w = 0;
     for (let li = 0; li < LAYERS.length; li++) {
       const Ly = LAYERS[li];
-      const src = anchors[Ly.key].length ? anchors[Ly.key] : all;
+      const src = Ly.key === 'inner'
+        ? (innerSrc.length ? innerSrc : all)
+        : (anchors[Ly.key].length ? anchors[Ly.key] : all);
       const n = li === LAYERS.length - 1 ? CARDS - w : Math.round(CARDS * Ly.frac);
       /* ---- STRATIFIED anchor assignment ---------------------------------
        * `src[floor(rng()*N)]`, repeated n times, is sampling WITH REPLACEMENT:
@@ -881,22 +942,50 @@ export default {
         out.copy(a.p).sub(cCentre);
         const rLen = Math.max(0.001, out.length());
         out.divideScalar(rLen);
-        jit.set(rng.gauss(0, 0.42), rng.gauss(0, 0.34), rng.gauss(0, 0.42));
-        pp.copy(a.p)
-          .addScaledVector(out, rng.range(Ly.push[0], Ly.push[1]))
-          .addScaledVector(jit, Ly.jitter);
-        pp.lerp(cCentre, rng.range(Ly.lerpIn[0], Ly.lerpIn[1]));
+        if (Ly.hug) {
+          /* ---- a spur cluster growing off the bark of THIS limb -------------
+           * Frame: the limb's own tangent, plus two perpendiculars. The cluster
+           * sits at (wood radius + 8..40 cm) from the axis at a free azimuth, so
+           * spurs ring the limb the way real ones do instead of all sprouting on
+           * the crown-outward side. Nothing here references the crown centre, so
+           * nothing can drag the cluster off the limb (which is exactly what the
+           * old `inner`-bucket routing did — see the anchor block above). */
+          tng.copy(a.tan ?? a.d);
+          if (tng.lengthSq() < 1e-8) tng.set(0, 1, 0); else tng.normalize();
+          bin.copy(out).addScaledVector(tng, -out.dot(tng));
+          if (bin.lengthSq() < 1e-6) {
+            bin.set(-tng.y, tng.x, tng.z * 0.3);
+            bin.addScaledVector(tng, -bin.dot(tng));
+          }
+          bin.normalize();
+          nrm.crossVectors(tng, bin).normalize();      // second perpendicular
+          const az = rng.range(0, Math.PI * 2);
+          out.copy(bin).multiplyScalar(Math.cos(az)).addScaledVector(nrm, Math.sin(az));
+          const off = (a.r ?? 0.10) + rng.range(Ly.push[0], Ly.push[1]);
+          pp.copy(a.p).addScaledVector(out, off)
+            // a little slide ALONG the limb so 11 sites do not read as 11 rings
+            .addScaledVector(tng, rng.gauss(0, 0.16))
+            .addScaledVector(jit.set(rng.gauss(0, 0.30), rng.gauss(0, 0.24), rng.gauss(0, 0.30)),
+              Ly.jitter);
+        } else {
+          jit.set(rng.gauss(0, 0.42), rng.gauss(0, 0.34), rng.gauss(0, 0.42));
+          pp.copy(a.p)
+            .addScaledVector(out, rng.range(Ly.push[0], Ly.push[1]))
+            .addScaledVector(jit, Ly.jitter);
+          pp.lerp(cCentre, rng.range(Ly.lerpIn[0], Ly.lerpIn[1]));
+        }
 
         // Strays live outside the shell so the silhouette is never a smooth
         // dome. ART_BIBLE §5: "every silhouette edge should have something
         // breaking it up." Only the outer/mid layers throw them — an interior
-        // card flung outward would leave a hole in the middle of the crown.
-        const stray = Ly.key !== 'inner' && rng.next() < 0.135;
+        // card flung outward would leave a hole in the middle of the crown, and
+        // a spur flung outward is no longer a spur.
+        const stray = (Ly.key === 'outer' || Ly.key === 'mid') && rng.next() < 0.135;
         if (stray) pp.addScaledVector(out, rng.range(0.55, 2.60))
           .addScaledVector(jit.set(rng.gauss(0, 0.55), rng.gauss(0, 0.75), rng.gauss(0, 0.55)), 1);
 
         // face outward, tilted by the host twig, plus a healthy random wobble
-        nrm.copy(out).multiplyScalar(0.68)
+        nrm.copy(out).multiplyScalar(Ly.hug ? 0.86 : 0.68)
           .addScaledVector(a.d, rng.range(-0.34, 0.34))
           .add(jit.set(rng.gauss(0, 0.30), rng.gauss(0, 0.30), rng.gauss(0, 0.30)))
           .normalize();
@@ -928,14 +1017,33 @@ export default {
          * owns an order in the lowest third of the range. Additional cards on the
          * same anchor are offset by rank so they open in succession. The
          * outside-in / top-down feel survives as a 0.12 nudge instead of the
-         * dominant term. Result: at any coverage the open set is spread evenly
-         * over the whole crown and no major limb is ever bare at stage >= 1. */
+         * dominant term.
+         *
+         * r2 STRENGTHENED to a GUARANTEE rather than a statistical tendency. A
+         * golden-ratio walk spreads a branch's orders across the range on average,
+         * but nothing stopped a given anchor's whole handful of cards landing in
+         * the top half — and with the spur layer that would mean a naked primary
+         * limb at stage 1, which is the exact blocker. So when an anchor gets
+         * `perAnchor > 1` cards, the range is BANDED by rank: rank 0 always draws
+         * from the lowest 1/perAnchor of the front, rank 1 from the next band, and
+         * so on. Every spur site therefore owns a card that opens by stage 1 (spur
+         * perAnchor = 5, so rank 0 lands on order 0.22-0.37, and cardGrow at
+         * coverage 0.330 returns 0.80-1.00 there), and the later ranks fill in
+         * through stages 2-3. Where perAnchor == 1 (the outer shell has ~4x more
+         * anchors than cards) the seq walk stays, because banding a single card per
+         * anchor would open the ENTIRE shell at stage 1. */
         const heightT = THREE.MathUtils.clamp((pp.y - (cCentre.y - cRadius)) / (2 * cRadius), 0, 1);
         const radialT = THREE.MathUtils.clamp(pp.distanceTo(cCentre) / cRadius, 0, 1);
-        const strat = ((a.seq ?? rng.next()) + rank * 0.3820 + rng.range(-0.035, 0.035) + 1) % 1;
+        const jitU = ((a.seq ?? rng.next()) + rng.range(-0.11, 0.11) + 1) % 1;
         const bias = (1 - (radialT * 0.60 + heightT * 0.40)) - 0.5;
+        // The outside-in nudge lives INSIDE the rank band, not on top of it —
+        // added afterwards it could lift a rank-0 card clean out of its band and
+        // break the guarantee the banding exists to make.
+        const strat = perAnchor > 1
+          ? (rank + THREE.MathUtils.clamp(jitU + bias * 0.34, 0, 0.999)) / perAnchor
+          : jitU + bias * 0.16;
         let order = THREE.MathUtils.clamp(
-          ORDER_LO + (ORDER_HI - ORDER_LO) * strat + bias * 0.12, 0.03, 0.985);
+          ORDER_LO + (ORDER_HI - ORDER_LO) * strat, 0.03, 0.985);
         /* the stage 4/5 reserve, taken from the TOP of the order range rather
          * than by a coin flip: a random 15.5 % chance could (and did) steal a
          * branch's only early-opening card, and the reserve then clumped. This
@@ -1006,11 +1114,17 @@ export default {
          * crown and read as separate pink CLOUDS, not as islands of the tree's own
          * blossom. Pulled in so they hug the silhouette and break it, which is what
          * makes the relationship legible. */
-        const el = rng.range(0.04, 0.80);                       // mostly above the equator
-        const rad = cRadius * rng.range(1.02, 1.34);
+        /* MEASURED r5 (shots/tree-r5-s5/hero.png): even at 1.02-1.34 radii the
+         * islands sat 9-12 m clear of the crown and, at cluster spreads of up to
+         * 1.10 m, read as two pink CUMULUS CLOUDS in the top corners of the frame —
+         * nothing tied them to the tree. An "island of blossom" has to read as a
+         * piece of THIS crown that has come loose, which means close enough to
+         * overlap the silhouette and small enough not to be mistaken for weather. */
+        const el = rng.range(0.04, 0.72);                       // mostly above the equator
+        const rad = cRadius * rng.range(0.88, 1.12);
         isleC.set(Math.cos(az) * Math.cos(el * 1.35), Math.sin(el * 1.15), Math.sin(az) * Math.cos(el * 1.35))
           .multiplyScalar(rad).add(cCentre);
-        const spread = rng.range(0.55, 1.10);
+        const spread = rng.range(0.42, 0.76);
         const phase = rng.next();
         const seed = rng.next();
         for (let k = 0; k < ISLE_PER && w < COUNT; k++, w++) {
@@ -1176,7 +1290,17 @@ export default {
       // itself for the two keyings that measured inert). 1.10x + 0.04 allows a
       // real sky-ambient lift while capping the 2x blue gain that made the crown
       // violet: #C25F86 (0.437) -> 0.52, #FFB6CE (0.638) -> 0.74, #FFF2F6 -> 1.0.
-      uGuardCap: { value: new THREE.Vector2(1.10, 0.04) },
+      /* MEASURED r10, stage 3: the crown's dark quartile printed rgb(103,69,98) —
+      // display B/R 0.955, hue 308, a crimson-violet column reading as a different
+      // plant from the pale sides. The guard WAS enforcing its linear cap (0.526 at
+      // the deep end); the post grade's shadow lift toward #2A2438 (B/R 1.33) then
+      // put it back, because that lift is a fixed offset and dominates a pixel at
+      // display L 0.31. A shader cannot out-argue a post-process offset, so the
+      // linear cap has to be tight enough that the LIFTED pixel lands on the
+      // palette: 0.88x + 0.01 gives 0.40 at #C25F86, 0.55 at #FFB6CE, 0.81 at
+      // #FFF2F6 — still a real sky-ambient allowance on the light values, where the
+      // lift is negligible, and a hard one where it is not. */
+      uGuardCap: { value: new THREE.Vector2(0.88, 0.01) },
       uHueGuard: { value: 1.0 },
       // Measured r0 of this round: the crown's shaded interior came out
       // rgb(116,76,95), HSL sat 0.21 — grey mauve, the muddy midtone
@@ -1191,6 +1315,29 @@ export default {
       // ladder. Swept live via the `tree-lock*` scenarios.
       uChromaFix: { value: 0.34 },
       uChromaDeep: { value: 0.30 },
+      /* The FINAL chroma resolve — see the big MEASURED block in CANOPY_FRAG.
+       * The two locks above run before the through-glow, halo, transmission and
+       * deep-floor terms, all of which add near-white on top; this one runs after
+       * all of them, which is why it is the one that actually moves the printed
+       * pixel. Swept live via the `tree-cf*` scenarios. */
+      uChromaFinal: { value: 0.95 },
+      /* ACES pre-compensation on the lock's target chroma — see the derivation in
+       * CANOPY_FRAG. Swept live via the `tree-cg*` scenarios; land it so the
+       * PRINTED interior sits on ART_BIBLE's ladder, not so the linear target
+       * does. Luminance-neutral, so it cannot flatten the value structure. */
+      /* MEASURED (value-indexed ladder, hero crown, uChromaGain 1.00/1.85/2.80):
+       *   mean B/R 0.777 / 0.771 / 0.772
+       *   dark-quartile B/R 0.755 / 0.733 / 0.726, HSL sat 0.369 / 0.476 / 0.543
+       * The ratio saturates by 1.85 while the saturation keeps climbing, and the
+       * PICTURE at 1.85+ is a hot fuchsia crown, not sakura. 1.30 is on the useful
+       * part of the curve: it pre-compensates the ACES channel mix without buying
+       * saturation the palette does not have. */
+      uChromaGain: { value: 1.00 },
+      // top of the ART_BIBLE §3 ladder — the specular / backlit-edge value
+      uEdgeCol: { value: col(0xFFF2F6) },
+      // ART_BIBLE §3's SHADOW value. The bottom of the ladder while the crown is
+      // still thin — see the deepE walk in CANOPY_FRAG.
+      uShadowCol: { value: col(0xEE8CAF) },
       uFlutter: { value: 0.035 },
       uWindAmp: { value: 1.05 },
       // stage 5 常桜 Everblossom
@@ -1431,6 +1578,45 @@ export default {
         canopyUniforms.uDeepValue.value = 0.74;
       };
       sc['tree-violet-t1'] = () => { canopyUniforms.uShTint.value = 1.0; };
+      /* uChromaFinal sweep — the r2 chroma knob. One --scenario flag is all
+       * shot.mjs accepts, so each variant also forces stage 1 (the fresh-save
+       * state the blocker was measured in). */
+      for (const v of [0, 25, 40, 55, 70, 85, 95]) {
+        sc[`tree-cf${v}`] = () => {
+          canopyUniforms.uChromaFinal.value = v / 100;
+          stage = 1; stageTarget = 1; stageT = 1; writeStage(1);
+        };
+        // ...and the same with the post chain out of the way, so the SHADER's own
+        // chroma can be measured without the grade's violet shadow lift on top.
+        sc[`tree-rawcf${v}`] = () => {
+          sc['postfx-off']?.(); sc['petals-off']?.(); sc['vfx-off']?.();
+          canopyUniforms.uChromaFinal.value = v / 100;
+          stage = 1; stageTarget = 1; stageT = 1; writeStage(1);
+        };
+      }
+      /* Does the final chroma resolve actually OWN these pixels? Paints the whole
+       * palette ladder green: if the crown does not turn green, the term is not
+       * reaching the fragments being measured, and no amount of tuning it will
+       * help. (This is how the r4 "the lock barely moves the pixel" puzzle was
+       * settled — cheaper than reading shader source.) */
+      for (const v of [100, 145, 185, 230, 280]) {
+        sc[`tree-cg${v}`] = () => {
+          canopyUniforms.uChromaGain.value = v / 100;
+          stage = 1; stageTarget = 1; stageT = 1; writeStage(1);
+        };
+      }
+      sc['tree-locktest'] = () => {
+        sc['postfx-off']?.(); sc['petals-off']?.(); sc['vfx-off']?.();
+        canopyUniforms.uMidCol.value.setRGB(0.1, 1.0, 0.1);
+        canopyUniforms.uDeepCol.value.setRGB(0.1, 1.0, 0.1);
+        canopyUniforms.uEdgeCol.value.setRGB(0.1, 1.0, 0.1);
+        canopyUniforms.uChromaFinal.value = 0.95;
+        stage = 1; stageTarget = 1; stageT = 1; writeStage(1);
+      };
+      // Which mesh owns a pixel? Used to localise the near-black patches in the
+      // trunk crotch (they turned out to be wood, not blossom).
+      sc['tree-nocanopy'] = () => { inst.visible = false; };
+      sc['tree-nowood'] = () => { trunkMesh.visible = false; };
       sc['tree-lock0'] = () => { canopyUniforms.uChromaFix.value = 0; canopyUniforms.uChromaDeep.value = 0; };
       sc['tree-g40'] = () => { canopyUniforms.uHueGuard.value = 0.40; };
       // stage 5 feature isolation: crank one term so it can be confirmed present

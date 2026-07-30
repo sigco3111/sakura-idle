@@ -39,14 +39,35 @@ const clamp = (v, a, b) => (v < a ? a : v > b ? b : v);
  * its own set pieces, and emitting them here as well double-triggers them.
  */
 const SFX_ID = {
-  buy: 'purchase',
   milestone: 'achievement',
-  'buy-upgrade': 'upgrade',
-  constellation: 'achievement',
   codex: 'achievement',
   achievement: 'achievement',
   'storm-start': 'storm',
   prestige: 'stageup',
+};
+
+/**
+ * `upgrade:bought.tier` is a NUMBER, 1..5. It used to be the family string
+ * ('tender' / 'shake' / 'heartwood' / …) and both consumers compare it
+ * numerically — 70-audio picks its sound with `(e.tier ?? 0) >= 2` and 45-vfx
+ * fires an extra petal burst on `>= 4`. `'tender' >= 2` is false for every
+ * string, so every purchase in the game, from a 15-petal Wind Sprite to a
+ * 120-Essence Constellation node, produced the identical small `purchase` tok
+ * and never the burst. Numbers here, family name in `family` for anyone who
+ * wants the word.
+ *
+ * The ranks are chosen so the two thresholds already in those modules mean
+ * something: 2 crosses into audio's bigger `upgrade` sound, 4 crosses into
+ * VFX's petal burst — i.e. the two permanent currencies.
+ */
+const BUY_RANK = {
+  tender: 1,        // a Tender, bought with petals
+  milestone: 3,     // a Tender purchase that crossed a ×2 milestone
+  shake: 2,         // petal Upgrades
+  grove: 2,
+  tenderUp: 2,
+  heartwood: 4,     // Blossoms — permanent, survives the Season
+  constellation: 5, // Essence — the deepest thing money can buy
 };
 
 export default {
@@ -57,16 +78,57 @@ export default {
     const bus = ctx.bus;
     const persist = !ctx.shotMode && typeof localStorage !== 'undefined';
 
-    /** One sound, once, under a name 70-audio can synthesise. */
+    /**
+     * One sound, once, under a name 70-audio can synthesise — and at most one of
+     * each synth per frame.
+     *
+     * Unlocks arrive in clumps: taking a Tender to 10 owned crosses a milestone
+     * AND unlocks 'Round Number' AND 'A Helping Hand' in the same frame, so the
+     * same `achievement` synth fired three times a fraction of a millisecond
+     * apart. Identical short transients stacked like that comb-filter into a
+     * metallic flam instead of getting louder — the same defect the shake fix
+     * removed. First one in the frame wins, with a small lift so a clump still
+     * reads as bigger than a single unlock. The toast queue in 65-ui already
+     * does the visual half of this ("queued so they never overlap").
+     */
+    let sfxFrame = -1;
+    const sfxThisFrame = new Set();
     function snd(id, gain = 1) {
       const mapped = SFX_ID[id];
-      if (mapped) bus.emit('sfx', { id: mapped, gain, tag: id });
+      if (!mapped) return;
+      if (sfxFrame !== ctx.frame) { sfxFrame = ctx.frame; sfxThisFrame.clear(); }
+      if (sfxThisFrame.has(mapped)) return;
+      sfxThisFrame.add(mapped);
+      bus.emit('sfx', { id: mapped, gain: Math.min(1.2, gain * 1.08), tag: id });
     }
 
     /* ---------------------------------------------------------------- *
      * state
      * ---------------------------------------------------------------- */
-    let state = E.newState();
+    /**
+     * A fresh save gets its own RNG seed — except under the screenshot harness.
+     *
+     * `E.newState()` defaults to a single hard-coded seed, and 60-game used it
+     * unconditionally, so EVERY new player got a bit-identical stream: the same
+     * storm times, the same Golden Petal boons in the same order, the same crit
+     * rolls. Two problems with that. It is not a random event schedule in any
+     * meaningful sense — two players comparing notes would see the same run.
+     * And it pinned the shipped pacing to one sample of the RNG: measured across
+     * 40 seeds, that particular one sits at the 10th percentile for speed
+     * (初咲 First Bloom 312 s against a 563 s median, 満開 1242 s against 1824 s),
+     * so the balance every real player experienced was the fastest tenth of the
+     * distribution while the simulator was being tuned on the middle of it.
+     *
+     * `ctx.shotMode` keeps the fixed seed, so every screenshot and every probe
+     * stays byte-comparable (CONTRACT §5) — the critics depend on that. Only a
+     * real browser session rolls its own, and it is persisted in the save, so a
+     * player's grove behaves consistently for them across sessions.
+     */
+    const freshSeed = () => (ctx.shotMode
+      ? undefined
+      : ((Date.now() >>> 0) ^ 0x9e3779b9) >>> 0);
+
+    let state = E.newState(freshSeed());
     let loadedSave = null;
     if (persist) {
       try {
@@ -85,9 +147,29 @@ export default {
     let bloomfallRate = 0;
     let bloomfallBurst = 0;
     let phase = 'day';
-    let nextStorm = E.TUNING.STORM_PERIOD + (rand() * 2 - 1) * E.TUNING.STORM_JITTER;
-    let nextGolden = E.TUNING.GOLDEN_MIN + rand() * (E.TUNING.GOLDEN_MAX - E.TUNING.GOLDEN_MIN);
+
+    /**
+     * Event countdowns. Restored from the save when it has them (v4+), rolled
+     * fresh when it does not — see economy.newSchedule(). The FIRST storm of a
+     * save uses the short STORM_FIRST grace so a new player meets the set piece
+     * inside two minutes; every later one uses the spec'd 420 ± 120.
+     */
+    const rollStorm = (first) => (first
+      ? E.TUNING.STORM_FIRST + (rand() * 2 - 1) * E.TUNING.STORM_FIRST_JITTER
+      : E.TUNING.STORM_PERIOD + (rand() * 2 - 1) * E.TUNING.STORM_JITTER);
+    const rollGolden = () => E.TUNING.GOLDEN_MIN
+      + rand() * (E.TUNING.GOLDEN_MAX - E.TUNING.GOLDEN_MIN);
+
+    let nextStorm = 0;
+    let nextGolden = 0;
     let rainRoll = 0;
+    /** Adopt `state.sched`, rolling anything it does not carry. */
+    function loadSchedule() {
+      nextStorm = state.sched?.storm ?? rollStorm((state.stats?.storms || 0) === 0);
+      nextGolden = state.sched?.golden ?? rollGolden();
+      rainRoll = state.sched?.rain ?? 0;
+    }
+    loadSchedule();
     let golden = null;              // { id, ttl }
     let goldenSeq = 1;
     let autoAcc = 0;
@@ -248,8 +330,15 @@ export default {
       if (state.tenders[id] > state.stats.maxTender) state.stats.maxTender = state.tenders[id];
       invalidate();
       const crossed = E.MILESTONES.some((m) => before < m && state.tenders[id] >= m);
-      bus.emit('upgrade:bought', { id, level: state.tenders[id], tier: 'tender', count: n, milestone: crossed });
-      snd(crossed ? 'milestone' : 'buy', crossed ? 1 : 0.8);
+      bus.emit('upgrade:bought', {
+        id, level: state.tenders[id], count: n, milestone: crossed,
+        tier: crossed ? BUY_RANK.milestone : BUY_RANK.tender, family: 'tender',
+      });
+      // No `sfx` for the purchase itself — 70-audio derives one `purchase` tok
+      // straight from `upgrade:bought`. Emitting one here as well layered a
+      // second identical tok a few ms late, which is the same comb-filter
+      // phasing the shake fix removed. Only the milestone chime is additional.
+      if (crossed) snd('milestone', 1);
       if (crossed) {
         bus.emit('petals:burst', { point: treePoint(), count: 60, power: 1.4 });
         bus.emit('game:toast', {
@@ -274,8 +363,7 @@ export default {
       state.upgrades[id] = 1;
       state.stats.upgrades = Object.keys(state.upgrades).length;
       invalidate();
-      bus.emit('upgrade:bought', { id, level: 1, tier: u.family });
-      snd('buy-upgrade', 0.9);
+      bus.emit('upgrade:bought', { id, level: 1, tier: BUY_RANK[u.family] ?? 2, family: u.family });
       bus.emit('game:toast', { kind: 'upgrade', title: u.name, body: u.flavour, rarity: 3 });
       checkUnlocks();
       pushState(true);
@@ -293,8 +381,7 @@ export default {
       state.essence -= n.cost;         // essenceEarned is untouched: spent Essence still pays out
       state.nodes[id] = 1;
       invalidate();
-      bus.emit('upgrade:bought', { id, level: 1, tier: 'constellation' });
-      snd('constellation', 1);
+      bus.emit('upgrade:bought', { id, level: 1, tier: BUY_RANK.constellation, family: 'constellation' });
       bus.emit('game:toast', { kind: 'node', title: `${n.branchName} · ${n.name}`, body: n.flavour, rarity: 5 });
       pushState(true);
       return true;
@@ -306,8 +393,7 @@ export default {
       state.blossoms -= h.cost;
       state.heartwood[id] = 1;
       invalidate();
-      bus.emit('upgrade:bought', { id, level: 1, tier: 'heartwood' });
-      snd('buy-upgrade', 1);
+      bus.emit('upgrade:bought', { id, level: 1, tier: BUY_RANK.heartwood, family: 'heartwood' });
       bus.emit('game:toast', { kind: 'heartwood', title: h.name, body: h.flavour, rarity: 5 });
       pushState(true);
       return true;
@@ -602,6 +688,10 @@ export default {
      * ---------------------------------------------------------------- */
     function snapshot() {
       state.lastSeen = Date.now();
+      // Write the live countdowns back so a reload resumes the storm clock
+      // instead of restarting it. Storm/Golden are re-rolled on load only when
+      // these are absent (a pre-v4 save).
+      state.sched = { storm: nextStorm, golden: nextGolden, rain: rainRoll };
       return state;
     }
 
@@ -614,10 +704,13 @@ export default {
     }
 
     function hardReset() {
-      const seed = state.seed;
+      // A hard reset is a new game, so it gets a new event stream too — except
+      // under the harness, where every run must stay byte-comparable.
+      const seed = ctx.shotMode ? state.seed : freshSeed();
       state = E.newState(seed);
       rng = mulberry32((seed | 0) ^ 0x5a4b12);
       timers.storm = timers.rain = timers.frenzy = timers.clickFrenzy = timers.bloomfall = 0;
+      loadSchedule();          // fresh save → fresh first-storm grace
       golden = null; offlineReport = null;
       if (windBase !== null) { WIND.uniforms.uWindStrength.value = windBase; windBase = null; }
       invalidate(); setLive();
@@ -635,6 +728,7 @@ export default {
       if (!s) return false;
       state = s;
       rng = mulberry32((state.seed | 0) ^ 0x5a4b12);
+      loadSchedule();          // adopt the imported save's storm clock
       invalidate(); setLive();
       applyStage(true);
       bus.emit('bloom:stage', { stage: state.stage });
@@ -678,10 +772,14 @@ export default {
     /* ---------------------------------------------------------------- *
      * state:changed
      * ---------------------------------------------------------------- */
-    let stateDirtyForUI = false;
+    /**
+     * `now` = emit this frame (a purchase, a catch — the player did something and
+     * must see it immediately). Otherwise the 5 Hz heartbeat in tick() carries
+     * it: the bank grows continuously, so the UI needs that heartbeat regardless
+     * and a per-shake emit on top would just be a third of a frame's work wasted.
+     */
     function pushState(now = false) {
-      if (now) { emitAcc = 0; bus.emit('state:changed', state); stateDirtyForUI = false; }
-      else stateDirtyForUI = true;
+      if (now) { emitAcc = 0; bus.emit('state:changed', state); }
     }
 
     /* ---------------------------------------------------------------- *
@@ -723,7 +821,7 @@ export default {
       // storm schedule
       nextStorm -= dt * (1 / Math.max(0.1, d.grove.stormRate));
       if (nextStorm <= 0 && !live.storm) {
-        nextStorm = E.TUNING.STORM_PERIOD + (rand() * 2 - 1) * E.TUNING.STORM_JITTER;
+        nextStorm = rollStorm(false);
         startStorm();
       }
 
@@ -744,8 +842,7 @@ export default {
       } else {
         nextGolden -= dt;
         if (nextGolden <= 0) {
-          const span = (E.TUNING.GOLDEN_MAX - E.TUNING.GOLDEN_MIN);
-          nextGolden = (E.TUNING.GOLDEN_MIN + rand() * span) * d.grove.goldRate;
+          nextGolden = rollGolden() * d.grove.goldRate;
           spawnGolden();
         }
       }
@@ -798,7 +895,7 @@ export default {
       if (unlockAcc >= 0.5) { unlockAcc = 0; checkUnlocks(); }
 
       emitAcc += dt;
-      if (emitAcc >= 0.2) { emitAcc = 0; stateDirtyForUI = false; bus.emit('state:changed', state); }
+      if (emitAcc >= 0.2) { emitAcc = 0; bus.emit('state:changed', state); }
 
       saveAcc += dt;
       if (saveAcc >= E.TUNING.AUTOSAVE) { saveAcc = 0; save(); }
@@ -833,6 +930,26 @@ export default {
     offs.push(bus.on('vfx:golden', (e) => {
       if (e?.kind !== 'caught') return;
       grantGolden(golden ? golden.id : 0);
+    }));
+
+    /**
+     * Announce the phase-gated events once every module is listening.
+     *
+     * `applyOffline()` and the first `setLive()` both run inside setup(), i.e.
+     * before 65-ui (order 65), 70-audio (70) or 45-vfx (45) exist — anything
+     * emitted there is emitted into an empty room. Two consequences that this
+     * fixes: the documented `game:offline` event was NEVER emitted on a real
+     * return (only by the debug scenario; the UI happened to survive by polling
+     * `api.offlineReport` every frame instead), and a boot that lands in `night`
+     * or `dusk` left the Full Moon / Golden Hour banner unlit until the NEXT
+     * phase change, up to a full phase later, while the multiplier was already
+     * being applied to the rate.
+     */
+    offs.push(bus.on('game:ready', () => {
+      setLive();
+      bus.emit('game:event', { id: 'moon', active: live.moon, remain: -1 });
+      bus.emit('game:event', { id: 'goldenHour', active: live.goldenHour, remain: -1 });
+      if (offlineReport) bus.emit('game:offline', offlineReport);
     }));
 
     offs.push(bus.on('time:phase', (e) => {
@@ -1020,6 +1137,7 @@ export default {
         state = E.sanitizeState(state);
         rng = mulberry32((state.seed | 0) ^ 0x5a4b12);
         timers.storm = timers.rain = timers.frenzy = timers.clickFrenzy = timers.bloomfall = 0;
+        loadSchedule();        // deterministic: a scenario is a reproducible state
         golden = null; offlineReport = null;
         invalidate(); setLive();
         applyStage(true);

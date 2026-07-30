@@ -692,6 +692,7 @@ uniform float uBlossomAmt;
 uniform float uCoverage;
 uniform vec3  uSoilCol;    // the earth the root flare dissolves into
 uniform float uGroundY;    // terrain height at the trunk, world metres
+uniform float uWoodFloor;  // linear-luma floor: no bark pixel is ever a void
 
 #include <common>
 #include <packing>
@@ -703,6 +704,30 @@ uniform bool receiveShadow;
 // for grass, which really does go all the way to #6E76A8).
 #define NPR_SHADOW_HUE 0.16
 #define NPR_SHADOW_CHROMA 0.34
+/* ---- the near-black navy patches in the trunk crotch --------------------
+ * MEASURED (shots/tree-r1/hero.png, scanline y=700): the wood inside the fork
+ * prints rgb(18,23,59) / rgb(16,21,57), display L 0.09, hue 233 — a navy VOID,
+ * ART_BIBLE §8 tell 4. Note GREEN IS ABOVE RED there, which bark albedo never is
+ * (#6A5344 is r>g>b), so the colour is not the albedo: it is
+ * lighting.js nprShadowHue() multiplying by uShadowTint (#6E76A8) renormalised to
+ * unit luminance = (0.507, 1.028, 2.182). The two dampers above cannot stop it —
+ * nprTintStrength() floors NPR_SHADOW_HUE * NPR_SHADOW_CHROMA at 0.78 by design —
+ * and TRUNK_FRAG never overrode NPR_SHADOW_TINT, which is the knob that scales
+ * the multiply itself. The canopy has overridden it for a while (uShTint 0.20);
+ * the wood had not, so the deepest bark shadow took ~0.78 of the full 2.18x blue
+ * gain. 0.30 keeps a clearly COOL shadow (ART_BIBLE §2 forbids "only darker")
+ * without inventing a colour bark does not have. */
+#define NPR_SHADOW_TINT 0.30
+/* ...and the library's "never black" PEDESTAL, which is the other half of it and
+ * the half that actually owned the pixel. nprShadowFloor() adds RAW uShadowTint
+ * (#6E76A8, mostly blue) at NPR_SHADOW_FLOOR, un-hue-rotated, so on a fragment
+ * dark enough that the pedestal IS the fragment the result is literally the tint:
+ * MEASURED at the default 0.045, the crotch printed rgb(16,19,53), hue 235, with
+ * GREEN ABOVE RED — a colour bark cannot have. The canopy has overridden this for
+ * a while (uShFloor 0.016) for exactly this reason; the wood had not. Its own
+ * uWoodFloor below is the luminance-preserving replacement, which keeps the hue the
+ * shading arrived at instead of substituting one. */
+#define NPR_SHADOW_FLOOR 0.012
 // The library's phase-independent SKY rim is tuned for silhouettes against the
 // sky. Bark is never a silhouette and a 0.46 sky term was painting the whole
 // trunk lavender: measured hue 6 deg where the albedo is authored at 27 deg.
@@ -964,6 +989,18 @@ void main(){
   // aerial perspective IS the colour of "not enough of this object in the
   // pixel", so pushing a thin twig further into the haze reproduces exactly the
   // right value and hue with the scene's own coherent fog.
+  /* ---- the wood's own darkest-value floor ------------------------------
+   * A luminance-preserving lift, so it touches nothing already above the floor
+   * and adds no grey: it keeps the hue the shading arrived at and only refuses
+   * to print a void. 0.026 linear lands the deepest crotch shadow at display
+   * L ~0.20 against ART_BIBLE's 0.055 minimum, which is where the darkest mass
+   * in a sunlit frame belongs — dark enough to anchor the tree, not a hole. */
+  {
+    float lw = nprLuma(col);
+    float flw = uWoodFloor * mix(1.0, 0.22, clamp(uNightMix, 0.0, 1.0));
+    col *= max(1.0, flw / max(lw, 1e-6));
+  }
+
   float px = 2.0 * vRad * uPxScale / max(dist, 1e-3);
   float thin = (1.0 - smoothstep(1.5, 7.0, px)) * max(twig, limb * 0.80);
   // Inside the crown the "background" a sub-pixel twig is losing itself into is
@@ -1227,8 +1264,12 @@ uniform float uDeepWalk;   // how far the interior albedo walks onto uDeepCol's 
 uniform float uDeepValue;  // ...and how far its VALUE drops, as a separate fact
 uniform vec3  uDeepCol;    // #C25F86 — the interior re-chromatisation target
 uniform vec3  uMidCol;     // #FFB6CE — the lit mass's palette anchor
+uniform vec3  uEdgeCol;    // #FFF2F6 — the backlit / specular end of the ladder
+uniform vec3  uShadowCol;  // #EE8CAF — the ladder's bottom while the crown is thin
 uniform float uChromaFix;  // palette lock, everywhere
 uniform float uChromaDeep; // ...plus this much more in the interior
+uniform float uChromaFinal;// the LAST word on chroma, after every additive term
+uniform float uChromaGain; // >1 pre-compensates the ACES channel mix (see below)
 /* ---- the three library knobs the canopy has to override, as UNIFORMS -------
  * They are #define'd from uniforms rather than from literals so a runtime probe
  * can A/B them and diff the rendered pixels — which is how the violet interior
@@ -1336,7 +1377,22 @@ void main(){
   // cannot erase, and being world-space it is stable under camera motion (a
   // UV-space or screen-space break-up would crawl).
   float sub = snoise(vWorldPos * 2.55) * 0.62 + snoise(vWorldPos * 6.30 + 13.1) * 0.38;
-  albedo *= 1.0 + sub * 0.30;
+  // ...and scaled by COVERAGE. MEASURED r5: stage 3 and stage 5 crowns came out at
+  // 90x90 luminance sd 0.073 and 0.052 against stage 1's 0.121 — the fuller the
+  // crown, the FLATTER it read, because a full crown has no sky holes left to
+  // supply contrast and every card is lit alike. A denser mass therefore needs MORE
+  // internal value break-up, not the same amount.
+  albedo *= 1.0 + sub * mix(0.30, 0.54, clamp(uCoverage, 0.0, 1.0));
+  /* ---- readable LOBES, not one cauliflower ----------------------------------
+   * A low-frequency field in crown-relative space, so whole handfuls of
+   * neighbouring clusters darken together and the mass resolves into the light and
+   * shadowed masses ART_BIBLE §2 asks for. Only fires as the crown fills in, which
+   * is exactly when the flatness appears. */
+  {
+    float lobe = snoise(vRel * 1.42 + vec3(7.3, 0.0, 2.1)) * 0.66
+               + snoise(vRel * 2.85 + vec3(0.0, 3.7, 0.0)) * 0.34;
+    albedo *= 1.0 + lobe * 0.38 * smoothstep(0.45, 1.10, uCoverage);
+  }
 
   // ---- the crown as a VOLUME, not a shell ----------------------------
   // Three occluders, all read from WHERE the card sits inside the crown rather
@@ -1430,7 +1486,12 @@ void main(){
   // deep interior on #C25F86's own value instead of below it.
   // ...and FLOORED at the palette's own deep value. Measured: 0.34 combined with
   // the (now removed) squared tint took the interior to 0.15 of the palette value.
-  albedo *= max(uDeepClamp, mix(1.0, 0.60, occ) * mix(0.80, 1.0, trans));
+  // ...and the clamp itself relaxes as the crown fills, for the same reason the
+  // deep-value floor does (see uDeepFloor below): at stage 3-5 there really is a
+  // mass of blossom above and outside an interior cluster, so it is allowed to
+  // reach the palette's deep value instead of being held two stops above it.
+  albedo *= max(uDeepClamp * mix(1.0, 0.92, smoothstep(0.45, 1.05, uCoverage)),
+                mix(1.0, 0.60, occ) * mix(0.80, 1.0, trans));
 
   /* ---- normal: flip only the CARD component -------------------------- *
    * The old line flipped the already-sphere-blended normal, and since the blend
@@ -1533,7 +1594,14 @@ void main(){
     // Gated on graze it becomes what it is supposed to be: a glowing rim.
     float graze = pow(1.0 - clamp(abs(dot(N, V)), 0.0, 1.0), 3.2);
     float thinEdge = mix(0.16, 1.0, graze);
-    col += uGlowCol * uThroughGlow * (bk * 0.80 + wr * wr * 0.95 * thinEdge)
+    /* ...and attenuated as the crown FILLS IN. A thicker canopy passes less light —
+     * that is what optical depth means — and without this the stage-4/5 crown blew
+     * to near-white: MEASURED stage 5, mean display L 0.75-0.78 with a 90x90
+     * luminance sd of 0.069 and HSL sat 0.18, i.e. the most spectacular state in the
+     * game rendering as cotton wool. Stage 1's coverage is 0.33, so the smoothstep
+     * leaves the fresh-save look untouched. */
+    float thick = mix(1.0, 0.72, smoothstep(0.90, 1.25, uCoverage));
+    col += uGlowCol * uThroughGlow * thick * (bk * 0.80 + wr * wr * 0.95 * thinEdge)
          * tx.a * mix(0.42, 1.0, vAo) * (1.0 - uNightMix)
          * smoothstep(0.10, 0.86, vShell)    // the SHELL glows, not the interior
          * mix(0.06, 1.0, trans);            // ...and only where the key gets through
@@ -1541,7 +1609,7 @@ void main(){
     // both faces the key hemisphere (sunFace) and is grazing to the eye, i.e.
     // exactly the silhouette edge, and it is the one thing reviewers have
     // consistently praised. Kept off the interior via vShell.
-    col += uHaloCol * uSunHalo * graze * tx.a * (1.0 - uNightMix)
+    col += uHaloCol * uSunHalo * thick * graze * tx.a * (1.0 - uNightMix)
          * smoothstep(0.40, 0.96, vShell) * mix(0.04, 1.0, trans);
   }
 
@@ -1559,14 +1627,169 @@ void main(){
   // touches anything already above the floor and never adds grey.
   {
     float lumF = nprLuma(col);
-    float fl = uDeepFloor * mix(1.0, 0.18, clamp(uNightMix, 0.0, 1.0));
+    /* ...and the floor is COVERAGE-DEPENDENT, which is the fact it was missing —
+     * but it goes UP with coverage, not down, and the reason is worth recording
+     * because I bracketed it the wrong way round first.
+     *
+     * The stage-3 defect was never a value FLOOR problem, it was contrast: with
+     * uOpticalDepth 1.55, two crown radii of blossom pass 4.5 % of the key, so at
+     * full coverage the camera-facing core sat at display L 0.31-0.35 against a
+     * sunlit shell at 0.85 — a 0.40 ratio where ART_BIBLE §2 asks for ~0.55 — and a
+     * dark, deep-chroma core against pale sides read as a WINE-RED COLUMN through
+     * the middle of the crown, i.e. two different species in one tree. MEASURED,
+     * stage 3, floor relaxation 1.00 / 0.90 / 0.80 / 0.52:
+     *   dark-quartile display L   0.48 / 0.35 / 0.31 / 0.22
+     *   dark-quartile hue        329  / 321  / 308  / 312
+     * — the darker it went the more violet it printed, because the grade's shadow
+     * lift toward #2A2438 is a fixed offset and owns a pixel at L 0.3. The FLATNESS
+     * this relaxation was reaching for is properly fixed by the low-frequency lobe field up in
+     * the albedo (90x90 sd 0.073 -> 0.129), which buys structure without buying a
+     * void. So the full crown gets a slightly HIGHER floor than the sparse one. */
+    float fl = uDeepFloor * mix(1.0, 1.12, smoothstep(0.45, 1.05, uCoverage))
+                          * mix(1.0, 0.18, clamp(uNightMix, 0.0, 1.0));
     col *= max(1.0, fl / max(lumF, 1e-6));
+  }
+
+  /* ==== FINAL SAKURA CHROMA RESOLVE — the violet/mauve fix, round 2 =========
+   * MEASURED (shots/tree-r1 vs shots/tree-r1-raw, hero crown interior
+   * x 790-1010 y 260-700, blossom pixels only):
+   *
+   *              RAW (postfx off)                 GRADED
+   *   mean       rgb(185,150,159) B/R 0.859       rgb(177,124,145) B/R 0.820
+   *   dark 25 %  rgb(151,131,133) B/R 0.882       rgb(124, 84,106) B/R 0.849
+   *   HSL sat    0.134                            0.324
+   *   violet %   1.6                              11.7  (canopy preset: 29.4)
+   *
+   * That table is the whole diagnosis. The SHADER's own output is a nearly
+   * neutral pale pink — saturation 0.13 — whose only chroma runs at B/R 0.86,
+   * and the grade then multiplies that chroma by ~2.4x. Amplifying a 0.86 B/R
+   * lifts blue faster than red in absolute terms, so the grade is what prints
+   * the mauve; but it is printing exactly the hue direction we handed it. The
+   * shader is the correct place to fix it, and the fix is CHROMA, not hue: the
+   * measured median hue is already 331-335 deg against #C25F86's 336. What is
+   * missing is saturation — #C25F86 is HSL sat 0.51, our interior 0.13.
+   *
+   * Why the existing palette lock could not do it: it runs BEFORE the
+   * through-glow, the sun halo, the transmission lobe and the uDeepFloor lift,
+   * every one of which adds a near-white (#FFE7EE / #FFC3D6) term on top and
+   * washes the locked chroma straight back out. So the lock has to run LAST —
+   * after every additive light term, before the authored stage-4/5 emissives.
+   *
+   * The target walks the ART_BIBLE §3 ladder on two GEOMETRIC facts (never on
+   * the fragment's own luminance, which is scene-referred and unbounded — see
+   * the hue guard for the two keyings that measured inert):
+   *   deepT  crown-interior occlusion  -> #C25F86
+   *   rimT   grazing + lit + in-shell  -> #FFE7EE, so the signature backlit rim
+   *                                       keeps its warm near-white and is NOT
+   *                                       dragged down the ladder
+   *   otherwise                        -> #FFB6CE
+   * Luminance-preserving, so the entire value ladder built above survives and
+   * only the chroma is pinned. */
+  vec3 palF;      // the palette value this fragment stands in for (see below)
+  {
+    float deepT = clamp(occ / 0.90, 0.0, 1.0);
+    /* ---- index the ladder by VALUE, which is the only way it reads as sakura --
+     * MEASURED r4 sweep (uChromaGain 1.00 / 1.85 / 2.80, hero crown):
+     *   B/R 0.795 / 0.774 / 0.771   dark-quartile B/R 0.783 / 0.752 / 0.731
+     *   dark-quartile HSL sat 0.333 / 0.373 / 0.442
+     * The numbers walked onto target and the PICTURE got worse: pinning every
+     * fragment to #FFB6CE's chroma regardless of its value printed the whole crown
+     * as one hot fuchsia mass at 2.80 and a distinctly hot pink at 1.85. Of course
+     * it did — ART_BIBLE §3's five sakura values are a VALUE ladder whose chroma
+     * rises as the value falls (#FFF2F6 HSL sat 0.05, #FFD9E6 0.15, #FFB6CE 0.29,
+     * #EE8CAF 0.41, #C25F86 0.51), so a bright backlit petal pinned to the MID
+     * value's chroma is off-palette in the opposite direction.
+     *
+     * So the target is chosen by WHERE ON THE SHADING RAMP the fragment sits, which
+     * is what ART_BIBLE §2/§3 actually key the ladder to, and which is bounded 0..1
+     * by construction. Two other indices were MEASURED and rejected — recorded so
+     * the shot budget is not spent on them twice:
+     *   - absolute pre-tonemap luma, knots (0.30, 0.98, 2.10): depends on exposure,
+     *     on the stage's coverage and on the additive glow terms, so one
+     *     calibration is wrong at every other stage. Stage 1 printed
+     *     rgb(207,125,159) sat 0.40 and stage 3 rgb(238,115,179) sat 0.57 — neon
+     *     magenta, because it sent a HIGH-value fragment to #C25F86's chroma, and
+     *     #C25F86's chroma at a high value is not #C25F86.
+     *   - the shading RATIO luma(col)/luma(albedo): dimensionless, but the additive
+     *     backlit terms put it routinely above 1.6, so every fragment mapped to the
+     *     near-white end and the crown came back DESATURATED (sat 0.379 -> 0.261,
+     *     violet 6.2 % -> 11.5 %) — the original mauve failure, re-created.
+     * The ramp position has neither problem: half-Lambert x shadow mask for the
+     * front-lit case, the transmission lobe for the backlit case (the key is behind
+     * the tree, so most of what the camera sees is lit THROUGH), and the interior
+     * occlusion pulling the whole thing down. It also retires the separate rim
+     * protection — a blazing backlit edge scores near 1 and lands on the near-white
+     * end of the ladder by construction, which is exactly right. */
+    float ndlL  = clamp(dot(N, Lk) * 0.5 + 0.5, 0.0, 1.0);
+    float bckL  = pow(clamp(dot(-Lk, V), 0.0, 1.0), 1.2);
+    float thnL  = pow(1.0 - clamp(abs(dot(N, V)), 0.0, 1.0), 2.0);
+    float litT  = clamp(max(ndlL * sm, trans * (0.55 * bckL + 0.75 * thnL))
+                        * (1.0 - 0.62 * deepT), 0.0, 1.0);
+    /* ---- and the anti-neon safety --------------------------------------------
+     * MEASURED r7, stage 3: rgb(226,116,170), HSL sat 0.532 — a fragment can be
+     * BRIGHT and still score low on litT (high occ at full coverage pulls litT
+     * down), and #C25F86's chroma at a bright value is neon magenta, not a deep
+     * rose. The fragment's own shading ratio is the fact that settles it: if this
+     * pixel really is carrying a lot of light for its albedo, it is not allowed to
+     * take a deep palette value however occluded its position is. One-sided, so it
+     * can only prevent the neon case and never re-create the desaturation failure
+     * the ratio caused when it was used as the primary index. */
+    litT = max(litT, smoothstep(0.60, 1.85, nprLuma(col) / max(nprLuma(albedo), 1e-4)) * 0.88);
+    /* ART_BIBLE §3 reserves #C25F86 for the DEEP INTERIOR, and at stage 1 there is
+     * no deep interior to speak of — the crown is thin and every cluster has sky
+     * behind it. MEASURED r9: the low end of the ladder still printed a hot pink
+     * core column through the middle of the stage-1 crown, because it was reaching
+     * for the deep value in a crown that has no depth. So the bottom of the ladder
+     * is the SHADOW value #EE8CAF while the crown is sparse and walks onto #C25F86
+     * only as the mass fills in. */
+    // ...and only 70 % of the way even at a full crown: the last 30 % bought a
+     // saturated wine core rather than a deep rose one (see the floor below).
+     vec3  deepE = mix(uShadowCol, uDeepCol, smoothstep(0.35, 1.00, uCoverage) * 0.70);
+    vec3  palV  = mix(mix(deepE, uMidCol, smoothstep(0.10, 0.52, litT)),
+                      uEdgeCol, smoothstep(0.52, 0.90, litT));
+    // ...and the crown interior reads a little deeper than its bare shading ratio
+    // suggests, because an interior cluster is deep in a mass of blossom, not
+    // merely dim. Kept small: at stage 3 occ is high over most of the crown, and
+    // at 0.35 this alone was half the magenta.
+    vec3  palA  = mix(palV, deepE, deepT * 0.20);
+    /* ---- and now the part every previous round missed ------------------------
+     * MEASURED r4: with the lock at k = 0.855 the raw (postfx-off) crown moved
+     * only 0.867 -> 0.847 display B/R, where pinning to #FFB6CE should have landed
+     * 0.811. Effective strength ~0.25 of nominal. The missing factor is not in
+     * this shader's arithmetic — it is ACES. The tonemapping_fragment include at
+     * the end runs ACESFilmicToneMapping, whose RRT/ODT matrices mix channels, so a
+     * linear B:R of 0.617 (#FFB6CE) does NOT print as 0.808 display; it prints
+     * around 0.85. Authoring the target at the palette's own linear ratio
+     * therefore guarantees a washed, bluer-than-authored pixel.
+     *
+     * So the target is chroma-EXPANDED about its own luminance before the pin, by
+     * exactly enough that what lands on screen is the authored value. The
+     * expansion is luminance-neutral by construction (mixing about nprLuma leaves
+     * the luma untouched), so it costs nothing in the value ladder. */
+    palF        = max(mix(vec3(nprLuma(palA)), palA, uChromaGain), vec3(0.0));
+    float lumR  = max(nprLuma(col), 1e-4);
+    vec3  tgt   = palF * (lumR / max(nprLuma(palF), 1e-4));
+    // Stronger in the interior (which is where the mauve lived) than on the
+    // shell, and off at night where a moonlit crown SHOULD read cool.
+    // MEASURED r2/r3 of this round: at uChromaFinal 0.55 / shell weight 0.74 the
+    // mix was only 0.41, so 59 % of the pre-lock chroma survived and the hero
+    // interior moved 0.820 -> 0.813 B/R — statistically nothing. The arithmetic is
+    // unforgiving: mixing k of the way from linear B:R 0.88 to #FFB6CE's 0.617
+    // lands at 0.88-k*0.263, which needs k > 0.85 to reach the palette. So the
+    // lock runs at nearly full strength, which is legitimate — it is
+    // luminance-preserving, so it cannot damage the value ladder, and the warm rim
+    // is protected by rimT walking palF onto #FFE7EE rather than by weakening k.
+    float kR = uChromaFinal * mix(0.90, 1.0, deepT) * (1.0 - clamp(uNightMix, 0.0, 1.0));
+    col = mix(col, tgt, clamp(kR, 0.0, 0.95));
   }
 
   // stage 4 "Radiant": the petals themselves carry a little light. A floating
   // island is suspended in open air with nothing shading it, so it carries the
   // glow at nearly double — that is what makes it read as an island of light.
-  col += uLuminCol * uLumin * (0.35 + 0.65 * vAo) * (1.0 + 1.05 * vIsle) * tx.a;
+  // MEASURED r9 (stage 5): the islands printed as near-white BLOBS reading as
+  // cloud, not blossom, and the whole crown blew to mean display L 0.75 with a
+  // 90x90 sd of 0.075. Additive emissive at ~2x on the islands was most of it.
+  col += uLuminCol * uLumin * (0.35 + 0.65 * vAo) * (1.0 + 0.55 * vIsle) * tx.a;
   // stage 5 "Everblossom": gold along the petal edges
   float edge = smoothstep(0.55, 0.95, 1.0 - clamp(dot(N, V), 0.0, 1.0));
   col += uGoldCol * uGold * (edge * 0.9 + 0.25) * tx.a;
@@ -1587,22 +1810,28 @@ void main(){
    * darkening. Off at night, where a moonlit crown SHOULD read cool. */
   {
     float l0 = nprLuma(col);
-    /* The ceiling is relative to THIS CARD'S OWN AUTHORED ALBEDO RATIO, which is
-     * the only reference frame that works here. Two earlier keyings were MEASURED
-     * INERT and are recorded so nobody spends the shot budget on them again:
+    /* The ceiling is relative to the PALETTE VALUE THIS FRAGMENT STANDS IN FOR
+     * (palF, from the chroma resolve above). Three earlier keyings were MEASURED
+     * and are recorded so nobody spends the shot budget on them again:
      *   - keyed on occ: a pixel can be dark from the terminator or the shadow map
      *     without being deep in the crown, so most of the drift was missed;
      *   - keyed on the fragment's own luminance against the palette's linear luma
      *     knots (0.213 .. 0.965): col here is SCENE-referred and routinely above
      *     1.0, so the curve saturated at its loose end for every fragment in
-     *     frame. uHueGuard 0.40 / 0.65 / 1.00 all rendered byte-identical.
+     *     frame. uHueGuard 0.40 / 0.65 / 1.00 all rendered byte-identical;
+     *   - keyed on THIS CARD'S OWN AUTHORED TINT (r1 of this round): a card tinted
+     *     #FFF2F6 has linear B:R 0.905, so its cap came out at 1.0 and the guard
+     *     was a no-op on it — and the light-tinted cards are 32 % of the outer
+     *     shell, which is exactly where the orchid blobs measured (canopy preset
+     *     dark quartile B/R 0.919, median hue 315, 27.5 % of pixels violet).
      *
-     * The albedo, by this point, has already been walked onto the palette, so its
-     * blue:red IS the authored ratio (0.437 at #C25F86 up to 0.905 at #FFF2F6).
+     * palF is the right reference because it is the ART_BIBLE value the shading
+     * has just been pinned to, wherever on the ladder that fragment sits:
+     *   #FFF2F6 0.905 | #FFB6CE 0.617 | #C25F86 0.442      (linear B:R)
      * Light may legitimately push a petal's blue up a little — sky ambient and
      * the sky Fresnel are real — but not by a factor of two, which is what the
      * violet crown was. */
-    float aBR = albedo.b / max(albedo.r, 1e-4);
+    float aBR = palF.b / max(palF.r, 1e-4);
     float capB = clamp(aBR * uGuardCap.x + uGuardCap.y, 0.34, 1.0);
     float bMax = col.r * capB + 0.0035;
     if (col.b > bMax) {
@@ -1730,6 +1959,11 @@ void main(){
 export const SHAFT_FRAG = /* glsl */`
 uniform float uShafts;      // master strength, driven by the bloom stage
 uniform vec3  uShaftCol;
+// GLSL_WIND is included in SHAFT_VERT only, so uWindTime is not declared on this
+// side; the shaft flicker below needs it. Same pattern as the aurora shader above.
+// Without this the program failed to compile and stage 5's signature light shafts
+// never rendered at all.
+uniform float uWindTime;
 varying vec2  vSt;
 varying vec3  vWorldPos;
 varying float vSeed;

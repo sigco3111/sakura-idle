@@ -200,6 +200,22 @@ export default {
        canopy's own height instead — a sakura is about as wide as it is tall. */
     const canopySphere = new THREE.Sphere(new THREE.Vector3(0, 7.5, 0), -1);
     const CANOPY_BIAS = 0.34;        // fraction of the geometric offset to take
+    /* r5, MEASURED. The bounding sphere the traversal hands back for
+       `sakura-canopy` is r = 16.1 at centre y 8.5, because it has to contain every
+       stray twig and every mid-air petal card. Feeding that straight in (the old
+       min(radius, cy * 1.22) came out at 10.43) put a 21 m disc of shade on a
+       lawn under a crown whose actual ground footprint is ~13 m across, and the
+       skirt then reached 11.5 m from centre. That is exactly the ART_BIBLE §4.2
+       "dirty smudge" the review called out (a shapeless dark mass several times
+       the canopy width), AND it meant "sunlit ground ten metres from the trunk" —
+       the reference the §2 ratio is measured against — was itself 14% darkened,
+       so the ratio could never be read honestly. Measured on the A/B pair:
+       lit_a 0.849, lit_b 0.926, lit_c 0.864 at 10-12 m out.
+       0.62 x radius, capped by 0.90 x canopy height and hard-capped at 9 m, fits
+       the crown's real drip line (-> 7.6 m here) and leaves 10 m out untouched. */
+    const CANOPY_R_FRAC = 0.62;      // fraction of the caster sphere's radius
+    const CANOPY_R_PER_HEIGHT = 0.90;
+    const CANOPY_R_MAX = 9.0;
     let canopyFound = false;
 
     function writeCanopyOcc(keyDir) {
@@ -207,13 +223,20 @@ export default {
       if (!c) return;
       if (poolOff || !canopyFound || !(canopySphere.radius > 0)) { c.set(0, 0, 0, 0); return; }
       const cy = Math.max(canopySphere.center.y, 0.5);
-      const R = THREE.MathUtils.clamp(Math.min(canopySphere.radius, cy * 1.22), 3, 14);
+      const R = calOverride.poolR ?? THREE.MathUtils.clamp(
+        Math.min(canopySphere.radius * CANOPY_R_FRAC, cy * CANOPY_R_PER_HEIGHT),
+        3, CANOPY_R_MAX);
       // geometric ground offset of a blocker at height cy, then damped
       const ky = Math.max(keyDir.y, 0.18);
-      // Clamped to under half the radius so the pool ALWAYS overlaps the trunk.
-      // Unclamped, a grazing dawn/dusk key slid it 9 m off the base and the tree
-      // went back to floating at exactly the two phases that most need grounding.
-      const off = THREE.MathUtils.clamp((cy / ky) * CANOPY_BIAS, 0, R * 0.45);
+      // Clamped to a FIFTH of the radius, not a half. The sun sits behind the
+      // tree by decision, so the offset slides the pool toward the camera — i.e.
+      // toward the bottom edge of the hero frame, where the composition has only
+      // ~2 m of visible ground. At the old R * 0.45 the centre sat 4.2 m off the
+      // trunk (measured: uCanopyOcc = 0.33, 0, 4.23, 10.43), so the deepest part
+      // of the shade was BELOW frame and what remained on screen was the flat
+      // outer skirt — a smudge with no gradient. R * 0.20 keeps the lean (the
+      // shade still belongs to this sun) with the core over the root flare.
+      const off = THREE.MathUtils.clamp((cy / ky) * CANOPY_BIAS, 0, R * 0.20);
       c.set(canopySphere.center.x - keyDir.x * off, 0,
         canopySphere.center.z - keyDir.z * off, R);
     }
@@ -448,8 +471,14 @@ export default {
         }
         for (const l of _adopted) {
           if (n >= MAX_LAMPS) break;
-          if (!l.visible || !(l.intensity > 0)) continue;
-          l.getWorldPosition(_lampPos);
+          // `.parent` guards a lamp that was removed from the graph between two
+          // sweeps (a props module swapping its lantern set, a VFX light being
+          // released): _adopted only refreshes every NPR_RESCAN_FRAMES, and a
+          // detached light would otherwise keep lighting the garden from wherever
+          // it last stood. `visible` alone does not cover it, and `visible` on the
+          // light itself does not see an ancestor group being hidden either.
+          if (!l.parent || !l.visible || !(l.intensity > 0)) continue;
+          l.getWorldPosition(_lampPos);      // r185: does updateWorldMatrix itself
           push(_lampPos, l.color, l.intensity, l.distance > 0 ? l.distance : LAMP_RANGE_DEFAULT);
         }
       }
@@ -527,7 +556,7 @@ export default {
     const calOverride = {
       ratio: null, core: null, rim: null, desat: null,
       aerLevel: null, aerKeep: null, aerPow: null, fogScale: null,
-      occPow: null, aoScale: null, pool: null,
+      occPow: null, aoScale: null, pool: null, poolR: null, fogStart: null,
     };
 
     /** Write the four global shading knobs into the shared bag. */
@@ -619,6 +648,9 @@ export default {
       // so a sweep never has to fight the per-frame palette refresh.
       if (calOverride.fogScale != null && L.uFogParams?.value) {
         L.uFogParams.value.x *= calOverride.fogScale;
+      }
+      if (calOverride.fogStart != null && L.uFogParams?.value) {
+        L.uFogParams.value.z = calOverride.fogStart;
       }
 
       // ---- key light: whichever body is above the horizon owns the shadow.
@@ -875,12 +907,63 @@ export default {
         sc_[`cal-fog${v}`] = () => { calOverride.fogScale = v / 100; apply(false); };
         sc_[`cal-fog${v}-wide`] = () => { calOverride.fogScale = v / 100; apply(false); };
       }
-      for (const v of [100, 135, 185, 240, 300]) {
+      /* ...and the DISTANCE at which the haze starts accumulating, in metres.
+         This is a different lever from density and the pair have to be swept
+         separately: `start` decides how much of the PLAYABLE field is hazed at
+         all, `density`/`pow` decide how fast the far edge converges. Cutting
+         density to clean up the mid-ground also stops the far edge reading as air
+         (measured in r4); pushing the start out does not. */
+      for (const v of [30, 40, 48, 55, 64, 76]) {
+        sc_[`cal-start${v}`] = () => { calOverride.fogStart = v; apply(false); };
+      }
+      for (const v of [100, 135, 185, 220, 240, 260, 300]) {
         sc_[`cal-occ${v}`] = () => { calOverride.occPow = v / 100; apply(false); };
       }
       for (const v of [0, 60, 100, 140, 180, 220]) {
         sc_[`cal-pool${v}`] = () => { calOverride.pool = v / 100; apply(false); };
       }
+      /* ...and how much fake key fill survives inside a genuinely ENCLOSED pocket
+         (NPR_SHADOW_AO x this). The only lever in the model that can lower the
+         frame's histogram floor WITHOUT touching the open cast shadow, so it is
+         the one to sweep when a review asks for a lower lum p1. MEASURED in r5:
+         the graded p1 barely responds (see the note on NPR_SHADOW_AO), because
+         the post grade's shadow lift pins it — sweep this before assuming the
+         shading model is at fault. */
+      for (const v of [40, 60, 80, 100, 140]) {
+        sc_[`cal-ao${v}`] = () => { calOverride.aoScale = v / 100; apply(false); };
+      }
+      /* ...and the pool's RADIUS in metres, which is the other half of the
+         "contact shadow, not smudge" calibration: depth alone cannot both land
+         ART_BIBLE §2's near-trunk ratio and stop the shade sprawling. */
+      for (const v of [50, 62, 76, 90, 104, 120]) {
+        sc_[`cal-poolr${v}`] = () => { calOverride.poolR = v / 10; measureCasters(); apply(false); };
+      }
+      /* ---- REAL THREE.PointLight adoption, as opposed to the addLamp() path
+         above. 35-props.js lights its stone lanterns by adding PointLights to the
+         scene graph and relying on this rig to adopt them into uLampPos /
+         uLampColor (a bare PointLight is invisible to every NPR surface). This
+         scenario adds five — one more than NPR_MAX_LAMPS — so the ranking, the
+         slot cap and the per-fragment cost can all be measured without waiting
+         on the props module. */
+      sc_['lamptest-adopt'] = () => {
+        const spots = [[3.4, 1.35, 4.2, 0xFFC073, 9, 9], [-4.6, 1.35, 2.0, 0xFFB25E, 7, 8],
+          [6.2, 1.35, -1.4, 0xFFC073, 8, 9], [-1.2, 1.35, 6.4, 0xFFB25E, 7, 8],
+          [-7.0, 1.35, -3.2, 0xFFC073, 6, 7]];
+        for (const [x, y, z, hex, int, dist] of spots) {
+          const pl = new THREE.PointLight(0xffffff, int, dist);
+          pl.color.setHex(hex, THREE.SRGBColorSpace);
+          pl.position.set(x, y, z);
+          pl.name = 'lamptest-adopt';
+          scene.add(pl);                      // scene root, NOT our group
+        }
+        sweepScene(true); apply(false);
+      };
+      sc_['lamptest-adopt-night'] = () => {
+        sc_['lamptest-adopt'](); setDayT(PHASE_ANCHORS.night);
+      };
+      sc_['lamptest-adopt-dusk'] = () => {
+        sc_['lamptest-adopt'](); setDayT(PHASE_ANCHORS.dusk);
+      };
       sc_['golden'] = () => { setDayT(DEFAULT_DAY_T); };
       sc_['noon'] = () => { setDayT(0.5); };
       sc_['raw'] = () => { noPost(); setDayT(DEFAULT_DAY_T); };

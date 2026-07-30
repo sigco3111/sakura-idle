@@ -30,6 +30,17 @@ const svg = (tag, attrs) => {
 const num = (v) => (typeof v === 'number' && isFinite(v) ? v : 0);
 const ROMAN = ['I', 'II', 'III', 'IV', 'V', 'VI'];
 const EVENT_PRIORITY = ['storm', 'clickFrenzy', 'frenzy', 'bloomfall', 'rain', 'moon', 'goldenHour'];
+/**
+ * Time-of-day chip. dusk/night are also the Golden Hour / Full Moon windows, so
+ * the note carries the live buff. Notes stay SHORT: at "黄金時 · +15% per shake"
+ * the chip forced 花びら to wrap and the HUD plate grew 30 px on dusk alone.
+ */
+const PHASE_META = {
+  dawn: { kanji: '朝', name: 'DAWN', note: 'first light' },
+  day: { kanji: '昼', name: 'DAY', note: 'full sun' },
+  dusk: { kanji: '夕', name: 'DUSK', note: '黄金時 +15%' },
+  night: { kanji: '夜', name: 'NIGHT', note: '満月 +25%' },
+};
 const EVENT_META = {
   storm: { kanji: '花嵐', name: 'Petal Storm', desc: '×10 petals per second · the whole hillside is in the air' },
   rain: { kanji: '春雨', name: 'Spring Rain', desc: '+10% petals per second · the fall slows to a drift' },
@@ -153,11 +164,20 @@ export default {
 
     /* Everything legibility-critical lives on one parchment plate (§7): the old
        HUD was 13 px grey text floating over a lit sky at ~2:1 contrast. */
+    /* Time-of-day chip. The bank row's right third was dead parchment, and the
+       phase is load-bearing information: dusk is Golden Hour and night is Full
+       Moon, so the player needs to see which window they are in. */
+    const elPhaseK = h('i.sk-kanji', '昼');
+    const elPhaseN = h('b', 'DAY');
+    const elPhaseNote = h('span', 'full sun');
+    const phaseChip = h('div.sk-phase', { title: 'Time of day' }, elPhaseK,
+      h('div', elPhaseN, elPhaseNote));
+
     const hud = h('div.sk-hud',
       h('div.sk-vig.tl'), h('div.sk-vig.bt'),
       h('div.sk-plate.sk-paper', corners(true),
         h('div.sk-bank',
-          h('div.sk-bank-row', h('div.sk-bank-icon'), elBank, h('span.sk-bank-unit', '花びら')),
+          h('div.sk-bank-row', h('div.sk-bank-icon'), elBank, h('span.sk-bank-unit', '花びら'), phaseChip),
           h('div.sk-bank-sub',
             h('span', null, elRate, h('em', '/ sec')),
             h('div.sep'),
@@ -181,6 +201,7 @@ export default {
     ui.append(hud);
 
     const shakeBtn = h('div.sk-shake', { onclick: () => doShake(), title: 'Shake the bough' },
+      h('div.tip', 'start here — the bough drops petals when you shake it'),
       h('kbd', 'SPACE'),
       h('span', 'shake the bough'),
       h('div.bar'),
@@ -318,7 +339,10 @@ export default {
       const avail = A.upgradeViews();
       const hw = A.heartwood().filter((x) => !x.owned);
       const bought = A.boughtUpgrades();
-      const key = avail.map((u) => u.id).join(',') + '|' + hw.map((x) => x.id).join(',') + '|' + bought.length;
+      /* canPrestige is in the key because the completion card's only control is
+         the Season button, and that flips without the available set changing. */
+      const key = avail.map((u) => u.id).join(',') + '|' + hw.map((x) => x.id).join(',')
+        + '|' + bought.length + '|' + (avail.length || hw.length ? '' : A.canPrestige());
       if (key === upgradeKey) return;
       upgradeKey = key;
       upgradeRows.length = 0;
@@ -344,23 +368,33 @@ export default {
           }));
         }
       }
-      /* Nothing available is a real late-game state, and a one-line apology on
-         empty parchment reads as an unbuilt screen (§8.11). Show what has
-         already been learned instead — the panel stays full and stays useful. */
+      /* Nothing available is a real late-game state. The first version answered
+         it with fourteen full-width rows each carrying an identical 済 LEARNED
+         pill and no pressable control anywhere — a dead screen. It is now a
+         sealed certificate that carries the ONE action left (turn the Season)
+         plus a dense two-column index of what was learned. */
       if (!upgradeRows.length) {
-        upgradePanel.body.append(h('div.sk-flavour', { style: { textAlign: 'center', padding: 'calc(var(--u)*.6) 0 calc(var(--u)*.4)' } },
+        const canP = A.canPrestige();
+        upgradePanel.body.append(h('div.sk-done',
+          h('div.sl'),
+          h('div.cap', bought.length ? 'Nothing left to learn' : 'Nothing to learn yet'),
+          h('h3', bought.length ? '強化 完 · ALL LESSONS TAKEN' : '強化 未 · THE GROVE IS YOUNG'),
+          h('div.fv', bought.length
+            ? `All ${A.fmt(bought.length)} of them are yours. They keep until the Season turns — and the next Season starts with everything you have earned since the first.`
+            : 'Buy a Tender or two and the grove will start suggesting things.'),
           bought.length
-            ? 'Every lesson this grove had to teach has been taken. Turn the Season for more.'
-            : 'Nothing new to learn yet. Grow the grove and come back.'));
+            ? h('div.act', canP
+              ? goldBtn(`TURN THE SEASON  +${A.fmt(A.essencePreview())} 桜精`, () => { A.prestige(); refresh(); })
+              : goldBtn('OPEN THE CONSTELLATION', () => selectTab('star'), { cls: 'ghost' }))
+            : null));
         if (bought.length) {
-          upgradePanel.body.append(famHeader({ id: 'done', kanji: '済', name: 'Learned', sub: 'kept until the Season turns' }));
-          for (const u of bought.slice(-14).reverse()) {
-            upgradePanel.body.append(h('div.sk-up.own', { class: 'fam-' + (u.family ?? 'grove') },
-              h('div.g', famMeta(u.family).kanji),
-              h('h3', u.name ?? u.id),
-              h('div.sk-taken', { style: { gridRow: '1/3' } }, '済 LEARNED'),
-              h('div.fv', u.flavour ?? '')));
+          upgradePanel.body.append(famHeader({ id: 'done', kanji: '済', name: 'Learned', sub: `${bought.length} kept until the Season turns` }));
+          const grid = h('div.sk-learned');
+          for (const u of bought.slice().reverse()) {
+            grid.append(h('div.sk-lchip', { class: 'fam-' + (u.family ?? 'grove'), title: `${u.name ?? u.id}\n${u.flavour ?? ''}` },
+              h('i', famMeta(u.family).kanji), h('span', u.name ?? u.id)));
           }
+          upgradePanel.body.append(grid);
         }
       }
       upgradeFootR.textContent = `${bought.length} learned`;
@@ -387,7 +421,10 @@ export default {
      * 6.  Codex modal — rarity cards with flip + shine
      * ============================================================== */
     function buildCodex(view = 'varieties') {
-      const p = panel({ title: 'SAKURA CODEX', kanji: '桜 図 鑑', cls: 'sk-modal', close: closeModal });
+      /* `codexw`: twelve rarity cards at 6x2. Four across x three rows never fit
+         inside an 82vh modal at any size we ship — the bottom row sat under the
+         fold. See the .sk-codex block in ui-style.js for the measurements. */
+      const p = panel({ title: 'SAKURA CODEX', kanji: '桜 図 鑑', cls: 'sk-modal codexw', close: closeModal });
       const list = A.codexViews();
       const detail = h('div.sk-detail',
         h('div.sk-title', { style: { fontSize: 'calc(var(--u)*1.0)' } }, '十二の桜'),
@@ -537,8 +574,18 @@ export default {
         const [x, y] = pos(n);
         const rr = n.tier >= 4 ? 1.9 : n.tier >= 2 ? 1.5 : 1.2;
         const g = svg('g', { style: 'cursor:pointer' });
-        if (n.owned) g.append(svg('circle', { cx: x, cy: y, r: rr * 3.0, fill: hueOf(n), opacity: '.22' }));
-        else if (n.affordable) g.append(svg('circle', { cx: x, cy: y, r: rr * 2.6, fill: '#FFE6A8', opacity: '.16' }));
+        /* halos were rr*3.0 / rr*2.6 — on a 100-unit viewBox a tier-4 node threw
+           a 5.7-unit smudge that swallowed its neighbours. Tight glow plus a
+           crisp ring reads as "available" instead of as a blur artefact. */
+        if (n.owned) g.append(svg('circle', { cx: x, cy: y, r: rr * 1.95, fill: hueOf(n), opacity: '.26' }));
+        else if (n.affordable) {
+          g.append(svg('circle', { cx: x, cy: y, r: rr * 1.8, fill: '#FFE6A8', opacity: '.2' }));
+          g.append(svg('circle', {
+            cx: x, cy: y, r: rr * 1.72, fill: 'none',
+            stroke: '#FFDC92', 'stroke-width': 0.2, opacity: '.85',
+            'stroke-dasharray': (rr * 0.5).toFixed(2) + ' ' + (rr * 0.34).toFixed(2),
+          }));
+        }
         g.append(svg('circle', {
           cx: x, cy: y, r: rr,
           fill: n.owned ? `url(#n_${n.branch})` : 'url(#nodeOff)',
@@ -755,6 +802,7 @@ export default {
       function dismiss() { A.clearOffline(); closeModal(); }
       const stages = A.stages();
       mount(p.body,
+        h('div.band'),
         h('div.lead', 'The grove kept working while you were gone.'),
         h('div.big.num', '+' + A.fmt(gained)),
         h('div.cap', 'petals gathered'),
@@ -929,8 +977,27 @@ export default {
       if ((goldenHint.style.display !== 'none') !== want) goldenHint.style.display = want ? '' : 'none';
       const can = A.canPrestige();
       if ((seasonChip.style.display !== 'none') !== can) seasonChip.style.display = can ? '' : 'none';
+      /* First run: the one Tender row on screen costs 15 and the player holds 0,
+         so every buy button in the frame is correctly disabled. Promote the shake
+         control to the hero affordance until the first Tender is standing, or the
+         game presents itself as unclickable. */
+      const r = A.rates();
+      const first = num(r.totalTenders) <= 0 && num(r.perSecond) <= 0;
+      setClass(shakeBtn, 'first', first);
+
+      /* the bus event may have fired before we subscribed (lighting is order 8) */
+      const pid = PHASE_META[G()?.phase] ? G().phase : phaseId;
+      if (pid !== phaseId) phaseId = pid;
+      const ph = PHASE_META[phaseId] ?? PHASE_META.day;
+      setText(elPhaseK, ph.kanji);
+      setText(elPhaseN, ph.name);
+      setText(elPhaseNote, ph.note);
+      for (const k in PHASE_META) setClass(phaseChip, 'p-' + k, k === phaseId);
     }
 
+    /* 08-lighting owns the phase and announces it; ctx.assets.game mirrors it, so
+       read whichever is available and fall back to day. */
+    let phaseId = 'day';
     let slow = 0;
     function update(dt) {
       const r = A.rates();
@@ -983,6 +1050,7 @@ export default {
       ctx.bus.on('game:scenario', () => { upgradeKey = ''; welcomeShown = false; refresh(); }),
       ctx.bus.on('petals:gain', (p) => { if (p && p.amount > 0 && p.point) flyNumber(p.amount, p.point, !!p.crit); }),
       ctx.bus.on('bloom:stage', refresh),
+      ctx.bus.on('time:phase', (p) => { phaseId = p?.phase ?? phaseId; refresh(); }),
       offResize,
     ];
 
@@ -1028,7 +1096,17 @@ export default {
       S['ui-star-late'] = () => { base('lategame'); selectTab('star'); };
       S['ui-settings'] = () => { base('rich'); selectTab('set'); };
       S['ui-storm'] = () => { base('rich'); try { S['game-storm']?.(); } catch { /* ignore */ } refresh(); update(0.2); };
-      S['ui-stageup'] = () => { base('rich'); try { S['game-stageup']?.(); } catch { stageUp({ stage: 3 }); } update(0.2); };
+      /* `game-stageup` bumps state.stage by hand, but the harness then warms 420
+         frames and 60-game's applyStage() recomputes the stage from
+         totalThisSeason and puts it back — so the frame showed a 輝咲 STAGE V
+         card over a HUD reading 満開 IV / VI. Load the measured stage-4 state
+         instead, so the announcement and the readout agree. */
+      S['ui-stageup'] = () => {
+        base('stage4');
+        const s = (A.stages()[4] ?? STAGE_DEFS[4]) ?? {};
+        stageUp({ stage: 4, kanji: s.kanji, name: s.name, blurb: s.blurb, blossoms: 12 });
+        update(0.2);
+      };
       S['ui-welcome'] = () => { base('rich'); welcomeShown = false; try { S['game-offline']?.(); } catch { /* ignore */ } };
       S['ui-toasts'] = () => {
         base('rich');

@@ -481,7 +481,7 @@ export default {
     atmosPass.uniforms.uRayColor.value = rayColor;
     atmosPass.uniforms.uRayFalloff.value = new THREE.Vector4(0.02, 0.24, 2.50, 6.00);
     atmosPass.uniforms.uRayDamp.value = new THREE.Vector2(0.85, 0.55);
-    atmosPass.uniforms.uRayStruct.value = new THREE.Vector2(0.22, 4.0);
+    atmosPass.uniforms.uRayShaft.value = new THREE.Vector3(4.0, 0.10, 0.0);
     atmosPass.uniforms.uRayContrast.value = new THREE.Vector2(0, 1);
     atmosPass.uniforms.uAspect.value = W / H;
 
@@ -549,19 +549,25 @@ export default {
         // which is exactly what the critic measured. strength and shape are the two
         // knobs that convert ray-buffer contrast into display contrast; the struct
         // floor is what was throwing it away.
-        strength: 0.95, duskBoost: 1.15, density: 0.92, decay: 0.985, shape: 3.0,
+        // ROUND 4: `shape` 3.0 -> 1.5. See the long comment in RAY_BLUR_SHADER —
+        // pow(r, 3) was one of two crushes both centred on the sun and it turned a
+        // measured raw march of 0.20/0.31/0.44/0.75 (four points left-to-right
+        // across dusk/hero) into 0.007/0.029/0.085/0.42.
+        strength: 0.95, duskBoost: 1.15, dayScale: 0.34, density: 0.92, decay: 0.985, shape: 1.5,
         // (linear-HDR luma where the add starts being damped, damping amount).
         // Damping starts later and takes less: at dusk the destination beside the
         // sun is a peach sky at luma 0.4-0.7, so a 0.85 damp starting at 0.25 was
         // removing 80% of the add over the entire region the shafts cross.
-        damp: new THREE.Vector2(0.42, 0.70),
-        // (floor for a structureless ray field, contrast gain) — see rayStructure().
-        // The floor is the amount a FLAT ray field still adds; anything it adds is
-        // by definition glow rather than shafts, and it also compresses the ratio
-        // between a shaft and its gap (at 0.18 a 3:1 ray contrast composites as
-        // 1.6:1). 0.09 with a higher gain keeps full weight wherever the field
-        // genuinely has cross-ray structure and roughly halves the wash.
-        struct: new THREE.Vector2(0.09, 10.0),
+        damp: new THREE.Vector2(0.38, 0.82),
+        // (cross-ray HIGH-PASS gain, absolute-level gain, noise deadband) of the
+        // additive term. The first number is the one that makes shafts; the second
+        // is a small r^2 root so a shaft is not floating in nothing; the third is
+        // the noise floor of the quarter-res march, subtracted before the rectifier
+        // so the positive half of that noise does not become a DC wash over the
+        // sky. Deliberately lopsided — an additive term proportional to the
+        // absolute ray level is a radial lobe by construction and cannot be tuned
+        // into a shaft (see ATMOS_SHADER).
+        shaft: new THREE.Vector3(11.0, 0.05, 0.018),
         // MULTIPLICATIVE cross-ray contrast (gain, perpendicular-baseline width
         // scale). This is the term that finally made the shafts visible, and the
         // reason the previous three rounds could not: `strength` and `damp` only
@@ -569,14 +575,24 @@ export default {
         // bright sky — i.e. precisely the region `damp` was built to protect from
         // clipping. Measured, dusk/hero, shafts.mjs on the (rays - no-rays) delta,
         // arc peaks at >= 0.10 L prominence over four radii: see the ROUND 4 log.
-        contrast: 1.50, contrastWidth: 6.0,
+        // ROUND 4: contrastWidth 6.0 -> 1.3. At 6.0 the four perpendicular baselines
+        // in rayStructure() sat at 0.048/0.108/0.228/0.432 UV — 92 to 830 px on a
+        // 1920 frame — so "the local cross-ray baseline" was most of the frame and
+        // st.x measured broad lobes, not shafts. At 1.3 they are 0.010/0.023/0.049/
+        // 0.094 UV = 20/45/95/180 px, which brackets a real crepuscular shaft.
+        contrast: 1.50, contrastWidth: 1.05,
         // `threshold` is the linear-HDR luma at which sky counts as a full-strength
         // shaft source, and `floor` how much a dimmer patch of visible sky still
         // seeds. Measured with pipeline.sample('scene', u, v): the sky right beside
         // the sun reads luma ~0.9 at golden hour and ~0.45 at dusk, so a threshold
         // of 0.75 (what shipped) meant the dusk sky — the one phase §4.3 calls out
         // as strongest — barely seeded anything at all.
-        threshold: 0.30, floor: 0.30,
+        // ROUND 4: floor 0.30 -> 0.10. The floor is what a DIM patch of visible sky
+        // still seeds, so it is also the contrast the CLOUDS get to carve with — and
+        // clouds are the canonical crepuscular-ray occluder. At 0.30 a dark cloud
+        // still seeded 30% and the shaft fan collapsed to the one boundary the
+        // canopy silhouette makes.
+        threshold: 0.30, floor: 0.10,
         // `reach` localises the SEED (aspect-corrected UV radius around the source);
         // `falloff` is a vec4 (innerStart, innerEnd, outerStart, outerEnd) radial
         // window applied to the FINISHED shafts in the composite. The outer pair is
@@ -587,11 +603,14 @@ export default {
         // Scale applied while the shafts converge on the antisolar point instead
         // of radiating from the sun — see updateSunScreen().
         antiScale: 0.75,
-        // Tighter seed blob: the narrower the seed, the more of the march's answer
-        // is "did this particular ray clear the canopy" rather than "is there sky
-        // somewhere over there", and the more cross-ray contrast survives.
-        reach: new THREE.Vector2(0.62, 1.85),
-        falloff: new THREE.Vector4(0.05, 0.20, 2.50, 6.00),
+        // ROUND 4: (0.62, 1.85) -> (2.10, 4.40), and the falloff in RAY_MASK is no
+        // longer SQUARED. The seed feeds a march ALONG the line of sight to the sun,
+        // so a seed that only exists near the sun makes the march answer "how close
+        // to the sun am I" instead of "did my ray clear the canopy". Measured mask
+        // values that proved it are in the RAY_MASK_SHADER comment. Where the shafts
+        // are DRAWN is `falloff`'s job, not the seed's.
+        reach: new THREE.Vector2(2.10, 4.40),
+        falloff: new THREE.Vector4(0.06, 0.24, 1.50, 3.20),
       },
       // `strength` is normalised by the pyramid's weight sum (see
       // HazeBloomPass.render step 5), so it means "peak amplitude of the veil as a
@@ -1016,7 +1035,16 @@ export default {
       lastLowSun = lowSun;
       const nightFade = 1 - 0.78 * night;
       let g = behind * offFrame * nightFade
-            * (1 + (params.rays.duskBoost - 1) * lowSun);
+            * (1 + (params.rays.duskBoost - 1) * lowSun)
+            // ART_BIBLE 4.3: "strong at dawn/dusk". With the sun high the shafts are
+            // near-vertical, they are tinted to a nearly WHITE key, and there is
+            // clear blue sky either side of them — measured on the day/hero frame at
+            // full strength they printed as three hard white near-vertical streaks
+            // over the sky at x 1150-1250 / 1450-1620 / 1780-1850, which reads as a
+            // scratched lens, not as light. This is the only gate that distinguishes
+            // "the sun is up" from "the sun is low", so the phase shape lives here
+            // rather than in the shader.
+            * (params.rays.dayScale + (1 - params.rays.dayScale) * lowSun);
       // Converging shafts are a subtler phenomenon than radiating ones and their
       // source is the dim half of the sky, so they get their own scale rather than
       // borrowing the sun-side number.
@@ -1161,7 +1189,7 @@ export default {
       rayMask.uniforms.uFloor.value = params.rays.floor;
       atmosPass.uniforms.uRayFalloff.value.copy(params.rays.falloff);
       atmosPass.uniforms.uRayDamp.value.copy(params.rays.damp);
-      atmosPass.uniforms.uRayStruct.value.copy(params.rays.struct);
+      atmosPass.uniforms.uRayShaft.value.copy(params.rays.shaft);
       atmosPass.uniforms.uRayContrast.value.set(
         useRays ? params.rays.contrast * rayGate : 0, params.rays.contrastWidth);
       atmosPass.uniforms.uRaySolo.value = raySolo;
@@ -1531,6 +1559,15 @@ export default {
         window.__game.scenarios[`postfx-${ph}-rays-solo`] = chain(ph, 'postfx-rays-solo');
         window.__game.scenarios[`postfx-${ph}-no-contrast`] =
           chain(ph, 'postfx-no-ray-contrast');
+        // the whole grade bypassed at a given phase — the only way to attribute a
+        // stats.mjs gate (flatBlocks, crushed, satMean) to the tone curve rather
+        // than to the scene.
+        window.__game.scenarios[`postfx-${ph}-flat`] = chain(ph, 'postfx-flat');
+        window.__game.scenarios[`postfx-${ph}-no-grain`] = chain(ph, 'postfx-no-grain');
+        window.__game.scenarios[`postfx-${ph}-no-dof-no-grain`] =
+          chain(ph, 'postfx-no-dof', 'postfx-no-grain');
+        window.__game.scenarios[`postfx-${ph}-no-smaa-no-grain`] =
+          chain(ph, 'postfx-no-smaa', 'postfx-no-grain');
       }
       window.__game.scenarios['postfx-no-ray-contrast'] = () => { params.rays.contrast = 0; };
       window.__game.scenarios['postfx-no-taa'] = () => { taaOff = true; };
@@ -1753,4 +1790,118 @@ export default {
  *   the wider temporal clamp could have damaged: hero 10.87 / 10.39 and wide 9.31,
  *   with 65-68% of pixels changing more than 3 levels, against 11.07 / 8.93 and
  *   65-66% on shots/critic-p4-r1. Unchanged inside run noise.
+ * ====================================================================== *
+ * ROUND 4 (critic: "GOD RAYS DO NOT RENDER", third report). Everything below is
+ * measured on THIS build, 1920x1080, ultra, --warm 420, --ui 0, against a
+ * same-build scenario bisect. Verification ran against an identical copy of the
+ * tree at /tmp because two sibling modules were mid-edit and unparseable; only
+ * their COMMENTS were repaired in the copy, no logic.
+ *
+ * WHY THREE ROUNDS OF SHAFTS NEVER RENDERED. Not the composer chain (probe:
+ * passes 16, rays enabled, useRays true at ultra), not the sun's screen position
+ * (that is exact — projecting a point 5000 units along uSunDir through the real
+ * camera matrix reproduces sunUV to 5 decimal places in every phase and preset),
+ * and not an empty occlusion input. It was TWO INDEPENDENT MULTIPLICATIVE CRUSHES
+ * BOTH CENTRED ON THE SUN, plus an additive term that could not express a shaft:
+ *   (1) RAY_MASK multiplied the seed by reach^2 with reach = (0.62, 1.85). Measured
+ *       mask, dusk/hero (pipeline.sample('mask',u,v)):
+ *         (0.20,0.70) 0.0105   (0.50,0.75) 0.283   (0.90,0.90) 1.000
+ *       i.e. the whole left half of the visible sky seeded nothing, and the march
+ *       that consumes the seed is an AVERAGE ALONG THE LINE OF SIGHT TO THE SUN, so
+ *       every pixel away from the source averaged zeros.
+ *   (2) RAY_BLUR then applied pow(r, 3.0). Raw march at four points left-to-right
+ *       across dusk/hero was 0.20 / 0.31 / 0.44 / 0.75; after the gamma, 0.007 /
+ *       0.029 / 0.085 / 0.42.
+ *   (3) ATMOS's add was uRayColor * r * gates. A marched occlusion average is a
+ *       smooth radial ramp by construction, so an add proportional to r is a LOBE
+ *       whatever is hung off it. Measured shipped-r3 delta vs postfx-dusk-no-rays:
+ *       one 120x120 cell at +55.7/255 beside the sun, +2..+7 smeared over the whole
+ *       aerial-haze band, and 0-1 arc peak at >= 2.5/255 prominence at R = 0.25H
+ *       and 0.40H. That is the glow the critic saw, and part of the milky band.
+ *   FIXED: seed taper widened to (2.10, 4.40) and un-squared; shape 3.0 -> 1.5; the
+ *   add is now driven by the cross-ray HIGH PASS (a local-extremum test, see
+ *   rayStructure) with a noise deadband, a soft knee, and a small r^2 root.
+ *   Ray field, dusk/hero, same four points AFTER: 0.084 / 0.109 / 0.200 / 0.299
+ *   (mask at (0.20,0.70) 0.349), sunUV (1.0482, 0.9174) = just off the top-right
+ *   corner, ray-buffer mean 0.092 -> 0.131 depending on preset, max 1.0.
+ *
+ * SHAFT COUNT, on the (rays - postfx-<phase>-no-rays) difference, walking circular
+ * arcs around the projected sun and counting local maxima by prominence against
+ * their neighbouring troughs (.tmp-postfx/diff.mjs). Peaks at >= 2.5/255:
+ *              R=0.25H  0.40H  0.60H  0.80H  1.10H   peak add   deepest gap
+ *   dusk/canopy    4      6     10      6      5      +88/255     -30/255
+ *   dusk/hero      1      3      1      5      4      +82/255      -3/255
+ *   The canopy preset is the one to look at: shots/pfx-g-dusk/canopy.png has a fan
+ *   of 5-6 soft warm shafts radiating from the off-frame sun at sunUV (0.913,-0.10)
+ *   = screen (1753, 1189), sweeping up-left across the branches, with visibly dark
+ *   gaps between them. shots/pfx-g-dusk/hero.png has one broad beam over the canopy
+ *   plus a fainter second — that composition has the sun 35 degrees off the subject
+ *   with clear sky between, so there is little for shafts to be shafts between.
+ *   Raw buffer in isolation: --scenario postfx-<phase>-rays-buffer (quarter-res
+ *   march straight to screen) and postfx-<phase>-rays-solo (what ATMOS adds, over
+ *   black). postfx-<phase>-flat / -no-grain / -no-dof-no-grain / -no-smaa-no-grain
+ *   are registered for every phase now, so any stats.mjs gate can be attributed.
+ *
+ * DAY SUPPRESSION. At full strength the day frame printed three hard white
+ * near-vertical streaks over the blue sky (x 1150-1250 / 1450-1620 / 1780-1850) —
+ * the sun sits 1.8 frame heights above the lens at noon, so the shafts are vertical
+ * and tinted to a near-white key. rays.dayScale 0.34 implements ART_BIBLE 4.3's
+ * "strong at dawn/dusk" as a phase factor of (0.34 + 0.66 * lowSun).
+ *
+ * MILKY MID-GROUND BAND, this pass's share (delta vs no-rays, dusk/hero):
+ *                       upper-left sky   aerial-haze band   hills
+ *   shipped r3              +6.02             +6.33         +2.35
+ *   after the high pass     +0.50             +7.32         +2.49
+ *   The sky wash is gone (12x lower); what is left in the haze band is a SHAFT
+ *   crossing it, not a wash — the band's own Sobel goes UP 4.1% with the rays on
+ *   and the hills' 1.9%, so nothing is losing definition. Bloom's contribution to
+ *   the same band is +1.45/255 and DOF's is -0.3%.
+ *
+ * BLOOM — normalisation confirmed, not divided by mip count. probe() reports
+ *   bloomWeightSum 11.414 (= SUM 1.16^i over 7 mips) and bloomStrength 0.0482 =
+ *   0.55 / 11.414, which is the correct divisor for a progressive tent upsample
+ *   where mip 0 ends up holding SUM(falloff^i * blur_i). strength 0.55, threshold
+ *   0.85, radius 0.75 are ART_BIBLE 4.4's numbers verbatim. Measured veil (display
+ *   luminance added vs postfx-no-bloom, 255 units): canopy +4.7, sky +3.0, haze
+ *   band +1.5, hills +1.0, ground +0.5 — a wide low-amplitude wash, hazy, with no
+ *   flat plateau anywhere (blown = 0 on every frame shot this round).
+ *
+ * DEPTH OF FIELD (no grain, mean Sobel per box vs postfx-no-dof-no-grain; the
+ *   run-to-run noise floor on these boxes, measured by shooting the SAME scenario
+ *   twice, is +/-3.1% on the trunk and +/-2.0% on the hills):
+ *                     far hills  hills mid  canopy   trunk   trunkEdge  fg grass
+ *     as inherited      -43.3%    -40.7%    -21.2%   -8.7%    -9.7%     -17.1%
+ *     shipped           -43.3%    -39.7%    -16.2%   -5.8%    -6.4%      -7.1%
+ *   The far band is deliberately untouched: ART_BIBLE 4.5 wants the distant hills
+ *   softly out and they lose 43% of their edge energy. What changed is what the
+ *   pass does to the PLANE IT IS FOCUSED ON: DOF_COMPOSITE now keeps the full-res
+ *   pixel until the CoC is wider than 1.3 px (was 0.7) because the gather is half
+ *   res and any non-zero blend costs the subject its top octave, and the gather's
+ *   foreground DILATION now ramps over 1.8-6.5 px of near CoC instead of switching
+ *   on at 0.75 px, so a petal with a sub-pixel CoC no longer forces the canopy
+ *   behind it to half res. Trunk is now inside 2 sigma of the no-DOF render.
+ *   Autofocus, hero: 27.4 m (probe at 1600x900), tree at 25-26 m, in-focus plateau
+ *   0.80-1.40 x focus = 21.9-38.4 m.
+ *
+ * SMAA (no grain, edge energy with postfx-no-smaa-no-grain): removing it adds
+ *   trunk +5.1%, grass +5.6%, canopy +5.2%, trunkEdge +4.6%, far hills +1.4%,
+ *   flat sky +0.0%. It is resolving aliasing on silhouettes and doing nothing to
+ *   areas with no edges, which is the signature of a correct AA pass.
+ *
+ * DOES THE GRADE PRESERVE THE RIG'S COOL-SHADOW / WARM-HIGHLIGHT SPLIT?
+ *   (stats.mjs, hero, day; postfx-flat bypasses the entire grade)
+ *                    p1      p50     p99    satMean  detail  groundSplitTone
+ *     grade off    0.2897  0.6133  0.8168   0.192    0.143    -21.6 deg
+ *     shipped      0.1419  0.6002  0.9054   0.337    0.236   -144.6 deg
+ *   shadowHue 109.5 -> 227.8 (green -> blue-violet, i.e. onto the #6E76A8 axis)
+ *   while highlightHue stays warm at 83-88. The grade CREATES the split 6.7x over,
+ *   it does not neutralise it. Black point: p1 drops 1.03 stops with crushed = 0.00
+ *   and blown = 0.00, so the low end is opened, not crushed.
+ *
+ * NIGHT. shipped p1 0.080 / p50 0.141 / p99 0.514, crushed 0, blown 0,
+ *   satMean 0.589, flatBlocks 0.3005 (stats.mjs gate is 0.28). That gate failure is
+ *   NOT the grade's: with the whole grade bypassed (postfx-night-flat) the same
+ *   frame reads flatBlocks 0.3146 and detail 0.104 against the shipped 0.3005 and
+ *   0.118, i.e. the tone curve slightly IMPROVES both. The flat blocks are the
+ *   scene's own night sky (15-sky / 08-lighting).
  * ====================================================================== */

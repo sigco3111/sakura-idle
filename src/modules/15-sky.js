@@ -278,6 +278,17 @@ export default {
       uHorizon: { value: colors.horizon },
       uHaze: { value: colors.haze },
       uHazeWarm: { value: colors.hazeWarm },
+      /* Gain on the additive sun-side horizon band (see GLSL_SKY_UNIFORMS).
+       * The sun-side dusk sky measured display L 0.936 with all three hill bands
+       * inside 0.933-0.936 — one cream plate, no depth ordering at all. This
+       * uniform exists because that had to be ATTRIBUTED rather than guessed at,
+       * and the A/B says it is NOT this term: sky-hw35 (0.62 -> 0.35) moved the
+       * sun-side sky by 0.001, sky-mie60 by 0.028, and sky-sun-off by 0.249 —
+       * i.e. the wash is the sun's own veil, and it is fixed at its source in
+       * SKY_FRAG (see veilS) instead of here. Left at the original 0.80 on
+       * purpose: trimming a term that measures as irrelevant is how a frame ends
+       * up quietly under-lit two rounds later. */
+      uHazeWarmK: { value: 0.80 },
       uHazeAmt: { value: 0.46 },
       uHazeH: { value: 0.055 },
       uZenithPow: { value: 0.42 },   // exponent on elevation, <1 → blue owns the top
@@ -347,7 +358,14 @@ export default {
       /* 0.0175 rad ≈ 30 px radius at the hero fov, 26 px at pond — the
        * prescription's 26 px, and small enough that the limb reads as a limb.
        * At 0.030 it was a 44-52 px soft ball. */
-      uMoonSize: { value: 0.0192 },
+      /* MEASURED AGAIN this round: at 0.0192 (25 px radius in the hero frame) the
+       * graded disc's limb spans 6-8 px because the DOF far band puts 5 px of CoC
+       * on anything at infinity and bloom smears the skirt — so the moon read as
+       * a ball of fog while the SAME frame at postfx-off had a crisp limb (see
+       * shots/_c_moon.png vs _c_moonraw.png). The blur is a fixed pixel count, so
+       * the fix available to this file is a bigger body: 0.0234 rad = 39 px radius
+       * at fov 36, where the same 5 px is 13 % of the radius instead of 20 %. */
+      uMoonSize: { value: 0.0234 },
       /* Peak linear radiance multiplier on uMoonCol.
        * MEASURED: at 3.3 the disc rendered at display L 0.964 with the maria at
        * 0.964 too — ACES's shoulder has effectively zero slope up there, so the
@@ -367,6 +385,16 @@ export default {
       uCloudLitK: { value: 1.0 },
       uCloudShadeK: { value: 0.50 },
       uCloudCoreK: { value: 0.88 },
+      /* How far below the transmission floor a flank turned away from the key
+       * sits. 1.0 reproduces the old flat floor, which MEASURED as a single
+       * value across an entire upper-sky mass (canopy preset) — flat white
+       * amoebas, no lit top, no shaded underside. Swept: sky-cloud-form*.
+       * MEASURED at 0.70 (shots/sky-r2-day/canopy.png vs sky-r0-day, mass box
+       * x 1380-1750 y 150-360, pixels above L 0.62): interior spread 0.215 ->
+       * 0.196 but the mass COVERAGE fell 0.412 -> 0.368, i.e. 0.70 was mostly
+       * eating the mass rather than shaping it. 0.80 keeps the body value and
+       * still breaks the flat floor. */
+      uCloudFormK: { value: 0.80 },
       uDither: { value: 0.0125 },
     };
 
@@ -468,6 +496,9 @@ export default {
           uTreeAmt: { value: b.treeAmt },
           uSeed: { value: bi * 0.317 },
           uNight: { value: 0 },
+          /* per-band night aerial gain — see the night block in HILL_FRAG.
+           * Swept by sky-naer*. */
+          uNightAer: { value: 0.62 },
           uNightFog: { value: colors.fog },
         },
         vertexShader: HILL_VERT,
@@ -544,6 +575,7 @@ export default {
       override: null,               // scenario lock
       sunMul: 1.0,                  // isolation switches (sky-sun-dim / sky-sun-off)
       sunSizeMul: 1.0,
+      mieMul: 1.0,                  // calibration sweep only (sky-mie*)
     };
 
     function evalPalette(u) {
@@ -567,7 +599,7 @@ export default {
       gradU.uZenithPow.value = lp(n0.zk, n1.zk);
       gradU.uZenDeep.value = lp(n0.zdeep, n1.zdeep);
       gradU.uMidAmt.value = lp(n0.midAmt, n1.midAmt);
-      gradU.uMieAmt.value = lp(n0.mieAmt, n1.mieAmt);
+      gradU.uMieAmt.value = lp(n0.mieAmt, n1.mieAmt) * state.mieMul;
       uAerialK.value = lp(n0.aerialK, n1.aerialK);
       uGroundAerial.value = lp(n0.gAer, n1.gAer);
       uni.uSunSize.value = lp(n0.sunSize, n1.sunSize) * state.sunSizeMul;
@@ -754,8 +786,11 @@ export default {
       for (const v of [80, 100, 115, 130, 150, 180, 220, 330]) {
         S[`sky-moon-b${v}`] = () => { nightLock(); uni.uMoonBright.value = v / 100; };
       }
-      for (const v of [40, 50, 60, 70, 80]) {
+      for (const v of [22, 28, 34, 40, 50, 60, 70, 80]) {
         S[`sky-moon-m${v}`] = () => { nightLock(); uni.uMoonMaria.value = v / 100; };
+      }
+      for (const v of [0, 25, 50, 100, 175]) {
+        S[`sky-moon-h${v}`] = () => { nightLock(); uni.uMoonHalo.value = v / 100; };
       }
       S['sky-moon-nohalo'] = () => { nightLock(); uni.uMoonHalo.value = 0; };
       for (const v of [0, 45, 66, 85, 100]) {
@@ -770,6 +805,35 @@ export default {
       }
       for (const v of [55, 70, 85, 100]) {
         S[`sky-cloud-core${v}`] = () => { uni.uCloudCoreK.value = v / 100; };
+      }
+      for (const v of [55, 62, 70, 80, 100]) {
+        S[`sky-cloud-form${v}`] = () => { uni.uCloudFormK.value = v / 100; };
+      }
+      /* moon disc size, in units of 1e-4 rad — 234 = 39 px radius at fov 36 */
+      for (const v of [192, 210, 234, 260, 300]) {
+        S[`sky-moon-s${v}`] = () => { nightLock(); uni.uMoonSize.value = v / 10000; };
+      }
+      for (const v of [0, 6, 12, 18, 26]) {
+        S[`sky-milky${v}`] = () => { nightLock(); uni.uMilky.value = v / 100; };
+      }
+      for (const v of [0, 40, 62, 85]) {
+        S[`sky-naer${v}`] = () => {
+          nightLock();
+          hillMats.forEach((m) => { m.uniforms.uNightAer.value = v / 100; });
+        };
+      }
+      /* sun-side horizon band gain, swept on the dusk lock — this is the term
+       * that blew the right half of the dusk frame to a flat cream plate */
+      for (const v of [35, 50, 62, 80]) {
+        S[`sky-hw${v}`] = () => { S['dusk']?.(); gradU.uHazeWarmK.value = v / 100; };
+        S[`sky-hw${v}-day`] = () => { gradU.uHazeWarmK.value = v / 100; };
+      }
+      for (const v of [60, 75, 88, 100]) {
+        S[`sky-mie${v}`] = () => {
+          S['dusk']?.();
+          state.mieMul = v / 100;
+          evalPalette(state.u);
+        };
       }
       for (let i = 0; i < 4; i++) {
         S['sky-layer' + i] = () => {

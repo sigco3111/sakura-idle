@@ -238,6 +238,11 @@ uniform vec3  uHaze;
  * The golden-hour warmth belongs to the sun's own azimuth, so it is carried by
  * this second colour weighted by pow(dot(viewAz, sunAz), 2.2). */
 uniform vec3  uHazeWarm;
+/* Gain on that additive sun-side band. A uniform, not a constant, because it is
+   the single term that decides whether the sun-side horizon at dusk reads as a
+   glowing haze or as a blown cream plate with no hills in it — and that has to
+   be MEASURED in the graded frame (sky-hw* scenarios), not guessed. */
+uniform float uHazeWarmK;
 uniform float uHazeAmt;
 uniform float uHazeH;
 uniform float uZenithPow;   /* exponent on elevation: <1 → the blue owns the top */
@@ -250,6 +255,29 @@ uniform float uMieAmt;
 `;
 
 export const GLSL_SKY_RADIANCE = /* glsl */`
+/* ---- NaN/Inf guard ------------------------------------------------------
+   clamp() does NOT remove NaN: clamp(NaN, 0, x) is implementation-defined and
+   on ANGLE/Metal it propagates. A single non-finite sample from the cloud
+   accumulator or a degenerate normalize() therefore survived the whole chain to
+   be crushed to pure black by the grade's power law — the sparse black speckle
+   field measured over the day sky (darkFrac 0.12 against 0.50 surrounding, and
+   it vanished under postfx-no-curve, which is what identified it).
+   NaN fails every comparison, so !(x >= 0.0) is a portable finite test.
+   (No backticks in here — this GLSL lives inside a JS template literal.) */
+vec3 skySanitize(vec3 c){
+  bvec3 bad = bvec3(!(c.r >= 0.0), !(c.g >= 0.0), !(c.b >= 0.0));
+  if (any(bad)) {
+    // rebuild from whatever channels are finite; if none are, use a pale sky blue
+    float n = 0.0, acc = 0.0;
+    if (!bad.r) { acc += c.r; n += 1.0; }
+    if (!bad.g) { acc += c.g; n += 1.0; }
+    if (!bad.b) { acc += c.b; n += 1.0; }
+    vec3 fb = n > 0.0 ? vec3(acc / n) : vec3(0.42, 0.52, 0.68);
+    c = vec3(bad.r ? fb.r : c.r, bad.g ? fb.g : c.g, bad.b ? fb.b : c.b);
+  }
+  return clamp(c, vec3(0.0), vec3(90.0));
+}
+
 #ifndef SAKURA_SKY_RADIANCE
 #define SAKURA_SKY_RADIANCE
 #define SKY_SAT(x) clamp(x, 0.0, 1.0)
@@ -297,7 +325,7 @@ vec3 skyGradient(vec3 rd) {
   vec2 sxz = normalize(vec2(uSunDir.x, uSunDir.z) + 1e-5);
   float azi = pow(max(dot(dxz, sxz), 0.0), 2.2);
   c = mix(c, uHaze, SKY_SAT(hb * uHazeAmt));
-  c += uHazeWarm * hb * azi * uHazeAmt * 0.80;
+  c += uHazeWarm * hb * azi * uHazeAmt * uHazeWarmK;
   return c;
 }
 
@@ -457,6 +485,10 @@ uniform float uNightCloudR;   /* rim / transmission multiplier at full night */
 uniform float uCloudLitK;     /* gain on the lit-top ramp */
 uniform float uCloudShadeK;   /* how far the shadow side falls below the lit side */
 uniform float uCloudCoreK;    /* how dark an optically thick backlit core stays */
+/* how far BELOW the transmission floor a flank turned away from the key sits.
+   1.0 = the old behaviour (a flat floor, i.e. no interior); see the block
+   comment at 'formK'. Swept by the sky-cloud-form* scenarios. */
+uniform float uCloudFormK;
 
 #define SAT(x) clamp(x, 0.0, 1.0)
 
@@ -692,7 +724,18 @@ vec4 cloudLayer(vec3 d, float kf, float scl, float spd, float cov, float pw,
      it. Measured: with a flat 0.26 floor the canopy deck sat within 0.03 of the
      zenith's own luminance, i.e. invisible. */
   float coreF = mix(0.21, 0.52, smoothstep(0.30, 0.70, d.y)) * uCloudCoreK;
-  lit = max(lit, trans * (coreF + (1.04 - coreF) * pow(1.0 - thick, 1.35)));
+  /* ── the floor must not be FLAT across the mass ────────────────────────
+   * MEASURED (shots/sky-r0-dayraw/canopy.png, upper sky): with the floor a pure
+   * function of thickness, and coreF deliberately high near the zenith (a dark
+   * core up there reads as a hole), the floor came out at 0.75+ over almost the
+   * whole mass — so 'band', 'shadow' and 'down' were all being max()-ed away and
+   * every cumulus in the canopy frame rendered as ONE flat white amoeba with no
+   * interior at all (ART_BIBLE §8.2, §8.11). Grading the floor by the same
+   * relief band the reflective term uses keeps the mass a LIGHT shape while
+   * restoring a readable value spread inside it: the crown facing the key stays
+   * at the floor, the flanks turned away sit uCloudFormK below it. */
+  float formK = mix(uCloudFormK, 1.0, band);
+  lit = max(lit, trans * (coreF + (1.04 - coreF) * pow(1.0 - thick, 1.35)) * formK);
   /* three-stop ramp: hue-shifted shadow → warm midtone → near-white top.
      A two-stop lerp is what makes procedural clouds read as grey mush. */
   vec3 col = mix(uCloudDark, uCloudAmb, SAT(lit * 2.0));
@@ -708,8 +751,11 @@ vec4 cloudLayer(vec3 d, float kf, float scl, float spd, float cov, float pw,
   vec3  stChroma = mix(vec3(1.0), uShadowTint / stL, 0.45);
   vec3  shadeC = col * uCloudShadeK * stChroma;
   float litMask = SAT(band * 1.35 + shadow * 0.40 - 0.32 - down * 0.55);
-  /* a backlit mass is not "in shadow" — but its core still is */
-  litMask = max(litMask, trans * (0.32 + 0.68 * (1.0 - thick)));
+  /* a backlit mass is not "in shadow" — but its core still is, and the flanks
+     turned away from the key keep a share of the shadow tint (same formK as the
+     value floor above: without it the tint was max()'d away everywhere the
+     transmission floor bit, i.e. over the entire upper-sky deck) */
+  litMask = max(litMask, trans * (0.32 + 0.68 * (1.0 - thick)) * formK);
   col = mix(shadeC, col, litMask);
 
   /* ── night: the deck is an OCCLUDER ──────────────────────────────────
@@ -900,13 +946,24 @@ void main() {
     float o3 = snoise(mp * 6.30 + vec3( 5.9, 17.3, 31.1)) * 0.5 + 0.5;
     float o4 = snoise(mp * 14.0 + vec3(61.7,  9.3, 45.1)) * 0.5 + 0.5;
     float clouds = 0.35 * o1 + 0.18 * o2 + 0.09 * o3 + 0.05 * o4;
-    clouds = pow(SAT(clouds * 1.55), 1.5);      /* brighter cores, darker gaps */
+    /* Steeper than the old pow(x*1.55, 1.5), PLUS a separate knot term.
+       MEASURED (round-2 critic, and again on shots/sky-r0-nightm/hero.png): the
+       band came back as "soft grey cloud smudges" because its own structure was
+       a single smooth lump — a galaxy is bright STAR CLOUDS separated by dark
+       dust, so the contrast inside the band has to be higher than the contrast
+       between the band and the sky. The knot term adds a few bright cores
+       without lifting the mean (it is zero over ~70 % of the band). */
+    clouds = pow(SAT(clouds * 1.62), 1.85) + 0.42 * pow(SAT(o2 * 1.20 - 0.42), 2.6);
 
     /* A WIDE gaussian band mask — nothing here has an edge — plus a narrow
-       dark rift down the centre (the Great Rift) so the band is not a bar. */
-    float wide  = exp(-b * b * 22.0);
+       dark rift down the centre (the Great Rift) so the band is not a bar, and
+       a second wandering dust lane off-centre: one perfectly central rift reads
+       as a seam in a texture, two asymmetric ones read as dust. */
+    float wide  = exp(-b * b * 24.0);
     float bandE = exp(-b * b * 34.0);
     float rift  = 1.0 - 0.46 * exp(-b * b * 700.0);
+    float bl    = (b - 0.088 - 0.030 * (o1 - 0.5)) / 0.026;
+    rift *= 1.0 - 0.30 * exp(-bl * bl);
     float dust  = snoise(mp * 4.10 + vec3(77.0, 13.0, 29.0)) * 0.5 + 0.5;
     float mw = wide * rift * clouds * (0.60 + 0.80 * (1.0 - dust));
     mw *= smoothstep(-0.05, 0.24, d.y);
@@ -925,10 +982,19 @@ void main() {
             + starLayer(starRotB(d),   168.0, 0.050 * dens, 0.29, 77.3);
     /* The band itself is millions of unresolved stars: a very dense, very faint
        layer confined to it supplies the grain that makes it read as a star
-       field rather than as a smear of fog. */
-    st += starLayer(d, 420.0, 0.055 * bandE, 0.26, 133.0) * 0.30 * bandE;
-    st *= smoothstep(-0.006, 0.050, d.y) * mix(0.60, 1.0, smoothstep(0.0, 0.50, d.y));
-    col += st * uStars;
+       field rather than as a smear of fog. Denser than before (0.055 -> 0.10 of
+       cells occupied): at 0.055 the grain was below the sky's own dither over
+       most of the band, which is why the band still read as fog. */
+    st += starLayer(d, 420.0, 0.100 * bandE, 0.26, 133.0) * 0.38 * bandE;
+    /* ── extinction toward the horizon ─────────────────────────────────────
+     * Air DIMS and REDDENS; it does not thin the field (a lower sky with fewer
+     * stars is the classic procedural tell, so the density is deliberately
+     * unchanged). The warm tint is the same physics as a red moon on the
+     * horizon and it is what makes the low sky read as air rather than as a
+     * uniform fade to black. */
+    float ext = smoothstep(-0.006, 0.050, d.y) * mix(0.55, 1.0, smoothstep(0.0, 0.50, d.y));
+    vec3 extTint = mix(vec3(1.10, 0.84, 0.62), vec3(1.0), smoothstep(0.015, 0.28, d.y));
+    col += st * ext * extTint * uStars;
 
     /* ---- moon ----
      * It has to read as a BODY, not a lens flare. Three things do that and the
@@ -981,7 +1047,18 @@ void main() {
        that cost (measured back at 0.099). The near lobe is also trimmed: a wide
        bright skirt is the bloom pass's seed, and a fat seed is what dissolved the
        limb into a gradient. */
-    float halo = exp(-ang / max(uMoonSize * 0.75, 1e-4)) * 0.105
+    /* MEASURED AGAIN (shots/_c_moon.png vs shots/_c_moonraw.png at 3x): with the
+       post chain ON the limb dissolved into a 6-8 px gradient and the moon read
+       as a ball of fog, while the SAME frame at postfx-off had a crisp limb and
+       visible maria. Two things do that — bloom seeds from the bright skirt
+       sitting right at the limb, and the DOF far band puts 5 px of CoC on
+       anything at infinity — and neither is mine to switch off. What IS mine:
+       (a) shrink the near skirt so bloom has far less to smear (0.105 -> 0.052)
+       and push its 1/e out from 0.75 R to 1.10 R so what remains is a glow
+       around the disc rather than a bright ring welded to its edge, and
+       (b) grow the disc (uMoonSize) so a fixed 5 px of blur is a smaller
+       fraction of the radius. */
+    float halo = exp(-ang / max(uMoonSize * 1.10, 1e-4)) * 0.052
                + exp(-ang / max(uMoonSize * 6.0, 1e-4)) * 0.011;
     col += uMoonCol * halo * uMoonHalo * uStars;
   }
@@ -1023,6 +1100,25 @@ void main() {
   float aur  = exp(-ang / (R * 2.6)) * 0.085;
   /* ~10 sun-radii of veil is a low-sun phenomenon too: with the sun at 39 deg it
      was adding 0.05 linear right across the top of the hero frame. */
+  /* ── why the veil is a SUPER-EXPONENTIAL now ────────────────────────────
+   * MEASURED by A/B on the dusk hero (shots/r3-dusk vs r3-sky-sun-off, sun-side
+   * sky box x 1700-1850 y 400-420): the sun-side sky sat at display L 0.936 with
+   * all three hill bands at 0.933-0.936 — a cream plate with the depth ordering
+   * gone. Attribution: killing uSunI drops that box by 0.249, scaling Mie to 60 %
+   * drops it by 0.028, and cutting the warm horizon band nearly in half drops it
+   * by 0.001. So it is this veil — the widest, flattest term the sun has — and at
+   * dusk (R = 0.029 rad) a plain exp(-ang/11R) is still at 1/6 of peak TWENTY
+   * disc-radii out. A super-exponential veil, exp(-pow(ang/9R, 1.35)), was tried
+   * to cut that far tail — and MEASURED as a NO-OP: every sample in the dusk hero
+   * frame moved by <= 0.005 display luma (shots r3-dusk vs r4-dusk), because the
+   * bright sun-side region is only ~5-10 R from the disc, where the two profiles
+   * agree by construction. So the sun-side brightness at dusk is the AUREOLE next
+   * to an off-frame low sun, which is the money shot's backdrop and is meant to be
+   * there; the veil is left exactly as it was rather than shipping an unmeasurable
+   * reduction of the one term the brief asks to keep glorious. The hills on the
+   * sun side do vanish into it — that is what looking into a 15 deg sun does — and
+   * the ranges away from the sun still measure a clean 0.861 sky / 0.556 near-band
+   * separation in the same frame. */
   float veilS = exp(-ang / (R * 11.0)) * 0.018 * (0.42 + 0.58 * sqrt(lowSun));
   /* the core desaturates toward white, the aureole keeps the palette's sun hue —
      that hue break at the limb is what makes a low sun read as hot */
@@ -1074,7 +1170,7 @@ void main() {
   float dn = hash12(gl_FragCoord.xy + fract(uTime) * 91.7) - 0.5;
   col += dn * uDither * (0.30 + 1.8 * col);
 
-  gl_FragColor = vec4(clamp(col, vec3(0.0), vec3(90.0)), 1.0);
+  gl_FragColor = vec4(skySanitize(col), 1.0);
 
   #include <tonemapping_fragment>
   #include <colorspace_fragment>
@@ -1124,6 +1220,7 @@ uniform float uVScale;
 uniform float uTreeAmt;
 uniform float uSeed;
 uniform float uNight;
+uniform float uNightAer;   /* how far the night bands converge on the night sky */
 uniform vec3  uNightFog;
 uniform vec3  uCamPos;
 uniform vec3  uMoonDir;
@@ -1257,8 +1354,16 @@ void main() {
      portion, so the ramp is squeezed into far less screen height than it used to
      be; the old span turned into a hard bright edge along the crest — a traced
      silhouette instead of a moonlit range. */
+  /* ...and the crest lift itself has to fall off with distance. MEASURED (row
+     means, shots/sky-r2-night/hero.png x 1450-1800): every band peaked ON ITS
+     OWN CREST — 0.159 at y 395, 0.152 at y 475, 0.165 at y 520, with 0.129-0.138
+     troughs between — so the night horizon read as a stack of bright wavy paper
+     edges. A crest 400 m away sits behind four times the air of one at 120 m and
+     cannot be as bright as it; crestK is that, reusing the same f the aerial
+     term uses. */
+  float crestK = 1.0 - 0.72 * SAT(f);
   float ramp = mix(0.74, 0.99, smoothstep(0.0, 0.60, vr))
-             + smoothstep(0.60, 1.0, vr) * 0.13;
+             + smoothstep(0.60, 1.0, vr) * 0.13 * crestK;
   vec3 nightCol = uNightFog * ramp;
   nightCol *= mix(0.90, 1.16, SAT(band));                 /* keep the spurs */
   vec3 V = nrmSafeV(vWPos - uCamPos);
@@ -1268,14 +1373,27 @@ void main() {
   /* a WIDE crest glow, not the 2 px rim line -- a hairline outline reads as a
      traced silhouette rather than as a moonlit ridge */
   float crest = smoothstep(0.58, 1.0, vr);
-  nightCol += uMoonGlow * crest * 0.15 * SAT(dot(N, nrmSafeM(uMoonDir)) + 0.35);
+  nightCol += uMoonGlow * crest * 0.15 * crestK * SAT(dot(N, nrmSafeM(uMoonDir)) + 0.35);
   /* the same 60 px base cross-fade, into the floor's own night value */
   vec3 floorNight = uNightFog * (0.78 + 0.34 * smoothstep(35.0, 250.0, dist)
                                  + 0.30 * smoothstep(95.0, 430.0, dist));
   nightCol = mix(floorNight, nightCol, baseFade);
+  /* ── night bands must RECEDE too ───────────────────────────────────────
+   * MEASURED (shots/sky-r1-night/hero.png, x 1500-1900): the three ranges came
+   * back at display L 0.121 / 0.126 / 0.124 — the same value, in the same order
+   * as nothing, with hard crest edges between them. The cause is that the whole
+   * night branch is built from uNightFog * ramp(vUv.y), which has no distance
+   * term at all: the day branch has both a per-band albedo VALUE and the
+   * exponential aerial lift, and the night branch had neither. Reusing the SAME
+   * f the day branch computes puts them back in order by construction — near
+   * band f≈0.39, mid 0.65, far 0.83 — so the far range sits closer to the sky it
+   * is silhouetted against and the layered-paper read goes away. Deliberately
+   * NOT extra global haze (08-lighting is reducing that): this is the hills'
+   * own colour converging on the night sky's own radiance. */
+  nightCol = mix(nightCol, skyRadiance(rd) * 0.92, SAT(f * uNightAer));
   col = mix(col, nightCol, uNight * 0.88);
 
-  gl_FragColor = vec4(clamp(col, vec3(0.0), vec3(90.0)), 1.0);
+  gl_FragColor = vec4(skySanitize(col), 1.0);
 
   #include <tonemapping_fragment>
   #include <colorspace_fragment>
@@ -1388,7 +1506,7 @@ void main() {
                 + uMoonGlow * fwd * 0.30;
   col = mix(col, nightCol, uNight * 0.86);
 
-  gl_FragColor = vec4(clamp(col, vec3(0.0), vec3(90.0)), 1.0);
+  gl_FragColor = vec4(skySanitize(col), 1.0);
 
   #include <tonemapping_fragment>
   #include <colorspace_fragment>

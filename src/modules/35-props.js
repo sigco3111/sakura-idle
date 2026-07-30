@@ -92,6 +92,60 @@ import {
  * Verified at --q low (58 calls, zero module errors) and through the full clock via
  * `--scenario lamptest-dusk` / `lamptest-night`: night granite 0.209-0.375 with the
  * fire-box emission and halo untouched, dusk 0.227-0.356.
+ *
+ * ------------------------------------------------------------------------------
+ * ROUND p6 — the DAY read of the fire box, and the last of the kasagi blotches.
+ * shots/p6-r2* (1920x1080, warm 420, --ui 0). Both `hero` gates pass at ultra and
+ * at low; crushed 0, blown 0, flatBlocks 0.088, 61 draw calls, 0.46 ms/frame.
+ *
+ * 1. FIRE BOX IN DAYLIGHT. Two defects, not one: it was only marginally brighter
+ *    than the granite on the far lanterns, and it was the WRONG HUE — a cold
+ *    slate panel. Panel value is the top 40% of the fire-box patch (the rest of
+ *    the patch is the stone frame around it); the stone column is that same
+ *    lantern's own kasa roof / sao shaft.
+ *
+ *      lantern   panel L        R/B          Lmax        its own kasa / sao
+ *      L3 near   0.744 -> 0.763  0.98 -> 1.32  0.82 -> 0.86   0.523 / 0.346
+ *      L0        0.677 -> 0.685  0.91 -> 1.18  0.83 -> 0.88   0.529 / 0.448
+ *      L1        0.684 -> 0.690  0.90 -> 1.10  0.80 -> 0.86   —
+ *      L2 far    0.582 -> 0.578  0.83 -> 1.04  0.76 -> 0.80   0.556 / 0.449
+ *
+ *    So every panel now clears its own lantern's stone (+0.02 to +0.24 on the
+ *    rain-washed cope, +0.13 to +0.42 on the shaft), nothing is near the 0.985
+ *    clip gate, and the sheet is WARM. On the `lantern` preset the panel measures
+ *    HSV hue 34 / sat 0.252 against uPaperDay's own authored hue 41 / sat 0.262 —
+ *    i.e. it is now the colour of the paper, where before it was hue 51 / sat
+ *    0.006, a blank grey card. NIGHT IS UNCHANGED: the same patch reads
+ *    rgb(248,239,223) L 0.941 before and after, and dusk rgb(248,244,231) before
+ *    and after, because every day-side term is gated on nightK = uGlow.
+ *
+ * 2. KASAGI. Counting blue-dominant pixels (B > R and G < B) in the beam band
+ *    x 1430-1900 y 575-670 — the shape the "dark blotches" complaint takes once
+ *    weathering follows form — 0.045 of the region -> 0.027, mean rgb(50,42,67)
+ *    L 0.178 -> rgb(57,50,68) L 0.207, and the cluster moved off the right end
+ *    cap (cols 1817-1866) to an even spread. The section ladder at x 1700 now
+ *    reads, top to bottom: worn arris 0.232 (was 0.213, R/B 1.80 -> 1.95), front
+ *    face 0.176 (R/B 2.08 -> 2.24), soffit reveal 0.195 (was 0.165, R/B 0.77 ->
+ *    0.94), the shimaki's lit chamfer 0.478, its face 0.161, its soffit 0.189.
+ *    Six values down a beam that used to be one flat ribbon, and the only
+ *    remaining blue-dominant pixels are the 2-3 px architectural shadow reveal
+ *    between the kasagi's underside and the shimaki's top — which ART_BIBLE 2
+ *    wants cool.
+ *
+ * 3. NOTHING FLOATS, and the scale is right. Probed against terrain.heightAt:
+ *    every lantern is set 0.060-0.067 m INTO the ground, the torii datum 0.079 m
+ *    under its lowest foot, the basin flush, and the wall / boulder / ema
+ *    instances are placed off groundAt() per instance. Lantern heights are 2.39 /
+ *    2.27 / 2.51 / 2.58 m against the 5.60 m torii and the 14 m tree, and in
+ *    `hero` they project 182 / 173 / 194 / 191 px at 76-85 px/m where the torii is
+ *    76 px/m — dimensionally coherent, not toy-sized. Station 0 stays pinned (see
+ *    LANTERN_STATIONS).
+ *
+ * STILL OPEN, deliberately: the wall and the shade-side sao read blue-grey
+ * (sat 0.25) in the day frame. That residue is the SKY AMBIENT — uSkyColor is
+ * (0.076, 0.135, 0.288), B/R 3.8 — not this module's shadow tint, which is
+ * already trimmed twice. Fixing it here would mean opting granite out of
+ * ART_BIBLE 2's cool shadow; it belongs in 08-lighting if it is worth fixing.
  */
 
 /* ------------------------------------------------------------------ *
@@ -615,9 +669,15 @@ function beam(M, pts, wFn, hFn, vals, cap = true, ch = 0) {
     }
   }
   if (cap) {
-    // end grain: the most exposed surface on any beam, so it wears — but only
-    // partly, because a fully bare end is what printed as a navy block before.
-    const capVals = bev ? { ...vals, aEdge: 0.38 } : vals;
+    /* End grain wears, but 0.38 was still too much. MEASURED on
+     * shots/props-p6-r0/hero.png the kasagi's right end cap printed a solid
+     * ~26x22 px block at rgb(81,56,75) — the largest single blue-dominant patch on
+     * the whole gate, and exactly the "damage, not weathering" read this round
+     * exists to remove. On a real myojin gate the exposed end of the kasagi is the
+     * first thing a shrine repaints (often it is capped in copper), so it should
+     * carry the CHALKIEST paint on the beam, not bare timber. 0.14 keeps it inside
+     * the fading range and clear of the paint-loss window. */
+    const capVals = bev ? { ...vals, aEdge: 0.14 } : vals;
     for (const [F, inner] of [[frames[0], pts[1]], [frames[n - 1], pts[n - 2]]]) {
       const cen = new THREE.Vector3();
       for (const q of F) cen.add(q);
@@ -796,8 +856,17 @@ export default {
        * at hue 207-218 and display saturation 0.23-0.28 — nearly 3x that, i.e.
        * blue-painted stone, and the moss and lichen the shader does put on it are
        * no longer readable through it. 0.34 is a trim back toward the number the
-       * library already agreed on, not an opt-out: granite still cools clearly. */
-      NPR_SHADOW_TINT_NEUTRAL: '0.34',
+       * library already agreed on, not an opt-out: granite still cools clearly.
+       *
+       * 0.34 -> 0.22, A/B'd with the props-st* scenarios on the day `hero` frame.
+       * The shade-side sao shaft goes rgb(75,98,126) -> rgb(75,96,120), i.e. HSV
+       * saturation 0.408 -> 0.375, and the kasa roof rgb(156,136,134) ->
+       * rgb(159,137,128). Small, deliberately: the residual blue on a shade-side
+       * prop is mostly the SKY AMBIENT (uSkyColor is B/R 3.8), not this multiply,
+       * so trimming this further would only start eating ART_BIBLE 2's cool
+       * shadow without fixing the cause. The moss readability was bought on the
+       * kasa's own moss bias instead (see the roof's aStone below). */
+      NPR_SHADOW_TINT_NEUTRAL: '0.22',
       NPR_CANOPY_SHADE: '0.32',
       NPR_CANOPY_KEY: '0.18',
     };
@@ -890,8 +959,20 @@ export default {
        * warm. At 0.78 the requirement drops to 1.88 and PAL.woodLite's 2.55 has
        * real margin, so a WORN ARRIS reads as pale grey-brown timber in cool
        * light instead of as navy damage. Vermilion (R/B 20.6) is unaffected
-       * either way. */
-      NPR_SHADOW_TINT: '0.78',
+       * either way.
+       *
+       * 0.78 -> 0.62, A/B'd on the `hero` day frame with the props-wt* scenarios
+       * and counting blue-dominant pixels (B > R and G < B) in the kasagi band
+       * x 1430-1900 y 575-670:
+       *   wt 0.78   0.030 of the region, mean rgb(59,53,75)
+       *   wt 0.62   0.019 of the region, mean rgb(59,51,68)
+       * with the pillar unchanged in value (L 0.2081 -> 0.2072) and its MINIMUM
+       * slightly UP (0.1292 -> 0.1307), so the black-speckle failure the earlier
+       * note warns about does not appear at this setting — that note was about
+       * taking NPR_SHADOW_CHROMA/HUE to zero, which is a different knob and stays
+       * where it is. The shaded kasagi face also goes R/B 1.83 -> 1.97, i.e. back
+       * toward red from magenta. */
+      NPR_SHADOW_TINT: '0.62',
       NPR_AMBIENT_SHADOW: '1.00',
       NPR_CANOPY_SHADE: '0.18',
       NPR_CANOPY_KEY: '0.12',
@@ -928,6 +1009,29 @@ export default {
         uFlameCore: { value: C(PAL.flame) },
         uGlow: uGlow,
         uTime: uTime,
+        /* Daylight read of the washi, CALIBRATED by sweeping these two live (the
+         * `props-ds*` / `props-dsh*` scenarios below) and measuring the fire-box
+         * patch in the day `hero` frame. See the note in PROPS_WINDOW_FRAG. */
+        /* SETTLED BY SWEEP. hero, day, 1920x1080, warm 420, top-40% of the
+         * fire-box patch (the panel; the rest of the patch is its stone frame):
+         *
+         *   scatter / shade   L3      L0      L1      L2     R/B (L3..L2)
+         *   0.156 / 1.00    0.744   0.677   0.684   0.582   0.98 .. 0.83
+         *   0.000 / 1.00    0.664   0.637   0.664   0.557   0.80 .. 0.75
+         *   0.520 / 1.00    0.868   0.785   0.780   0.657   1.13 .. 0.95
+         *   0.400 / 0.62    0.742   0.687   0.706   0.585   1.24 .. 0.97
+         *   0.280 / 0.78    0.730   0.683   0.704   0.582   1.12 .. 0.91
+         *   0.520 / 0.50    0.764   0.702   0.719   0.596   1.32 .. 1.02  <- this
+         *
+         * against the same lanterns' granite: kasa roof 0.551 / 0.570 / 0.568 and
+         * sao shaft 0.374 / 0.467 / 0.467. So every panel now sits 0.03-0.21 ABOVE
+         * its own lantern's stone, warm (R/B >= 1.02 — uPaperDay itself is 1.36) and
+         * with Lmax 0.81-0.88, i.e. clear of the 0.985 clip gate. The earlier
+         * 0.156/1.00 pair cleared the stone too but printed R/B 0.83-0.98: a COLD
+         * slate panel, which is what left the fire box reading as a hole rather
+         * than as paper. */
+        uDayScatter: { value: 0.52 },
+        uDayShade: { value: 0.50 },
         ...L,
       },
       vertexShader: PROPS_WINDOW_VERT,
@@ -1276,7 +1380,20 @@ export default {
     latheN(LM, bevelProfile([[0.022, 0.315], [0.105, 0.288], [0.215, 0.222], [0.330, 0.128],
       [0.418, 0.048], [0.452, 0.006], [0.462, -0.060], [0.395, -0.088], [0.150, -0.078]], 0.016),
     HEXSEG, new THREE.Vector3(0, ROOF_Y, 0), 0.12, {
-      aStone: (w) => [mossLow(w.y) + 0.10, 0.90, 0.62],
+      /* MOSS BIAS 0.10 -> 0.38 on the kasa specifically.
+       *
+       * mossLow() is a function of local height, so it returns 0 at the roof and
+       * the kasa was carrying a bias of 0.10 — the LEAST mossy surface on the
+       * prop. That is backwards: on a real ishidoro the kasa is the wettest, most
+       * shaded stone there is (rain sits on the cope, the eave soffit never
+       * dries), and it is also the single biggest patch of the lantern the `hero`
+       * and `lantern` cameras actually see. With uMossAmt 0.56 the old bias put
+       * mAmt at 0.056-0.246 and the roof read as featureless blue-grey slate; at
+       * 0.38 it is 0.21-0.40, so the shader's crevice-driven moss and its pale
+       * lichen rosettes both clear their smoothstep windows and the stone reads as
+       * granite with a life on it rather than as cast concrete. Still well under
+       * the shader's own 0.62 clamp, so it can never become a green repaint. */
+      aStone: (w) => [0.38 + mossLow(w.y) * 0.45, 0.90, 0.62],
     }, 0.12, 6, 0.26);
     /* warabite — the six curled corner tips. They now sit on the roof's HIP
      * CORNERS (local azimuth i*60 deg) rather than at the middle of each facet,
@@ -1872,6 +1989,40 @@ export default {
           m.needsUpdate = true;
         }
       };
+      /* Day-panel sweep. No recompile — these are uniforms — so a shot per value
+       * measures the fire box's response curve directly. */
+      for (const v of [0, 20, 30, 40, 52, 68]) {
+        sc[`props-ds${v}`] = () => { windowMat.uniforms.uDayScatter.value = v / 100; };
+      }
+      for (const v of [50, 66, 80, 100]) {
+        sc[`props-dsh${v}`] = () => { windowMat.uniforms.uDayShade.value = v / 100; };
+      }
+      for (const [k, s, d] of [['a', 0.62, 0.40], ['b', 0.78, 0.28], ['c', 0.50, 0.52]]) {
+        sc[`props-day-${k}`] = () => {
+          windowMat.uniforms.uDayShade.value = s;
+          windowMat.uniforms.uDayScatter.value = d;
+        };
+      }
+      /* Shade-tint sweeps. These ARE defines, so each one recompiles the program —
+       * still far cheaper than reading GLSL, and the only honest way to pick the
+       * number. `props-wt*` is the gate's paint + bare timber, `props-st*` is how
+       * much of the violet multiply near-neutral granite takes. */
+      for (const v of [45, 62, 78, 100]) {
+        sc[`props-wt${v}`] = () => {
+          for (const m of [woodMat, bambooMat, emaMat]) {
+            m.defines.NPR_SHADOW_TINT = (v / 100).toFixed(2);
+            m.needsUpdate = true;
+          }
+        };
+      }
+      for (const v of [14, 22, 34]) {
+        sc[`props-st${v}`] = () => {
+          for (const m of [stoneMatSolid, stoneMatInst, stoneMatWall, stoneMatRock]) {
+            m.defines.NPR_SHADOW_TINT_NEUTRAL = (v / 100).toFixed(2);
+            m.needsUpdate = true;
+          }
+        };
+      }
       sc['props-albedo'] = dbg('PROPS_DBG_ALBEDO');
       sc['props-norim'] = dbg('PROPS_DBG_NORIM');
       sc['props-bands'] = dbg('PROPS_DBG_FLAT');

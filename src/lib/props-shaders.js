@@ -447,8 +447,31 @@ void main(){
    * the floor. */
   float split = smoothstep( 0.62, 0.86, fine ) * smoothstep( 0.34, 0.62, rings );
 
-  vec3 wood = mix( uWoodDark, uWoodLite, clamp( rings * 0.74 + fine * 0.30, 0.0, 1.0 ) );
-  wood = mix( wood, uWoodDark * 0.88, split * 0.70 );
+  /* BARE WEATHERED TIMBER — value-modulated, HUE-LOCKED.
+   *
+   * MEASURED, shots/props-p6-r0/hero.png: 4.5% of the kasagi region printed
+   * blue-dominant at mean rgb(50,42,67) (L 0.178), densest on the shimaki's top
+   * chamfer strip (rows 629-635) and the right end cap (cols 1817-1866). The
+   * previous round moved the weathering onto the arrises, which is right, but the
+   * revealed wood there still rendered as a dark navy stripe — still "damage",
+   * just a tidier shape.
+   *
+   * The cause was NOT the shade tint's R/B requirement, which PAL.woodLite (2.55)
+   * already clears. It was that mix(uWoodDark, uWoodLite, grain) reaches
+   * uWoodDark (#5A4838, linear luma 0.055) wherever both noise fields are low, and
+   * mix(wood, uWoodDark*0.88, split) went lower still. A shade-side surface at
+   * linear luma 0.048 is dominated by the ambient, and the ambient is uSkyColor
+   * (0.076, 0.135, 0.288) — B/R 3.8. So the navy came from the AMBIENT winning
+   * over a near-black albedo, not from the tint multiply.
+   *
+   * The fix keeps the grain contrast but drives it as a VALUE on one warm hue,
+   * with a floor of 0.58 x uWoodLite (linear luma 0.103, ~2x the old minimum) so
+   * the albedo always has enough energy for its own hue to survive the ambient.
+   * uWoodDark survives only in the hairline splits, at 0.45 weight, where a dark
+   * warm line is exactly what a check in sawn timber looks like. */
+  float grainV = clamp( rings * 0.74 + fine * 0.30, 0.0, 1.0 );
+  vec3 wood = uWoodLite * ( 0.58 + 0.42 * grainV );
+  wood = mix( wood, uWoodDark, split * 0.45 );
 
 #ifdef PROPS_BAMBOO
   // green culm: pale internodes, darker rings at each node, vertical striations
@@ -627,6 +650,8 @@ uniform vec3  uPaperDay;       // the same panel in DAYLIGHT — pale sunlit pap
 uniform vec3  uFlameCore;
 uniform float uGlow;
 uniform float uTime;
+uniform float uDayScatter;     // daylight forward-scatter gain (see below)
+uniform float uDayShade;       // how much of the COOL shaded base the day panel keeps
 
 ${GLSL_NOISE}
 ${FRAG_SHADOW_PARS}
@@ -646,6 +671,20 @@ void main(){
    * burning at display luma 0.92 in the day hero frame (see the note there). */
   float flame = clamp( uGlow * vFlame.r, 0.0, 2.0 );
   float flameK = clamp( flame, 0.0, 1.0 );
+  /* nightK is the TIME OF DAY only: uGlow is 35-props.js's smoothed phase ramp
+   * (0 through the whole day, 1 once the fire is up), with no flicker in it.
+   *
+   * Everything that decides whether this panel is DAYLIT PAPER or a dark recess
+   * with a fire behind it keys off nightK, not off flameK. flameK carries the
+   * per-instance flicker (vFlame.r swings 0.42..1.12 and guts occasionally), and
+   * keying the daylight terms off that meant a night-time gutter partially faded
+   * the panel BACK toward its daylight albedo and re-enabled the warm daylight
+   * scatter — a warm flash exactly when the flame dips. Harmless while the scatter
+   * was 0.156; visible now that it is 0.52. flameK is left driving only the two
+   * things that should flicker: flick and the emissive hot core. At night
+   * uGlow == 1, so every mix() below still reduces exactly to the night values the
+   * previous review passed. */
+  float nightK = clamp( uGlow, 0.0, 1.0 );
 
   // washi: visible fibres, and a hot centre where the flame sits behind it
   vec2 uv = vPUv * 2.0 - 1.0;
@@ -674,12 +713,12 @@ void main(){
    * shader already had, which a review passed. MEASURED: 0.16 x 0.22 of
    * translucency is what keeps a BACKLIT thin panel off the blown-cream 0.903 an
    * earlier round shipped. */
-  vec3 base = mix( uPaperDay, uPaperCold, flameK );
+  vec3 base = mix( uPaperDay, uPaperCold, nightK );
   base *= 1.0 + 0.45 * ( fib * 0.55 + rib * 0.25 );            // laid fibres
   base *= 1.0 - 0.30 * smoothstep( 0.35, 1.0, abs( uv.y ) );   // frame shading
   // the burner is opaque in daylight too — this is the internal detail that stops
   // the day panel reading as a flat yellow blob
-  base *= 1.0 - burner * 0.46 * ( 1.0 - flameK );
+  base *= 1.0 - burner * 0.46 * ( 1.0 - nightK );
   /* The occlusion and translucency the panel is shaded with also crossfade.
    * MEASURED: the night numbers (ao 0.22, translucency 0.16 x 0.22) exist to keep
    * a BACKLIT thin panel off the blown-cream 0.903 an earlier round shipped, but
@@ -687,10 +726,19 @@ void main(){
    * — DARKER than the lantern's own granite (0.44-0.57), i.e. four black holes.
    * The day values are what land it above the granite without clipping; at
    * flameK = 1 every one of them reduces to the night value exactly. */
-  float trP = mix( 0.42, 0.16, flameK );
-  float thP = mix( 0.44, 0.22, flameK );
-  float aoP = mix( 1.00, 0.22, flameK );
+  float trP = mix( 0.42, 0.16, nightK );
+  float thP = mix( 0.44, 0.22, nightK );
+  float aoP = mix( 1.00, 0.22, nightK );
   vec3 sm0 = nprShadeN( base, N0, N0, V, 1.0, trP, thP, 0.08, 0.40, aoP );
+  /* The shaded base is the COOL half of the day panel: on the shade side the NPR
+   * ambient is uSkyColor-dominated, so this term alone printed the box at
+   * rgb(135,148,165) / rgb(98,115,142) — B > G > R, i.e. cold slate, on a sheet of
+   * paper. Trimming it in DAYLIGHT ONLY (the factor is 1.0 at flameK = 1, so the
+   * night read the reviewer passed is bit-identical) and paying the value back
+   * through the warm scatter term below is what turns the panel from blue-grey to
+   * washi. Measured effect at uDayShade 0.66 / uDayScatter 0.30: R/B goes
+   * 0.82 -> 1.18 on the nearest lantern with the mean L slightly UP. */
+  sm0 *= mix( uDayShade, 1.0, nightK );
 
   /* DAYLIGHT SCATTERED THROUGH THE SHEET.
    *
@@ -710,11 +758,14 @@ void main(){
    * measured 0.309 scene / 0.525 display to the ~0.66 display the brief asks for
    * needs +0.095 scene, i.e. DS = 0.156. It carries NO hot core, does not
    * flicker, and is multiplied by (1 - flameK), so it cannot reintroduce the
-   * daylight blow-out this round exists to remove. */
-  #define PROPS_DAY_SCATTER 0.156
-  vec3 dayLit = uPaperDay * uSunColor * PROPS_DAY_SCATTER
+   * daylight blow-out this round exists to remove.
+   *
+   * It is a UNIFORM (uDayScatter) rather than a #define so it can be swept from
+   * tools/probe.mjs and the props-ds* scenarios with no shader recompile — that
+   * sweep is how the settled value in 35-props.js was chosen. */
+  vec3 dayLit = uPaperDay * uSunColor * uDayScatter
               * ( 0.55 + 0.75 * fib ) * ( 0.82 + 0.30 * rib )
-              * ( 0.76 + 0.48 * centre ) * ( 1.0 - burner * 0.62 ) * ( 1.0 - flameK );
+              * ( 0.76 + 0.48 * centre ) * ( 1.0 - burner * 0.62 ) * ( 1.0 - nightK );
   sm0 += dayLit;
 
   /* LIT PANEL. Emissive — it is the light source, not a lit surface — so it

@@ -112,6 +112,34 @@ export const TUNING = {
   OFFLINE_MAX_MS: 30 * 24 * 3600e3, // anti-clock-cheat hard clamp
   STORM_PERIOD: 420,          // 7 min                                   (spec)
   STORM_JITTER: 120,          // ±2 min                                  (spec)
+  /**
+   * The FIRST storm of a save only. GAME_DESIGN marks the storm cadence
+   * *(tune)*, and at the spec'd 420 ± 120 the first one lands at 300–540 s —
+   * measured median 536 s. That is the game's marquee set piece (×10 income,
+   * the whole hillside in the air, wind ×2.5) held back for nine minutes, and
+   * it also gates content: the `storms: 1` requirement on Storm Glass and the
+   * 'Rode the Storm' achievement cannot even appear until it fires. Against
+   * "a meaningful decision or a new unlock at least every ~40 seconds early
+   * on", nine minutes is the longest dead beat in the opening.
+   *
+   * 110 ± 30 s puts it just after the first Tender purchases and the first
+   * Codex card, so the opening reads: shake → buy → card → storm. Every
+   * SUBSEQUENT storm uses the spec'd 420 ± 120, so steady-state cadence is
+   * untouched (8 storms in 60 min, measured, unchanged).
+   *
+   * MEASURED COST, 40 seeds each (`sim.mjs --seeds 40 --dials '{"sf":…}'`),
+   * medians: grace off → 初咲 527s, 満開 1819s, 25 Essence 3599s, score 0.517.
+   * Grace 110 → 初咲 563s, 満開 1824s, 25 Essence 3438s, score 0.586. So the
+   * mid-game does not move at all (満開 1819 vs 1824 s) and the whole price is
+   * 4.5% off "the Season is worth turning", 60 → 57 min, still inside
+   * GAME_DESIGN's 50–70 min window. The 初咲 difference is inside the seed
+   * spread (p10–p90 spans 312–652 s) and is not a real effect. 160 ± 30 was
+   * also measured (初咲 544s, 満開 1829s, 25 Essence 3501s, score 0.579) and is
+   * the option to reach for if that 3 min ever needs buying back — but 110
+   * is what puts the storm inside the first two minutes, which is the point.
+   */
+  STORM_FIRST: 110,
+  STORM_FIRST_JITTER: 30,
   STORM_DURATION: 20,         // 20 s                                    (spec)
   STORM_MULT: 10,             // ×10 passive                             (spec)
   STORM_WIND: 2.5,            // wind strength ×2.5                      (spec)
@@ -128,6 +156,60 @@ export const TUNING = {
   /**
    * Global production scalar — the primary balance dial for the GAME_DESIGN
    * pacing table. Measured in `.tmp-game/sim.mjs`; do not change casually.
+   *
+   * ── 2026-07-29 re-measure, and the state of the curve as it ships ────────
+   * The pacing numbers below used to be single-seed anecdotes. Storm timing,
+   * Spring Rain rolls and which Golden Petal boon lands are all RNG, and one
+   * sample of them moved 初咲 First Bloom between 410 s and 750 s on an
+   * UNCHANGED curve — wider than any tuning change being argued about. So the
+   * simulator now reports a distribution (`sim.mjs --seeds 24`) and the curve is
+   * tuned on the MEDIAN. As shipped, 24 seeds, reference player (3 clicks/s
+   * tapering, catches 75% of Golden Petals), against GAME_DESIGN's table:
+   *
+   *   moment                          target    p10   median   p90   in band
+   *   first Tender bought                20s     18s     18s    18s    24/24
+   *   1e3 petals / first Codex card      90s     95s     95s    95s    24/24
+   *   Bloom 2 初咲 First Bloom          480s    421s    548s   667s    21/24
+   *   Bloom 3 満開 Full Bloom          2100s   1533s   1911s  2142s    22/24
+   *   Season worth turning (25 Ess)    3600s   3264s   3706s  3937s    24/24
+   *
+   * As shipped WITH the first-storm grace (STORM_FIRST, below), 40 seeds:
+   * 初咲 563s (30/40 in band), 満開 1824s (34/40), 25 Essence 3438s (40/40),
+   * first Tender 18s and the first Codex card 95s both 40/40. Median score
+   * 0.586. Longest gap between purchases inside the first 35 min: 67 s median,
+   * 85 s p90, against the spec's 180 s ceiling.
+   *
+   * READ THIS BEFORE RE-TUNING. `sim.mjs` with no `--seeds` runs the one seed
+   * `newState()` used to hand every player, and that seed is a p10 OUTLIER —
+   * 初咲 312 s and 満開 1242 s, i.e. it reports FAIL on a curve whose median
+   * passes. It also used to be the balance every real player got, because
+   * 60-game.js called `newState()` with no argument: one hard-coded stream of
+   * storm times and Golden Petal boons for everybody, and the fastest tenth of
+   * the distribution at that. Fresh browser saves now roll their own seed
+   * (shot mode keeps the fixed one so screenshots stay comparable), so the
+   * median IS the player experience and `--seeds 40` is the honest instrument.
+   *
+   * Median score 0.517 without the storm grace, every mark inside the
+   * 0.72×–1.35× band. The model is validated against the real module: with
+   * `--policy scripted --catch 0` it reproduces 60-game.js driven live through
+   * `.tmp-game/probe-live-pace.js` to within 8% at t = 60/150/300/450 s.
+   *
+   * Two residual biases — 初咲 +14%, 満開 −9% — are NOT worth chasing. Grid-
+   * searched at 16 seeds each: cheaper tier-1 Tender upgrades (t1 ×0.7) scores
+   * 0.471, stretched milestones (mspace ×1.3) 0.515, both together 0.469, all
+   * against 0.509 for the shipping curve on the same seeds. Every candidate's
+   * gain is smaller than the seed-to-seed noise, and each buys one mark by
+   * losing another. The curve is at a local optimum; leave it.
+   *
+   * The curve is tuned FOR the reference player and degrades away from them,
+   * which is inherent to a clicker with a spec'd ×7 buff in it:
+   *   catch 0    stage2 749s  stage3 2370s  25 Essence never (in 75 min)
+   *   catch 0.75 stage2 494s  stage3 1755s  25 Essence 3479s
+   *   1 click/s  first Tender 36s  stage2 865s  stage3 2098s
+   *   5 clicks/s first Tender 24s  stage2 350s  stage3 1641s
+   * A player who never catches a Golden Petal runs ~1.4× slow. That is the
+   * cost of the boon being worth catching, and it is the correct trade.
+   * ─────────────────────────────────────────────────────────────────────────
    *
    * 0.70, not 1.0, and the reason is measured: the earlier 1.0 was tuned by a
    * simulator that ran the economy in an EVENTLESS vacuum. The live game runs
@@ -819,8 +901,28 @@ export const GOLDEN_BOONS = [
  * ==================================================================== */
 
 export const SAVE_KEY = 'sakura.save.v1';
-/** v3 added `stageFloor` (the first-run Budding floor). */
-export const SAVE_VERSION = 3;
+/**
+ * v3 added `stageFloor` (the first-run Budding floor).
+ * v4 added `sched` — the live-event countdowns (see below).
+ */
+export const SAVE_VERSION = 4;
+
+/**
+ * Live-event schedule, persisted.
+ *
+ * It used to live only in module-scope variables, which meant every page load
+ * re-rolled `nextStorm` from a full 420 ± 120 s. A player who reloads, or who
+ * plays in short sessions — exactly the audience for an idle game — could
+ * therefore never see a Petal Storm at all, and never unlock the two pieces of
+ * content gated behind `storms: 1`. Persisting the countdowns makes the storm
+ * clock a property of the SAVE rather than of the tab.
+ *
+ * `null` means "not written yet — roll a fresh one", which is what every v1–v3
+ * save and every fresh state gets.
+ */
+export function newSchedule() {
+  return { storm: null, golden: null, rain: 0 };
+}
 
 export function newState(seed = 20260728) {
   const tenders = {};
@@ -852,6 +954,7 @@ export function newState(seed = 20260728) {
       seasonClicks: 0,
     },
     lastSeen: 0,
+    sched: newSchedule(),
     ui: { panel: 'tenders', bulk: 1 },
   };
 }
@@ -886,6 +989,19 @@ export function sanitizeState(s) {
   for (const k of Object.keys(base.stats)) base.stats[k] = num(s.stats?.[k]);
   base.stats.upgrades = Object.keys(base.upgrades).length;
   base.lastSeen = num(s.lastSeen);
+  /* Countdowns are clamped to a sane window rather than trusted: a hand-edited
+   * or corrupt save must not be able to park the storm 400 days out (which
+   * would silently disable the event) or park it at 0 (a storm every frame). */
+  {
+    const sc = s.sched;
+    const span = (v, max) => (typeof v === 'number' && Number.isFinite(v) && v > 0
+      ? Math.min(v, max) : null);
+    base.sched = {
+      storm: span(sc?.storm, TUNING.STORM_PERIOD + TUNING.STORM_JITTER),
+      golden: span(sc?.golden, TUNING.GOLDEN_MAX * 3),
+      rain: Math.min(60, num(sc?.rain)),
+    };
+  }
   base.ui = { panel: String(s.ui?.panel ?? 'tenders'), bulk: num(s.ui?.bulk, 1) || 1 };
   return base;
 }
@@ -940,7 +1056,21 @@ export function migrate(raw) {
     }
     v = 3;
   }
-  // future: if (v < 4) { ... v = 4; }
+
+  if (v < 4) {
+    /* Persisted event schedule. Nothing to carry across — an older save has no
+     * countdowns to preserve — so leave `sched` absent and let sanitizeState
+     * install the nulls that mean "roll fresh". A player mid-Season keeps their
+     * storm cadence from the moment they load this build onward.
+     *
+     * One deliberate consequence: a v1–v3 save gets STORM_FIRST rather than the
+     * full period, i.e. its next storm arrives in ~110 s. That is the right way
+     * round — the returning player is the one who has been most cheated by the
+     * timer resetting on every load. */
+    delete s.sched;
+    v = 4;
+  }
+  // future: if (v < 5) { ... v = 5; }
 
   s.v = SAVE_VERSION;
   return sanitizeState(s);

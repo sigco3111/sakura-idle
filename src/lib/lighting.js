@@ -241,6 +241,22 @@ const vec3 NPR_TRANSMIT_TINT = vec3(1.000, 0.768, 0.838);
   // own occlusion separates the two cases: an open shadow keeps its ART_BIBLE
   // 0.55 ratio, an enclosed one falls to a fifth of it and becomes the black
   // the histogram was missing.
+  //
+  // r5 — WHERE THE FRAME'S lum p1 ACTUALLY COMES FROM. Left at 0.16, and this is
+  // the measurement that says why, so the next round does not spend a pass on it:
+  //   * scenario nopost, hero: p1 0.335, p50 0.669, DARKEST PIXEL IN FRAME
+  //     0.161. The raw scene has no low end at all — the entire histogram bottom
+  //     is manufactured by 90-postfx's grade.
+  //   * The graded frame's p1 is pinned near the grade's own shadow-lift target
+  //     (#2A2438 = display L 0.152): sweeping the canopy shade pool from 1.0x to
+  //     1.8x — which is a very large change over the darkest 1% of the frame —
+  //     moved graded p1 by 0.010 (0.1533 -> 0.1432), and cal-occ 1.85 -> 2.60
+  //     moved it by 0.001 (0.1415 -> 0.1405).
+  // So the low end is a POST decision, not a shading one. Deepening this term (or
+  // the plateaus above) far enough to reach a p1 of 0.05-0.10 costs roughly 3x
+  // more darkening than the pool sweep, which puts the near-trunk shadow ratio at
+  // ~0.25 of lit ground — the §8.4 "navy paint" instant fail. Reduce the grade's
+  // shadow lift instead.
   #define NPR_SHADOW_AO 0.16
 #endif
 #ifndef NPR_SHADOW_CHROMA
@@ -390,7 +406,16 @@ const vec3 NPR_TRANSMIT_TINT = vec3(1.000, 0.768, 0.838);
   // for nothing but air and reading as a veil laid over the sward rather than as
   // grass (§8.9). Value preservation is the only term that pushes back on that
   // without also killing the far convergence, so it goes UP, not down.
-  #define NPR_AERIAL_VALUE 0.52
+  //
+  // 0.52 -> 0.60 (r5). Re-measured on shots/light-r5-base/hero.png with the ray
+  // classifier + row scanner (the two have to be read together or you attribute
+  // the sky module's plate to this function): the terrain reaches 123 m and printed
+  // display L 0.277 at 58 m, 0.391 at 75 m, 0.505 at 100 m — a 1.8x value climb
+  // across 40 m of a garden, for air alone. It is still recognisably GREEN at 100 m
+  // (rgb 111,136,111), so the milky CREAM plate above it is not this function's
+  // (see FOG_START_DISTANCE) — but 1.8x is too much lift and it is what puts the
+  // frame's midtones on top of each other.
+  #define NPR_AERIAL_VALUE 0.60
 #endif
 #ifndef NPR_AERIAL_VALUE_FAR
   // ...and at MAXIMUM depth. This used to be a hard 0 (the fade below ran the
@@ -554,14 +579,48 @@ float nprDappleMask(){
    still sees the bright horizon.                                           */
 #ifndef NPR_CANOPY_SHADE
   // Fraction of the SKY ambient the canopy takes from an up-facing surface at the
-  // pool's core. CALIBRATED: with 0.62/0.40 the ground just behind the trunk
-  // printed at 0.425 of open sunlit grass 10 m out — under ART_BIBLE §2's
-  // 0.50-0.60 window, i.e. the pool had become a dark blob. 0.50/0.28 lands it at
-  // 0.51-0.55 (measured in the graded png, both values reported).
-  #define NPR_CANOPY_SHADE 0.50
+  // pool's core.
+  //
+  // r5, MEASURED with the shadow-map + pool A/B (shots/light-r5-noui vs
+  // shots/light-r5-noshade, region means divided): at 0.50/0.28 the ground just
+  // behind the trunk printed L 0.253 against sunlit grass 10 m out at 0.398, a
+  // ratio of 0.68-0.71 — ABOVE ART_BIBLE §2's 0.50-0.60 window, i.e. the tree
+  // was not grounded. The old note claiming 0.62/0.40 measured 0.425 was taken
+  // before NPR_AMBIENT_CAST/NPR_CAST_FILL were retuned in r3 and no longer holds.
+  //
+  // Two things move together (see nprCanopyShade below): the pool got RADIALLY
+  // TIGHTER — 08-lighting.js now fits it to ~7.6 m instead of 10.4 m and biases
+  // it 1.5 m instead of 4.2 m, so ground 10 m from the trunk is genuinely lit and
+  // can serve as the reference — and the core got deeper to land the ratio.
+  //
+  // 0.92 / 0.56 is the cal-pool140 point, SWEPT and measured, not guessed. Five
+  // ground patches on a 2.5 m ring round the trunk, each divided by ITS OWN fully
+  // lit value from the noshade A/B (same albedo, same distance, same blade
+  // geometry — the only honest reference):
+  //          pool 1.00   pool 1.40   pool 1.80
+  //   mean     0.702       0.593       0.569
+  //   spread 0.57-0.94   0.46-0.67   0.43-0.69
+  // 1.40 puts the mean mid-window; 1.80 pushes the deepest patch to 0.43, under
+  // ART_BIBLE's floor.
+  #define NPR_CANOPY_SHADE 0.92
 #endif
 #ifndef NPR_CANOPY_KEY
-  #define NPR_CANOPY_KEY 0.28
+  #define NPR_CANOPY_KEY 0.56
+#endif
+#ifndef NPR_CANOPY_CONTACT
+  // Extra shade in the INNER lobe, as a fraction of the pool weight.
+  //
+  // ART_BIBLE §4.2 forbids the "dirty smudge": one wide, shapeless, uniform dark
+  // mass under the tree. A real tree's ground shade is not uniform — it is much
+  // deeper in the metre or two around the root flare (where the canopy is
+  // thickest and the sky is almost entirely blocked) than out at the drip line.
+  // A single smoothstep disc cannot express that, so the pool is now two lobes:
+  // a broad skirt out to the drip line plus this tighter, deeper contact lobe
+  // over the root flare. That is what gives the base a readable dark-to-light
+  // gradient instead of a flat plate, and it is what lets the AVERAGE darkening
+  // come down (smaller smudge) while the NEAR-TRUNK ratio goes DOWN to the
+  // ART_BIBLE window at the same time.
+  #define NPR_CANOPY_CONTACT 0.62
 #endif
 float nprCanopySky(){ return uShadeCal.z > 0.0 ? uShadeCal.z : NPR_CANOPY_SHADE; }
 float nprCanopyKey(){ return uShadeCal.w > 0.0 ? uShadeCal.w : NPR_CANOPY_KEY; }
@@ -574,12 +633,18 @@ float nprCanopyShade(vec3 N, float weight){
   // of the canopy so the blossom cards themselves darken toward their interior
   // instead of stopping at a hard height.
   float below = 1.0 - smoothstep(0.0, R * 1.25, max(d.y, 0.0));
-  // Soft-edged disc: flat core out to 40% of the radius, then a long falloff, so
-  // there is never a visible circular boundary on the grass.
-  float radial = 1.0 - smoothstep(R * 0.40, R * 1.10, rh);
+  // Soft-edged skirt: flat core out to a third of the radius, then a long
+  // falloff that reaches zero AT the drip line, so there is never a visible
+  // circular boundary on the grass and nothing past R is touched at all.
+  float radial = 1.0 - smoothstep(R * 0.34, R * 1.00, rh);
   radial *= radial;
+  // ...and the tight contact lobe over the root flare — see NPR_CANOPY_CONTACT.
+  float contact = 1.0 - smoothstep(R * 0.06, R * 0.40, rh);
+  contact *= contact;
   float up = clamp(N.y * 0.5 + 0.5, 0.0, 1.0);
-  return 1.0 - weight * below * radial * mix(0.42, 1.0, up);
+  float shade = weight * below * mix(0.42, 1.0, up)
+              * (radial + NPR_CANOPY_CONTACT * contact);
+  return 1.0 - clamp(shade, 0.0, 0.94);
 }
 
 /* --- Fresnel rim ---------------------------------------------------- */
@@ -1359,7 +1424,29 @@ export const NPR_KEY_DESAT = 0.45;
 
 /** Height/distance fog shaping constants (uFogParams.y/.z). */
 export const FOG_HEIGHT_FALLOFF = 0.055;
-export const FOG_START_DISTANCE = 40.0;
+/**
+ * Distance at which aerial perspective starts accumulating at all (uFogParams.z).
+ *
+ * 40 -> 55 (r5), and this is the main lever behind the r5 "aerial is still too
+ * strong" fix. MEASURED with the ray classifier (which object is at which pixel)
+ * plus the row scanner on shots/light-r5-base:
+ *
+ *   distance   40 m start        55 m start        display L before
+ *      60 m    f = 0.10          f = 0.011         0.310
+ *      80 m    f = 0.37          f = 0.135         0.391  <- the "veil" row
+ *     100 m    f = 0.44          f = 0.31          0.505
+ *     123 m    f = 0.62          f = 0.51          (terrain's far edge)
+ *
+ * The playable garden is a ~60-unit disc and the terrain runs out at ~123 m, so
+ * the whole visible field lived inside the steep part of the old curve: 37% of a
+ * veil at 80 m is why the sward read as haze rather than grass (§8.9), while the
+ * FAR edge — the only row that actually has to read as air — barely changes
+ * (0.62 -> 0.51). Pushing the start out instead of cutting the density is what
+ * separates those two facts; cutting density lowers both together and then the
+ * terrain's far edge stops receding at all (measured in r4 at AERIAL_STRENGTH
+ * 0.60: the 130 m edge came back at chroma 0.09, i.e. pale ground, not air).
+ */
+export const FOG_START_DISTANCE = 55.0;
 
 /**
  * Global scale on every keyframe's fog density.
@@ -1389,12 +1476,12 @@ export const AERIAL_STRENGTH = 0.82;
  * KEEP IN LOCKSTEP with NPR_AERIAL_* / NPR_CANOPY_* in the GLSL above.
  * ---------------------------------------------------------------------- */
 export const AERIAL_LEVEL = 0.72;      // haze target as a fraction of uFogColor
-export const AERIAL_KEEP_MID = 0.52;   // own-value preservation at mid depth
+export const AERIAL_KEEP_MID = 0.60;   // own-value preservation at mid depth
 export const AERIAL_KEEP_FAR = 0.30;   // ...and at maximum depth (never 0)
 export const AERIAL_POW = 1.6;         // exponent on the optical depth
 export const AMB_OCC_POW = 1.85;       // sky visibility falloff inside a pocket
-export const CANOPY_SKY = 0.50;        // canopy shade pool: fraction of sky taken
-export const CANOPY_KEY = 0.28;        // ...and of the key
+export const CANOPY_SKY = 0.92;        // canopy shade pool: fraction of sky taken
+export const CANOPY_KEY = 0.56;        // ...and of the key
 
 /**
  * The colour light actually takes on bouncing off a sunlit grass garden

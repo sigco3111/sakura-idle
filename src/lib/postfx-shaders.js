@@ -281,17 +281,23 @@ void main() {
   float m = sky * ( uFloor + ( 1.0 - uFloor ) * smoothstep( uThreshold, uThreshold * 2.6, l ) )
           + ( 1.0 - sky ) * 0.16 * smoothstep( 1.2, 3.4, l );
 
-  // Only sky *near the sun* seeds a shaft, and "near" has to be genuinely tight.
-  // The radial blur of a field that is roughly constant over the whole frame is
-  // that same constant — which is exactly what the old reach of (2.10, 4.20)
-  // produced: measured, the ray buffer came out at 0.09 +/- 0.015 everywhere,
-  // i.e. a flat wash with no shaft structure anywhere in it. A seed that is a
-  // BLOB around the source and ~0 elsewhere is what makes the march produce
-  // streaks that radiate, with occluders carving the gaps between them.
-  // Squared falloff so the blob has a bright core and a long faint skirt.
+  // A GENTLE, WIDE taper only. This line is where three rounds of this pass died:
+  // it used to be a tight blob (reach 0.62..1.85) SQUARED, and the march that
+  // consumes it is an average along the line of sight to the sun, so the seed has
+  // to be alive over the WHOLE path or the average is just "how close to the sun
+  // am I". MEASURED with the old values, dusk/hero, pipeline.sample('mask',u,v):
+  //   (0.20,0.70) sky, well clear of the canopy   mask 0.0105
+  //   (0.50,0.75) sky                             mask 0.283
+  //   (0.90,0.90) sky beside the sun              mask 1.000
+  // i.e. the entire left half of the visible sky seeded NOTHING, so every pixel
+  // on that side marched through zeros and the ray buffer read 0.007-0.03 there
+  // against 1.0 at the source: a radial lobe centred on the sun, which is glow,
+  // not shafts. Where the shafts are DRAWN is the composite's job (uRayFalloff);
+  // the seed's only job is "is there bright sky here", and the cross-ray high pass
+  // in ATMOS removes whatever smooth radial component survives.
   float dSun = length( ( vUv - uSunUV ) * vec2( uAspect, 1.0 ) );
   float reach = 1.0 - smoothstep( uSunReach.x, uSunReach.y, dSun );
-  m *= reach * reach;
+  m *= reach;
 
   gl_FragColor = vec4( m, m, m, 1.0 );
 }`,
@@ -339,10 +345,17 @@ void main() {
   // the total so a single surviving tap can never spike.
   float r = acc / max( wsum, 0.30 * wtot );
   // Shaft contrast. The march is an AVERAGE along the ray, so a ray that is half
-  // blocked reads at half strength and the gaps never go properly dark — the
-  // effect then looks like haze rather than like light through a canopy. A gamma
+  // blocked reads at half strength and the gaps never go properly dark. A gamma
   // above 1 pushes the partially-occluded rays down and leaves the clear ones
   // alone, which is what separates a shaft from its neighbour.
+  //
+  // But it must stay MILD. uShape was 3.0, which — on top of the squared seed
+  // taper this shader's twin used to apply — was the second of two crushes both
+  // centred on the sun: the raw march at dusk/hero read 0.20 / 0.31 / 0.44 / 0.75
+  // at four points marching left-to-right across the frame, and pow(.,3) turned
+  // those into 0.007 / 0.029 / 0.085 / 0.42. Two thirds of the frame therefore
+  // carried 1-3% of the source's value and the pass could only ever read as a lobe
+  // at the sun. 1.5 keeps the gap/shaft separation and leaves the mid-frame alive.
   r = pow( max( r, 0.0 ), uShape );
   gl_FragColor = vec4( r, r, r, 1.0 );
 }`,
@@ -365,7 +378,7 @@ export const ATMOS_SHADER = {
     uAspect: { value: 1.0 },
     uRayFalloff: { value: null }, // vec4 (innerStart, innerEnd, outerStart, outerEnd)
     uRayDamp: { value: null },    // vec2 (linear-HDR luma where damping starts, amount)
-    uRayStruct: { value: null },  // vec2 (flat-field floor, contrast gain)
+    uRayShaft: { value: null },   // vec3 (high-pass gain, absolute-level gain, noise deadband)
     uRayContrast: { value: null },// vec2 (gated multiplicative contrast gain, perp width)
     uRaySolo: { value: 0.0 },     // debug: 1 = output the ray contribution alone
   },
@@ -380,7 +393,7 @@ uniform vec3  uRayColor;
 uniform vec2  uSunUV;
 uniform vec4  uRayFalloff;
 uniform vec2  uRayDamp;
-uniform vec2  uRayStruct;
+uniform vec3  uRayShaft;
 uniform vec2  uRayContrast;
 uniform float uRaySolo;
 uniform float uAspect;
@@ -397,29 +410,41 @@ uniform float uAspect;
  * responsible for 14 of the frame's 18 flat 200x200 blocks above L 0.90 — the pass
  * was manufacturing instant-fail tell 8.2.
  *
- * The SIGN is what makes the shafts survive a bright sky (see main()). Six taps at
- * three baselines, so a shaft roughly 2-6% of frame width across is resolved without
+ * The SIGN is what makes the shafts survive a bright sky (see main()). Eight taps at
+ * four baselines, so a shaft roughly 2-8% of frame width across is resolved without
  * the widest baseline swallowing it.
  */
 vec2 rayStructure( vec2 uv, float r0 ) {
   vec2 d = uv - uSunUV;
   float len = max( length( d * vec2( uAspect, 1.0 ) ), 1e-4 );
   vec2 perp = normalize( vec2( -d.y * uAspect, d.x ) ) * vec2( 1.0 / uAspect, 1.0 );
-  float mag = 0.0;
-  float base = 0.0;
-  float bw = 0.0;
-  for ( int i = 0; i < 3; i ++ ) {
-    float s = ( i == 0 ? 0.010 : i == 1 ? 0.024 : 0.048 ) * uRayContrast.y
-            * min( len * 3.0, 1.0 );
+  float shaft = 0.0;   // how much brighter than BOTH neighbours, best baseline wins
+  float gap = 0.0;     // how much darker  than BOTH neighbours
+  for ( int i = 0; i < 4; i ++ ) {
+    // Baselines in UV. A crepuscular shaft in a 16:9 frame is 2-8% of frame width
+    // across, so the widest baseline has to sit just OUTSIDE that and the narrowest
+    // just inside it, or the "local baseline" is itself part of the shaft and the
+    // high pass returns ~0. uRayContrast.y scales all four together.
+    float s = ( i == 0 ? 0.008 : i == 1 ? 0.018 : i == 2 ? 0.038 : 0.072 )
+            * uRayContrast.y * min( len * 3.0, 1.0 );
     float a = texture2D( tRays, uv + perp * s ).r;
     float b = texture2D( tRays, uv - perp * s ).r;
-    mag = max( mag, max( abs( r0 - a ), abs( r0 - b ) ) );
-    // the wider the baseline the more it counts as "the surrounding level"
-    float w = 1.0 + float( i );
-    base += ( a + b ) * 0.5 * w;
-    bw += w;
+    // A LOCAL EXTREMUM test, not a difference from the mean of the two sides. This
+    // matters and it is measurable: the previous mean-based high pass fires on any
+    // MONOTONE gradient across the ray, and the biggest such gradient in the frame
+    // is the horizon — the ray field steps from ~0.05 (every ray through the ground
+    // is blocked) to ~0.35 (sky) over a few pixels. Measured on the mean-based
+    // version, dusk/hero: a +45 to +62/255 horizontal band across the whole frame
+    // at y 0.33-0.44, i.e. the pass was painting a bright line along the horizon
+    // and adding to exactly the milky mid-ground band it is asked not to touch.
+    // min(r0-a, r0-b) is positive only where this ray is clearer than the rays on
+    // BOTH sides of it, which is what a shaft is; a step edge scores <= 0.
+    shaft = max( shaft, min( r0 - a, r0 - b ) );
+    gap   = max( gap,   min( a - r0, b - r0 ) );
   }
-  return vec2( r0 - base / max( bw, 1e-4 ), mag );
+  // max() over baselines, so whichever baseline matches this shaft's width wins and
+  // a shaft is not swallowed by a baseline wider than itself.
+  return vec2( shaft - gap, max( shaft, gap ) );
 }
 
 void main() {
@@ -465,7 +490,36 @@ void main() {
     //     clip: the shaft is brighter than its neighbour and the gap between two
     //     shafts is darker, the local mean barely moves, and THAT is what reads as
     //     a crepuscular ray over a blown dusk sky.
-    vec3 add = uRayColor * r * mix( uRayStruct.x, 1.0, sat( st.y * uRayStruct.y ) )
+    //
+    // ROUND 4. The add is now driven by the cross-ray HIGH PASS (st.x), not by the
+    // absolute level r. That distinction is the whole defect: a marched occlusion
+    // average is a smooth radial ramp BY CONSTRUCTION (r -> 1 wherever the path to
+    // the source happens to be clear sky), so 'uRayColor * r' can only ever paint a
+    // lobe centred on the sun no matter what gates are hung off it. Measured on the
+    // shipped r3 build, dusk/hero, delta against 'postfx-dusk-no-rays': peak cell
+    // +55.7/255 in one 120x120 cell beside the sun, +2..+7 smeared across the whole
+    // aerial-haze band, and 0-1 arc peak at >= 2.5/255 prominence at R = 0.25H and
+    // 0.40H — i.e. exactly one soft glow, which is what the critic saw and also part
+    // of the milky mid-ground band (§4 of the brief).
+    // max(st.x, 0) is nonzero only where this pixel's ray is CLEARER than the rays
+    // beside it, which is the definition of a shaft; the flat lobe high-passes to 0
+    // and costs nothing. uRayShaft.y keeps a small r^2 absolute term so a shaft has
+    // a faint root in the air around it instead of floating.
+    // DEADBAND. max(x,0) RECTIFIES noise: the quarter-res march carries a dithered
+    // start offset, so st.x has a random component, and the positive half of it
+    // survives as a DC lift over the whole sky. Measured without the deadband,
+    // dusk/hero at gain 4: +6.0/255 mean over the upper-left sky and +6.3 over the
+    // aerial-haze band, with no shaft in either — a wash, and precisely the milky
+    // band §4 of the brief asks this pass not to feed. Subtracting the noise floor
+    // before the rectifier costs the shafts nothing (they are 5-10x it) and takes
+    // the wash to zero.
+    float shaft = max( st.x - uRayShaft.z, 0.0 );
+    // Soft knee on the core. A shaft is allowed to be bright; it is not allowed to
+    // reach a flat white plateau (instant-fail tell 8.12) at the one or two places
+    // where the ray field happens to be perfectly clear. This costs a typical
+    // 0.03-0.06 shaft under 10% and halves the outliers above 0.3.
+    shaft = shaft / ( 1.0 + 2.2 * shaft );
+    vec3 add = uRayColor * ( uRayShaft.x * shaft + uRayShaft.y * r * r )
              * win * ( 1.0 - uRayDamp.y * dampT );
 
     // Signed, so gaps darken as much as shafts brighten. Tinted toward the key so a
@@ -479,7 +533,7 @@ void main() {
     // by 0.0004. So dampT only AMPLIFIES it (a relative modulation is worth most
     // where the absolute add is worth least); the floor keeps it live everywhere.
     vec3 tint = mix( vec3( 1.0 ), normalize( max( uRayColor, vec3( 1e-3 ) ) ) * 1.732, 0.55 );
-    float sgn = clamp( st.x, -0.5, 0.5 );
+    float sgn = clamp( sign( st.x ) * max( abs( st.x ) - uRayShaft.z, 0.0 ), -0.5, 0.5 );
     float cw = mix( 0.55, 1.0, dampT );
     vec3 mul = vec3( 1.0 ) + uRayContrast.x * sgn * win * cw * tint;
 
@@ -921,7 +975,7 @@ void main() {
   float ccoc = c.a;
   vec3 acc = c.rgb;
   float wsum = 1.0;
-  float nearCov = sat( -ccoc * 0.6 );
+  float nearCov = sat( ( -ccoc - 0.8 ) * 0.6 );
 
   // White-noise Cranley-Patterson rotation + per-pixel radial offset. IGN was
   // used here before and its diagonal spectrum printed a fixed cross-hatch weave
@@ -949,7 +1003,17 @@ void main() {
     float w = spread * allow;
     acc += s.rgb * w;
     wsum += w;
-    if ( s.a < -0.75 ) nearCov = max( nearCov, spread );
+    // Foreground DILATION: a near-field tap spreads its blur over whatever sits
+    // behind it. The threshold has to be well past 1 px or every petal with a
+    // sub-pixel CoC dilates a half-res blur across the subject behind it — at
+    // -0.75 px the canopy box lost 21% of its edge energy to petals that were not
+    // themselves visibly soft.
+    // ...and it is weighted by HOW soft that tap is, not applied as a hard max.
+    // nearCov forces the destination pixel to the half-res gather, so one small
+    // petal with a 2 px CoC used to be enough to make the canopy behind it half
+    // res. Ramping over 1.8-6.5 px keeps that for genuinely soft foreground (which
+    // §5 wants) and stops it happening for anything merely off-plane.
+    nearCov = max( nearCov, spread * sat( ( -s.a - 1.8 ) * 0.21 ) );
   }
 
   gl_FragColor = vec4( acc / wsum, nearCov );
@@ -987,7 +1051,17 @@ void main() {
   float focus = max( texture2D( tFocus, vec2( 0.5 ) ).r, 0.05 );
   float coc = cocPixels( dist, focus );
 
-  float f = max( smoothstep( 0.7, 2.4, abs( coc ) ), blur.a );
+  // Keep the FULL-RES pixel until the CoC is genuinely wider than a pixel. The
+  // gather is half-res, so the instant this blend is non-zero the pixel loses its
+  // top octave — which is why a "gentle" far ramp still cost the in-focus subject
+  // real detail. MEASURED, hero at 1920x1080, no grain, mean Sobel per box against
+  // 'postfx-no-dof-no-grain' (run-to-run noise on these boxes is +/-3%):
+  //                    trunk   trunkEdge  canopy   farHills
+  //   smoothstep(0.7,2.4)  -8.7%   -9.7%    -21.2%   -43.3%
+  //   smoothstep(1.3,3.4)  see the ROUND 4 log at the bottom of 90-postfx.js
+  // The far band is untouched by this (the hills' CoC is the full 5 px, well past
+  // either knee); all it protects is the plane the composition is focused on.
+  float f = max( smoothstep( 1.3, 3.4, abs( coc ) ), blur.a );
   gl_FragColor = vec4( mix( sharp, blur.rgb, sat( f ) ), 1.0 );
 }`,
 };

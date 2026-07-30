@@ -57,6 +57,23 @@ never a dead stretch longer than ~3 minutes without something to click, buy, or 
 Each Tender has **milestone multipliers** at 10 / 25 / 50 / 100 / 150 / 200 owned, each ×2
 (so 200 owned = ×64). Show the next milestone on the card — it's the main "just one more" hook.
 
+> **`PROD_SCALE = 0.70` is intentional — do not "fix" it.** The table above is the BASE table;
+> all passive output is multiplied by `ECONOMY.PROD_SCALE` (0.70) at runtime, so a lone Wind
+> Sprite correctly displays `0.07 /s`, not `0.10 /s`.
+>
+> Reason, measured (see the rationale block in `src/lib/economy.js`): the live game runs Petal
+> Storm, Golden Petal Frenzy, Spring Rain, Golden Hour and Full Moon continuously, together ≈ ×1.8
+> on income. In a reinvestment economy time-to-milestone scales as income^-1.67, so at scale 1.0
+> the whole first Season ran 2.2–2.4× fast (満開 Full Bloom in 14.6 min against the ~35 min
+> target). Alternatives were tried and cannot fix it: upgrade prices alone saturate, COST_GROWTH
+> 1.15→1.22 falls short, halving event cadence costs the game its juice, and CLICK_SCALE only
+> moves the first three minutes.
+>
+> The Tenders column and the pacing table are **not simultaneously satisfiable** with the spec'd
+> events. This document says the pacing table is "the thing balance must actually achieve", so
+> pacing wins. No rate *math* changed — every baseCost, per-second output and bloom threshold is
+> still the literal value above, scaled once by one documented dial.
+
 A Tender is revealed in the UI once the player can afford 40% of its base cost, with a card
 flip-in animation. Never show a wall of locked rows.
 

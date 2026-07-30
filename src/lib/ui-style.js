@@ -185,6 +185,71 @@ export function waxSeal(size = 40) {
   return enc(svg);
 }
 
+/**
+ * Dawn-over-hills band for the welcome-back letter. The panel was four rows of
+ * statistics on empty parchment; a hand-inked landscape strip is what makes it
+ * read as a letter left under a stone rather than a modal dialog.
+ */
+export function dawnBand(w = 480, h = 96) {
+  const petal = (x, y, r, fill, o = 1) =>
+    `<ellipse cx="${x}" cy="${y}" rx="${r}" ry="${(r * 0.68).toFixed(2)}" fill="${fill}"`
+    + ` opacity="${o}" transform="rotate(${((x * 7 + y * 3) % 90 - 45).toFixed(0)} ${x} ${y})"/>`;
+  const svg = `<svg xmlns="http://www.w3.org/2000/svg" width="${w}" height="${h}" viewBox="0 0 480 96" preserveAspectRatio="none">
+    <defs>
+      <linearGradient id="dsky" x1="0" y1="0" x2="0" y2="1">
+        <stop offset="0" stop-color="#5F6C99"/><stop offset=".22" stop-color="#A88399"/>
+        <stop offset=".46" stop-color="#E5A386"/><stop offset=".72" stop-color="#F9C287"/>
+        <stop offset="1" stop-color="#FFE0AC"/>
+      </linearGradient>
+      <radialGradient id="dsun" cx=".5" cy=".5" r=".5">
+        <stop offset="0" stop-color="#FFFDF0"/><stop offset=".2" stop-color="#FFF3CE"/>
+        <stop offset=".46" stop-color="#FFD08A" stop-opacity=".75"/>
+        <stop offset="1" stop-color="#FFA860" stop-opacity="0"/>
+      </radialGradient>
+      <linearGradient id="dhaze" x1="0" y1="0" x2="0" y2="1">
+        <stop offset="0" stop-color="#FFE6C0" stop-opacity="0"/>
+        <stop offset="1" stop-color="#FFE6C0" stop-opacity=".55"/>
+      </linearGradient>
+    </defs>
+    <rect width="480" height="96" fill="url(#dsky)"/>
+    <ellipse cx="306" cy="60" rx="72" ry="46" fill="url(#dsun)"/>
+    <circle cx="306" cy="60" r="11" fill="#FFFCEC"/>
+    <g fill="#FFEBD2" opacity=".34">
+      <path d="M52 26 C 66 20 92 20 104 25 C 118 21 138 23 146 29 C 120 33 74 33 52 26 Z"/>
+      <path d="M196 16 C 210 11 232 12 242 17 C 226 21 208 21 196 16 Z"/>
+      <path d="M366 22 C 384 15 414 16 428 22 C 452 20 466 23 472 27 C 440 32 392 30 366 22 Z"/>
+    </g>
+    <path d="M0 56 C 44 42 86 50 128 40 C 172 30 210 42 254 38 C 300 33 336 46 384 40 C 424 35 454 43 480 39 V96 H0 Z"
+      fill="#8A7C9E" opacity=".62"/>
+    <path d="M0 67 C 56 56 108 65 164 57 C 226 48 282 60 342 54 C 396 49 442 58 480 54 V96 H0 Z"
+      fill="#655C7C" opacity=".78"/>
+    <rect y="60" width="480" height="26" fill="url(#dhaze)" opacity=".8"/>
+    <path d="M0 79 C 68 71 138 78 210 72 C 288 66 356 75 424 70 C 452 68 468 71 480 70 V96 H0 Z"
+      fill="#463F5A"/>
+    <g stroke="#2A2438" stroke-width="1.9" fill="none" stroke-linecap="round">
+      <path d="M64 96 C 64 82 60 74 54 68"/><path d="M54 68 C 42 70 34 76 30 84"/>
+      <path d="M54 68 C 66 70 74 76 78 84"/><path d="M54 68 C 54 76 54 84 54 92"/>
+      <path d="M414 96 C 414 84 418 76 424 70"/><path d="M424 70 C 434 72 441 77 445 85"/>
+      <path d="M424 70 C 414 72 407 77 403 85"/>
+    </g>
+    <g>
+      ${[[42, 74, 4.2], [64, 80, 3.4], [30, 84, 3.0], [76, 72, 2.6], [54, 64, 3.6], [46, 88, 2.4]]
+      .map(([x, y, r]) => petal(x, y, r, '#F5A8C6')).join('')}
+      ${[[436, 78, 3.8], [410, 82, 3.2], [446, 87, 2.6], [424, 66, 3.4], [400, 90, 2.2]]
+      .map(([x, y, r]) => petal(x, y, r, '#F5A8C6')).join('')}
+    </g>
+    <g>
+      ${[[132, 48], [176, 70], [232, 44], [288, 82], [344, 52], [156, 86], [262, 88], [206, 62], [318, 70], [372, 86], [100, 62]]
+      .map(([x, y]) => petal(x, y, 2.4, '#FFD6E4', 0.85)).join('')}
+    </g>
+    <g stroke="#3E3652" stroke-width="1.1" fill="none" stroke-linecap="round" opacity=".8">
+      <path d="M182 26 C 186 23 190 23 193 26"/><path d="M193 26 C 196 23 200 23 204 26"/>
+      <path d="M212 34 C 215 32 218 32 220 34"/><path d="M220 34 C 223 32 226 32 229 34"/>
+    </g>
+  </svg>`;
+  return enc(svg);
+}
+
 /** Monochrome blossom watermark — sits inside the rarity icon chip. */
 export function blossomMark(size = 40, color = '#FFFFFF') {
   const p = [];
@@ -195,6 +260,43 @@ export function blossomMark(size = 40, color = '#FFFFFF') {
   }
   const svg = `<svg xmlns="http://www.w3.org/2000/svg" width="${size}" height="${size}" viewBox="0 0 40 40">
     <g fill="${color}">${p.join('')}</g>
+  </svg>`;
+  return enc(svg);
+}
+
+/**
+ * Blossom spray watermark for the Codex rarity cards. The cards were a single
+ * kanji on a flat gradient — ART_BIBLE §5's "no empty pixel" law applies to the
+ * UI too. A branch with five blooms behind the glyph gives every card an
+ * illustration without a single bitmap asset.
+ */
+export function blossomSpray(w = 200, h = 140) {
+  const bloom = (cx, cy, r, o) => {
+    let s = `<g opacity="${o}">`;
+    for (let i = 0; i < 5; i++) {
+      const a = (i / 5) * Math.PI * 2 - Math.PI / 2 + cx * 0.02;
+      const px = cx + Math.cos(a) * r * 0.82, py = cy + Math.sin(a) * r * 0.82;
+      s += `<ellipse cx="${px.toFixed(1)}" cy="${py.toFixed(1)}" rx="${(r * 0.62).toFixed(1)}" ry="${(r * 0.44).toFixed(1)}"`
+        + ` transform="rotate(${(a * 180 / Math.PI + 90).toFixed(0)} ${px.toFixed(1)} ${py.toFixed(1)})"/>`;
+    }
+    return s + `<circle cx="${cx}" cy="${cy}" r="${(r * 0.2).toFixed(1)}" opacity=".8"/></g>`;
+  };
+  const svg = `<svg xmlns="http://www.w3.org/2000/svg" width="${w}" height="${h}" viewBox="0 0 200 140">
+    <g stroke="#FFFFFF" fill="none" stroke-linecap="round" opacity=".5">
+      <path d="M-6 116 C 30 108 52 94 74 70" stroke-width="4.2"/>
+      <path d="M74 70 C 96 44 128 28 172 18" stroke-width="3.2"/>
+      <path d="M62 84 C 78 84 96 76 108 62" stroke-width="2.1"/>
+      <path d="M108 46 C 122 54 140 56 158 52" stroke-width="1.8"/>
+      <path d="M40 102 C 48 92 50 78 46 66" stroke-width="1.6"/>
+    </g>
+    <g fill="#FFFFFF">
+      ${bloom(46, 62, 15, 0.62)}${bloom(104, 58, 13, 0.5)}${bloom(150, 44, 11.5, 0.42)}
+      ${bloom(72, 88, 10, 0.4)}${bloom(176, 22, 9, 0.34)}${bloom(24, 92, 8, 0.3)}
+    </g>
+    <g fill="#FFFFFF" opacity=".34">
+      ${[[128, 96], [96, 118], [162, 84], [58, 124], [186, 108]]
+      .map(([x, y]) => `<ellipse cx="${x}" cy="${y}" rx="4.4" ry="2.9" transform="rotate(${(x % 5) * 24} ${x} ${y})"/>`).join('')}
+    </g>
   </svg>`;
   return enc(svg);
 }
@@ -360,7 +462,10 @@ export function uiCss() {
   const starInk = starIconInk(true);
   const starInkOff = starIconInk(false);
   const seal = waxSeal(46);
+  const sealBig = waxSeal(72);
   const mark = blossomMark(44, '#FFFFFF');
+  const spray = blossomSpray(200, 140);
+  const dawn = dawnBand(480, 96);
 
   return `
 #ui-root{
@@ -462,13 +567,42 @@ export function uiCss() {
   color:#33291E;letter-spacing:.01em;font-weight:600;
   text-shadow:0 1px 0 rgba(255,255,255,.7);}
 #ui-root .sk-bank-unit{font-size:var(--t-sec);letter-spacing:.24em;color:${T.inkFaint};
-  font-family:var(--serif);align-self:flex-end;padding-bottom:calc(var(--u)*.2);}
+  font-family:var(--serif);align-self:flex-end;padding-bottom:calc(var(--u)*.2);
+  white-space:nowrap;flex:0 0 auto;}
+#ui-root .sk-bank-val{flex:0 1 auto;min-width:0;}
 #ui-root .sk-bank-sub{display:flex;gap:calc(var(--u)*.3) calc(var(--u)*.62);align-items:center;flex-wrap:wrap;
   font-size:calc(var(--u)*1.21);color:${T.ink};letter-spacing:.01em;line-height:1.18;}
 #ui-root .sk-bank-sub>span{display:flex;align-items:baseline;gap:.32em;white-space:nowrap;}
 #ui-root .sk-bank-sub b{font-weight:600;color:#2F2618;font-family:var(--serif);}
 #ui-root .sk-bank-sub em{font-style:normal;font-size:var(--t-sec);color:${T.inkFaint};letter-spacing:.05em;}
 #ui-root .sk-bank-sub .sep{width:1px;height:calc(var(--u)*1.0);background:rgba(74,64,52,.3);}
+
+/* ---- time-of-day chip, right end of the bank row.  Dusk is Golden Hour and
+   night is Full Moon, so this is a live buff readout, not decoration. ---- */
+#ui-root .sk-phase{margin-left:auto;align-self:center;flex:0 0 auto;display:flex;align-items:center;
+  gap:calc(var(--u)*.4);padding:calc(var(--u)*.18) calc(var(--u)*.5) calc(var(--u)*.18) calc(var(--u)*.36);
+  border-radius:3px;text-align:left;
+  background:linear-gradient(180deg,rgba(255,251,240,.72),rgba(224,210,184,.6));
+  border:1px solid rgba(74,64,52,.36);
+  box-shadow:0 1px 0 rgba(255,255,255,.65) inset,0 1px 2px rgba(60,44,26,.14);}
+#ui-root .sk-phase i{font-style:normal;font-size:calc(var(--u)*1.24);line-height:1;
+  color:#4A3D28;text-shadow:0 1px 0 rgba(255,255,255,.7);}
+#ui-root .sk-phase b{display:block;font-size:calc(var(--u)*.66);font-weight:700;
+  letter-spacing:.2em;color:#463A26;line-height:1.2;}
+#ui-root .sk-phase span{display:block;font-family:var(--serif);font-style:italic;
+  font-size:calc(var(--u)*.68);color:${T.inkFaint};line-height:1.2;white-space:nowrap;}
+/* each phase borrows the ART_BIBLE §3 key colour for that time of day */
+#ui-root .sk-phase.p-dawn{background:linear-gradient(180deg,rgba(255,240,222,.8),rgba(240,206,176,.62));}
+#ui-root .sk-phase.p-dawn i{color:#8A5A2E;}
+#ui-root .sk-phase.p-dusk{background:linear-gradient(180deg,rgba(255,232,206,.82),rgba(238,178,126,.66));
+  border-color:rgba(150,86,34,.5);}
+#ui-root .sk-phase.p-dusk i{color:#8E3E14;}
+#ui-root .sk-phase.p-dusk span,#ui-root .sk-phase.p-night span{color:#6B4A22;font-style:normal;font-weight:600;}
+#ui-root .sk-phase.p-night{background:linear-gradient(180deg,rgba(206,214,238,.82),rgba(150,164,204,.66));
+  border-color:rgba(58,66,104,.55);}
+#ui-root .sk-phase.p-night i{color:#25315C;}
+#ui-root .sk-phase.p-night b{color:#25315C;}
+#ui-root .sk-phase.p-night span{color:#31406E;}
 
 #ui-root .sk-chips{display:flex;gap:calc(var(--u)*.42);flex-wrap:wrap;}
 #ui-root .sk-chip{display:flex;align-items:center;gap:calc(var(--u)*.34);
@@ -540,6 +674,26 @@ export function uiCss() {
 #ui-root .sk-shake:hover{border-color:rgba(232,197,106,.75);
   box-shadow:0 4px 16px rgba(0,0,0,.42),0 0 calc(var(--u)*1.2) rgba(232,197,106,.34);}
 #ui-root .sk-shake:active{transform:translateX(-50%) translateY(1px) scale(.985);}
+/* ---- FIRST RUN.  On a pristine save the only row in the Tender panel is one
+   the player cannot yet afford, so the single enabled control in the frame is
+   this one — and a clicker whose visible affordance is a locked button is the
+   defect that got this UI failed. On a fresh save it becomes the hero control:
+   gold, larger, breathing, and captioned. ---- */
+#ui-root .sk-shake.first{padding:calc(var(--u)*.5) calc(var(--u)*1.5);
+  background:linear-gradient(180deg,rgba(58,38,12,.82),rgba(26,15,6,.88));
+  border-color:rgba(240,216,142,.92);
+  box-shadow:0 6px 22px rgba(0,0,0,.5),0 0 calc(var(--u)*2.4) rgba(232,197,106,.42);
+  animation:sk-in .34s .16s var(--ease) both,sk-cta 2.3s .6s ease-in-out infinite;}
+#ui-root .sk-shake.first span{font-size:calc(var(--u)*1.02);color:#FFF6E6;}
+#ui-root .sk-shake.first kbd{box-shadow:0 1px 0 rgba(255,255,255,.6) inset,0 0 calc(var(--u)*.9) rgba(255,222,140,.75);}
+#ui-root .sk-shake .tip{position:absolute;left:50%;bottom:calc(100% + var(--u)*.5);transform:translateX(-50%);
+  display:none;white-space:nowrap;font-family:var(--serif);font-style:italic;
+  font-size:calc(var(--u)*.9);letter-spacing:.06em;color:#FFEDD4;
+  text-shadow:0 2px 8px rgba(20,8,4,.95),0 0 calc(var(--u)*1.1) rgba(255,190,120,.5);}
+#ui-root .sk-shake.first .tip{display:block;}
+#ui-root .sk-shake .tip::after{content:"";position:absolute;left:50%;top:calc(100% + var(--u)*.16);
+  width:calc(var(--u)*.62);height:calc(var(--u)*.62);margin-left:calc(var(--u)*-.31);
+  background:${dia} no-repeat center/contain;opacity:.9;}
 
 /* --- live event banner --- */
 /* Centred on the gap BETWEEN the HUD plate (right edge 28.95u) and the rail,
@@ -703,6 +857,11 @@ export function uiCss() {
   font-family:var(--sans);font-size:calc(var(--u)*.7);font-weight:700;color:#2E2318;
   padding:0 calc(var(--u)*.28);border-radius:3px 0 2px 0;
   background:linear-gradient(180deg,${T.goldHi},${T.goldLo});border:1px solid rgba(90,64,16,.7);}
+/* on a 5-star chip the gold badge sat gold-on-gold and the owned count vanished
+   (measured: badge and chip within 6 deg of hue at 0.27 sat). Invert it. */
+#ui-root .sk-card.r5 .ico b{background:linear-gradient(180deg,#4C3712,#281904);
+  color:#FFE9AE;border-color:rgba(255,232,170,.6);
+  text-shadow:0 1px 0 rgba(0,0,0,.5);}
 #ui-root .sk-card .nm{grid-column:2;grid-row:1;display:flex;align-items:center;gap:calc(var(--u)*.36);min-width:0;}
 #ui-root .sk-card .nm h3{font-family:var(--serif);font-size:calc(var(--u)*1.0);font-weight:600;
   letter-spacing:.05em;color:#2F2820;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;}
@@ -879,7 +1038,23 @@ export function uiCss() {
 #ui-root .sk-x:hover{transform:rotate(90deg);color:${T.no};}
 
 /* ================= rarity / codex cards ================= */
-#ui-root .sk-codex{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:calc(var(--u)*.55);}
+/* ---- Twelve varieties, 6 x 2.  Four across x three rows never fit: at 1080p a
+       .80-aspect card in a 64u modal is 237 px tall, so three rows plus the head,
+       the sub-nav, the reading pane and the foot came to ~990 px inside an 82vh
+       (886 px) modal and the bottom row sat under the fold. Six across in a wider
+       shell puts the whole set on screen at every size we ship. ---- */
+/* 76vw not 82: at 1280 an 82vw shell left 115 px of blurred tree either side and
+   the collection screen owned the frame. */
+#ui-root .sk-modal.codexw{width:min(76vw,calc(var(--u)*92));}
+#ui-root .sk-codex{display:grid;grid-template-columns:repeat(6,minmax(0,1fr));gap:calc(var(--u)*.45);}
+#ui-root .sk-modal.codexw .sk-achs{grid-template-columns:repeat(4,minmax(0,1fr));}
+@media (max-height:880px){
+  #ui-root .sk-codex{gap:calc(var(--u)*.34);}
+  #ui-root .sk-rc{aspect-ratio:.95;}
+  #ui-root .sk-rc .art{font-size:calc(var(--u)*1.9);}
+  #ui-root .sk-rc .nameplate{height:40%;padding:calc(var(--u)*.2) calc(var(--u)*.22);}
+  #ui-root .sk-modal.codexw .sk-achs{grid-template-columns:repeat(6,minmax(0,1fr));}
+}
 #ui-root .sk-rc{position:relative;aspect-ratio:.80;border-radius:3px;overflow:hidden;cursor:pointer;
   border:1px solid rgba(50,38,24,.72);
   box-shadow:0 3px 12px rgba(30,20,10,.34),0 1px 0 rgba(255,255,255,.3) inset;
@@ -896,7 +1071,25 @@ export function uiCss() {
   text-shadow:0 2px 8px rgba(0,0,0,.35),0 0 calc(var(--u)*1.4) rgba(255,255,255,.35);}
 #ui-root .sk-rc .art::before{content:"";position:absolute;inset:0;
   background:radial-gradient(66% 56% at 50% 34%,rgba(255,255,255,.24),rgba(255,255,255,0) 70%);}
+/* the card art was one kanji on a flat gradient. A procedural blossom spray
+   behind it means no Codex card has an empty half (§5).  Plain alpha, NOT
+   soft-light: blended, the white spray lifted the bottom of every card and the
+   rarity gradient appeared to run light-downward instead of dark-downward.
+   It is anchored TOP and oversized so its heavy base (the thick branch and the
+   loose petals) is cropped away — anchored to the bottom it laid a pale band
+   across the last 20% of the art and flattened the gradient there. */
+#ui-root .sk-rc .art::after{content:"";position:absolute;inset:0;pointer-events:none;
+  background:${spray} no-repeat center top/158% auto;opacity:.26;}
+#ui-root .sk-rc.r5 .art::after{opacity:.3;}
+/* and put the depth back: the art box reads as a lit card face again */
+#ui-root .sk-rc .art{box-shadow:0 calc(var(--u)*-1.2) calc(var(--u)*1.6) rgba(24,14,30,.34) inset;}
+/* gold keyline offset 2 px, same language as the parchment panels */
+#ui-root .sk-rc::after{content:"";position:absolute;inset:2px;pointer-events:none;border-radius:2px;
+  border:1px solid rgba(255,246,220,.24);z-index:2;}
+#ui-root .sk-rc.r5::after{border-color:rgba(255,244,206,.5);}
+#ui-root .sk-rc.locked::after{border-color:rgba(226,222,212,.14);}
 #ui-root .sk-rc.locked .art{color:rgba(255,255,255,.28);text-shadow:none;}
+#ui-root .sk-rc.locked .art::after{opacity:.16;}
 #ui-root .sk-rc .nameplate{position:absolute;left:0;right:0;bottom:0;height:36%;
   padding:calc(var(--u)*.34) calc(var(--u)*.4);
   background:linear-gradient(180deg,rgba(250,244,230,.06),rgba(248,242,228,.94) 32%,rgba(238,228,206,.96));
@@ -970,7 +1163,7 @@ export function uiCss() {
 /* centred on the VISIBLE frame, not the window: the rail owns the right ~31%,
    and a set piece centred behind it lands half-buried under the Tender panel */
 #ui-root .sk-stageup .dim{position:absolute;inset:0;
-  background:radial-gradient(56% 50% at calc(50% - var(--rail)*.5) 50%,rgba(10,5,14,.88),rgba(10,5,14,.62) 40%,rgba(10,5,14,.24) 66%,rgba(10,5,14,0) 86%);}
+  background:radial-gradient(56% 50% at calc(50% - var(--rail)*.5) 50%,rgba(10,5,14,.9),rgba(10,5,14,.7) 38%,rgba(10,5,14,.3) 64%,rgba(10,5,14,0) 86%);}
 #ui-root .sk-stageup .glow{position:absolute;inset:0;
   background:radial-gradient(30% 24% at calc(50% - var(--rail)*.5) 50%,rgba(255,196,224,.40),rgba(255,170,210,0) 70%);
   mix-blend-mode:screen;animation:sk-glowpulse 3.4s ease-out both;}
@@ -997,12 +1190,30 @@ export function uiCss() {
   animation:sk-up-bar .9s .06s var(--ease) both;}
 #ui-root .sk-stageup .bars.t{top:calc(var(--u)*.9);}
 #ui-root .sk-stageup .bars.b{bottom:calc(var(--u)*.9);}
+/* a gold rhombus at each hairline's midpoint — the ascension card was two bare
+   1 px rules, and the §7 diamond motif is what ties it to the panels */
+#ui-root .sk-stageup .bars::before{content:"";position:absolute;left:50%;top:50%;
+  width:calc(var(--u)*.82);height:calc(var(--u)*.82);
+  margin:calc(var(--u)*-.41) 0 0 calc(var(--u)*-.41);
+  background:${dia} no-repeat center/contain;
+  filter:drop-shadow(0 0 calc(var(--u)*.6) rgba(255,214,140,.9));}
 #ui-root .sk-stageup .reward{margin-top:calc(var(--u)*1.0);font-size:calc(var(--u)*.94);letter-spacing:.2em;
   color:#FFE9B8;text-shadow:0 2px 10px rgba(30,10,6,1),0 0 calc(var(--u)*1.2) rgba(232,180,90,.5);
   animation:sk-up-en .8s .48s var(--ease) both;}
 
 /* ================= welcome back ================= */
 #ui-root .sk-wb{width:min(46vw,calc(var(--u)*40));}
+/* an inked dawn strip — four statistics on bare parchment read as a dialog box */
+#ui-root .sk-wb .band{position:relative;height:calc(var(--u)*7.0);margin:0 0 calc(var(--u)*.9);
+  border-radius:2px;overflow:hidden;
+  background:${dawn} no-repeat center/100% 100%;
+  border:1px solid ${T.border};
+  box-shadow:0 1px 0 rgba(255,255,255,.6),0 0 0 1px rgba(201,162,39,.5) inset,
+             0 3px 9px rgba(40,28,14,.34);}
+/* a printed-plate feel, not a wash: the first pass multiplied a cream veil over
+   the whole strip at .7 and the illustration measured flat beige. */
+#ui-root .sk-wb .band::after{content:"";position:absolute;inset:0;pointer-events:none;
+  background:radial-gradient(120% 130% at 50% 30%,rgba(255,255,255,0),rgba(58,40,26,.3) 100%);}
 #ui-root .sk-wb .lead{font-family:var(--serif);font-size:calc(var(--u)*1.0);line-height:1.7;color:#3E352A;text-align:center;}
 #ui-root .sk-wb .big{font-family:var(--serif);font-size:calc(var(--u)*2.6);color:#7A5A10;text-align:center;
   letter-spacing:.02em;margin:calc(var(--u)*.3) 0 calc(var(--u)*.1);
@@ -1094,8 +1305,11 @@ export function uiCss() {
    on screen no matter how tall the star map got */
 #ui-root .sk-nodebar{flex:0 0 auto;padding:0 calc(var(--u)*1.3);}
 #ui-root .sk-nodebar .sk-nodecard{margin-top:calc(var(--u)*.5);}
-/* a 1.34 sky filled the whole modal; 1.66 leaves room for the card + footer */
+/* a 1.34 sky filled the whole modal; 1.66 leaves room for the card + footer.
+   At 800 px tall the 82vh shell is 656 px and 1.66 still overflowed by 77 px,
+   so the star map flattens further rather than pushing the legend into a scroll. */
 #ui-root .sk-modal.wide .sk-sky{aspect-ratio:1.66;}
+@media (max-height:880px){ #ui-root .sk-modal.wide .sk-sky{aspect-ratio:2.0;} }
 
 /* modal sub-navigation (Codex: varieties / achievements) */
 #ui-root .sk-mnav{display:flex;justify-content:center;margin:0 0 calc(var(--u)*.7);}
@@ -1142,7 +1356,58 @@ export function uiCss() {
 #ui-root .sk-wb .cap{text-align:center;font-size:calc(var(--u)*.72);letter-spacing:.26em;
   color:var(--ink-faint);text-transform:uppercase;margin-bottom:calc(var(--u)*.9);}
 
+/* ---- "everything learned" completion state.  At late game the Upgrade panel
+       held fourteen identical rows each with an identical LEARNED pill and no
+       control at all — a dead screen. This is a sealed certificate plus a dense
+       chip index, and the Season button is a real button. ---- */
+#ui-root .sk-done{position:relative;display:grid;
+  grid-template-columns:calc(var(--u)*4.4) minmax(0,1fr);gap:0 calc(var(--u)*.9);
+  align-items:center;overflow:hidden;
+  padding:calc(var(--u)*.9) calc(var(--u)*.9) calc(var(--u)*.9) calc(var(--u)*1.0);
+  border-radius:3px;border:1px solid rgba(160,120,36,.6);
+  background-image:
+    radial-gradient(120% 160% at 10% 50%,rgba(201,162,39,.2),rgba(201,162,39,0) 60%),
+    linear-gradient(180deg,rgba(255,251,238,.84),rgba(238,226,198,.66));
+  box-shadow:0 1px 0 rgba(255,255,255,.65) inset,0 2px 8px rgba(60,44,26,.2);}
+#ui-root .sk-done .sl{grid-column:1;grid-row:1/4;align-self:center;
+  width:calc(var(--u)*4.4);height:calc(var(--u)*4.4);
+  background:${sealBig} no-repeat center/contain;
+  filter:drop-shadow(0 2px 4px rgba(60,40,10,.45));}
+#ui-root .sk-done .cap{grid-column:2;grid-row:1;font-size:calc(var(--u)*.72);letter-spacing:.28em;
+  text-transform:uppercase;color:${T.goldInk};font-weight:700;}
+#ui-root .sk-done h3{grid-column:2;grid-row:2;font-family:var(--serif);font-size:calc(var(--u)*1.16);
+  letter-spacing:.12em;color:#2F2820;margin-top:calc(var(--u)*.08);}
+#ui-root .sk-done .fv{grid-column:2;grid-row:3;font-family:var(--serif);font-style:italic;
+  font-size:var(--t-sec);color:var(--ink-soft);line-height:1.45;margin-top:calc(var(--u)*.18);}
+#ui-root .sk-done .act{grid-column:1/3;grid-row:4;display:flex;justify-content:center;
+  margin-top:calc(var(--u)*.85);}
+#ui-root .sk-done .act .sk-btn{font-size:calc(var(--u)*.92);padding:calc(var(--u)*.5) calc(var(--u)*1.5);}
+
+/* the learned index — 78 rows will not fit as rows, and they should not try */
+#ui-root .sk-learned{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));
+  gap:calc(var(--u)*.28);margin-top:calc(var(--u)*.2);}
+#ui-root .sk-lchip{display:flex;align-items:center;gap:calc(var(--u)*.36);min-width:0;
+  padding:calc(var(--u)*.22) calc(var(--u)*.44);border-radius:2px;
+  border:1px solid rgba(74,64,52,.24);
+  background:linear-gradient(180deg,rgba(255,252,244,.62),rgba(228,217,196,.44));
+  box-shadow:0 1px 0 rgba(255,255,255,.5) inset;}
+#ui-root .sk-lchip i{flex:0 0 auto;width:calc(var(--u)*1.24);height:calc(var(--u)*1.24);border-radius:99px;
+  display:grid;place-items:center;font-family:var(--serif);font-size:calc(var(--u)*.74);
+  font-style:normal;color:#FFF3DC;
+  background:radial-gradient(120% 120% at 30% 20%,#8E6E4E,#4A3626);
+  border:1px solid rgba(60,44,28,.6);}
+#ui-root .sk-lchip.fam-shake i{background:radial-gradient(120% 120% at 30% 20%,#C77A86,#7E3A4C);}
+#ui-root .sk-lchip.fam-tender i{background:radial-gradient(120% 120% at 30% 20%,#7F9A5C,#3E5C34);}
+#ui-root .sk-lchip.fam-grove i{background:radial-gradient(120% 120% at 30% 20%,#6E86B4,#33456E);}
+#ui-root .sk-lchip.fam-heart i{background:radial-gradient(120% 120% at 30% 20%,#C7A05C,#6E4A18);}
+#ui-root .sk-lchip span{font-size:var(--t-sec);color:#4A3F30;letter-spacing:.02em;
+  white-space:nowrap;overflow:hidden;text-overflow:ellipsis;}
+
 /* ================= keyframes ================= */
+@keyframes sk-cta{0%,100%{transform:translateX(-50%) translateY(0);
+    box-shadow:0 6px 22px rgba(0,0,0,.5),0 0 calc(var(--u)*1.6) rgba(232,197,106,.3);}
+  50%{transform:translateX(-50%) translateY(calc(var(--u)*-.16));
+    box-shadow:0 9px 26px rgba(0,0,0,.5),0 0 calc(var(--u)*2.8) rgba(240,214,138,.62);}}
 @keyframes sk-in{from{opacity:0;transform:translateY(calc(var(--u)*-.6));}to{opacity:1;transform:none;}}
 @keyframes sk-fade{from{opacity:0;}to{opacity:1;}}
 @keyframes sk-panel-in{from{opacity:0;transform:translateX(calc(var(--u)*1.5));}to{opacity:1;transform:none;}}

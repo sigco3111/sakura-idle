@@ -141,7 +141,13 @@ try {
 
   const modErrors = await page.evaluate(() => window.__errors ?? []);
   report.moduleErrors = modErrors;
-  if (modErrors.length || report.pageErrors.length) report.ok = false;
+  // Console ERRORS are failures too (CONTRACT rule 8). This was missed originally and
+  // let a real build-blocker through: a `THREE.WebGLProgram: Shader Error` for an
+  // undeclared uniform meant stage 5's light shafts never compiled, yet the harness
+  // exited 0 and every builder believed the feature shipped.
+  report.consoleErrors = report.console.filter((c) => c.type === 'error');
+  report.shaderErrors = report.console.filter((c) => /Shader Error|WebGLProgram|GLSL|ERROR: \d+:\d+/i.test(c.text));
+  if (modErrors.length || report.pageErrors.length || report.consoleErrors.length) report.ok = false;
 } catch (e) {
   report.ok = false;
   report.fatal = String(e?.stack ?? e);
