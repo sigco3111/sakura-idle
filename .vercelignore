@@ -1,0 +1,23 @@
+# Vercel honours THIS file, not .gitignore. Without it the CLI tried to upload 6.6 GB
+# of PNG capture frames and video masters and hit the 100 MB per-file limit.
+# Only the source needed to run `vite build` should go up.
+
+node_modules
+dist
+
+# scratch + generated artefacts
+.tmp-*/
+shots/
+masters/
+storyboards/
+
+# large media that is not needed to build or serve the site.
+# NOTE: public/ IS needed — the social cards are served from there.
+docs/videos/
+docs/progression/
+
+# tooling that only ever runs locally
+tools/
+
+.DS_Store
+*.log
