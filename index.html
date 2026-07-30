@@ -4,6 +4,34 @@
 <meta charset="utf-8" />
 <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
 <title>Sakura — Petals of the Everblossom</title>
+
+<!-- ── Social / SEO metadata ──────────────────────────────────────────────────
+     og:image and twitter:image MUST be absolute URLs — crawlers do not resolve
+     relative paths. og.png lives in public/, which Vite copies to the dist root.
+     If the canonical domain ever changes, every absolute URL below changes with it. -->
+<meta name="description" content="An idle game about growing one ancient cherry tree, from a bare winter bud to the Everblossom. Anime-styled Three.js rendering where every texture, sound and blossom is generated in code." />
+<link rel="canonical" href="https://sakura-idle.vercel.app/" />
+<meta name="theme-color" content="#0b0710" />
+<meta name="color-scheme" content="dark light" />
+
+<meta property="og:type" content="website" />
+<meta property="og:site_name" content="Sakura — Petals of the Everblossom" />
+<meta property="og:url" content="https://sakura-idle.vercel.app/" />
+<meta property="og:title" content="Sakura — Petals of the Everblossom" />
+<meta property="og:description" content="An idle game about growing one ancient cherry tree. Shake the bough, gather petals, and carry it to full bloom — every texture, sound and blossom generated in code." />
+<meta property="og:image" content="https://sakura-idle.vercel.app/og.png" />
+<meta property="og:image:secure_url" content="https://sakura-idle.vercel.app/og.png" />
+<meta property="og:image:type" content="image/png" />
+<meta property="og:image:width" content="1200" />
+<meta property="og:image:height" content="630" />
+<meta property="og:image:alt" content="An ancient cherry tree in full pink bloom on a grassy rise, with a vermilion torii gate, stone lanterns and a still pond reflecting the sky." />
+<meta property="og:locale" content="en" />
+
+<meta name="twitter:card" content="summary_large_image" />
+<meta name="twitter:title" content="Sakura — Petals of the Everblossom" />
+<meta name="twitter:description" content="An idle game about growing one ancient cherry tree. Shake the bough, gather petals, and carry it to full bloom — every texture, sound and blossom generated in code." />
+<meta name="twitter:image" content="https://sakura-idle.vercel.app/og.png" />
+<meta name="twitter:image:alt" content="An ancient cherry tree in full pink bloom, with a vermilion torii gate and a pond reflecting the sky." />
 <!-- Inline data: URI — CONTRACT rule 1 forbids runtime network requests, and a
      missing /favicon.ico logs a console error the harness treats as a failure. -->
 <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Cg fill='%23FFB6CE'%3E%3Ccircle cx='16' cy='7' r='5.4'/%3E%3Ccircle cx='24.6' cy='13.2' r='5.4'/%3E%3Ccircle cx='21.3' cy='23.4' r='5.4'/%3E%3Ccircle cx='10.7' cy='23.4' r='5.4'/%3E%3Ccircle cx='7.4' cy='13.2' r='5.4'/%3E%3C/g%3E%3Ccircle cx='16' cy='16' r='3.1' fill='%23E8C56A'/%3E%3C/svg%3E" />
