@@ -376,6 +376,194 @@ export function buyBtn(onclick, title, verb = 'TEND') {
   };
 }
 
+/* ------------------------------------------------------------------ *
+ * Settings controls — sliders and toggles
+ *
+ * Hand-built rather than `<input type=range|checkbox>` on purpose: ART_BIBLE §7
+ * forbids default form controls, and a native range input cannot be given the
+ * gold track and keylined rhombus thumb the rest of this UI implies.
+ *
+ * Building them by hand means the keyboard and ARIA behaviour a native input
+ * would have given us for free is now OUR job, and it is not optional — the
+ * motion switches in this panel are the ones someone reaches for because the
+ * screen shake is making them feel ill, possibly without a working mouse hand.
+ * So: real `role`, real `aria-valuenow`/`aria-checked`, arrow keys, Home/End,
+ * PageUp/PageDown, and pointer capture so a drag that leaves the track keeps
+ * tracking instead of sticking.
+ * ------------------------------------------------------------------ */
+
+const clamp01 = (v) => (Number.isFinite(+v) ? Math.min(1, Math.max(0, +v)) : 0);
+
+/**
+ * Gold-filled slider over 0..1, displayed as a whole percentage with tabular
+ * figures. `onInput` fires on every change — settings apply live, never on an
+ * "apply" button.
+ *
+ * Returns `{ root, value, set(v), setDimmed(on) }`. `set()` is the quiet path
+ * used when something else (another control, a SETTINGS change) moved the value,
+ * so syncing the UI can never loop back into `onInput`.
+ */
+export function slider({
+  label, kanji, value = 0, step = 0.05, page = 0.2, ariaLabel, onInput,
+} = {}) {
+  const val = h('span.val.num', '0%');
+  const mu = h('span.mu', 'muted');
+  const fil = h('i.fil');
+  const thb = h('span.thb');
+  const trk = h('div.trk', fil, thb);
+  const root = h('div.sk-sld', {
+    tabindex: '0',
+    role: 'slider',
+    'aria-label': ariaLabel ?? label ?? 'volume',
+    'aria-valuemin': '0',
+    'aria-valuemax': '100',
+  },
+    h('div.hd',
+      h('span.lbl', label ?? '', kanji ? h('em', kanji) : null),
+      h('span.rt', mu, val)),
+    trk,
+  );
+
+  let v = clamp01(value);
+  let dragging = false;
+
+  function paint() {
+    const pct = v * 100;
+    setW(fil, pct);
+    const left = pct.toFixed(2) + '%';
+    if (thb.__l !== left) { thb.__l = left; thb.style.left = left; }
+    setText(val, Math.round(pct) + '%');
+    const now = String(Math.round(pct));
+    if (root.__av !== now) {
+      root.__av = now;
+      root.setAttribute('aria-valuenow', now);
+      root.setAttribute('aria-valuetext', now + '%');
+    }
+  }
+  function commit(next, notify = true) {
+    const nv = clamp01(next);
+    const changed = nv !== v;
+    v = nv;
+    paint();
+    if (changed && notify && onInput) onInput(v);
+  }
+  function fromPointer(e) {
+    const r = trk.getBoundingClientRect();
+    return r.width > 0 ? (e.clientX - r.left) / r.width : v;
+  }
+
+  trk.addEventListener('pointerdown', (e) => {
+    e.preventDefault();
+    e.stopPropagation();
+    dragging = true;
+    try { trk.setPointerCapture(e.pointerId); } catch { /* no capture: move still works */ }
+    try { root.focus({ preventScroll: true }); } catch { /* ignore */ }
+    commit(fromPointer(e));
+  });
+  trk.addEventListener('pointermove', (e) => { if (dragging) commit(fromPointer(e)); });
+  const release = (e) => {
+    if (!dragging) return;
+    dragging = false;
+    try { trk.releasePointerCapture(e.pointerId); } catch { /* ignore */ }
+  };
+  trk.addEventListener('pointerup', release);
+  trk.addEventListener('pointercancel', release);
+
+  root.addEventListener('keydown', (e) => {
+    const s = e.shiftKey ? 0.01 : step;            // fine adjust with Shift held
+    let next;
+    switch (e.key) {
+      case 'ArrowLeft': case 'ArrowDown': next = v - s; break;
+      case 'ArrowRight': case 'ArrowUp': next = v + s; break;
+      case 'PageDown': next = v - page; break;
+      case 'PageUp': next = v + page; break;
+      case 'Home': next = 0; break;
+      case 'End': next = 1; break;
+      default: return;
+    }
+    e.preventDefault();
+    /* stop it here: the game module listens for keys on window, and a slider
+       nudge must not also be read as a gameplay input */
+    e.stopPropagation();
+    commit(next);
+  });
+
+  paint();
+  return {
+    root, trk,
+    get value() { return v; },
+    set(next) { commit(next, false); },
+    /** Muted — dim the control but keep the number, so the level reads as
+     *  remembered rather than lost. */
+    setDimmed(on) { setClass(root, 'off', !!on); },
+  };
+}
+
+/**
+ * Parchment capsule toggle. A real `<button role="switch">`, so Enter and Space
+ * work without us reimplementing them.
+ *
+ * `lockNote` is shown only while `setDisabled(true)` — it explains WHY the
+ * control is inert (a master switch is holding it), which is the difference
+ * between a clear relationship and a control that looks broken.
+ */
+export function toggleRow({
+  label, kanji, desc, value = false, lockNote, ariaLabel, onChange,
+} = {}) {
+  const sw = h('span.sw', h('i'));
+  const root = h('button.sk-tgl', {
+    type: 'button',
+    role: 'switch',
+    'aria-label': ariaLabel ?? label ?? 'toggle',
+  },
+    h('span.tx',
+      h('div.lbl', label ?? '', kanji ? h('em', kanji) : null),
+      desc ? h('div.ds', desc) : null,
+      lockNote ? h('div.lk', lockNote) : null),
+    sw,
+  );
+
+  let v = !!value;
+  let disabled = false;
+  function paint() {
+    setClass(root, 'on', v);
+    const a = v ? 'true' : 'false';
+    if (root.__ac !== a) { root.__ac = a; root.setAttribute('aria-checked', a); }
+  }
+  root.addEventListener('click', (e) => {
+    e.stopPropagation();
+    if (disabled) return;
+    v = !v;
+    paint();
+    if (onChange) onChange(v);
+  });
+
+  paint();
+  return {
+    root,
+    get value() { return v; },
+    set(next) { v = !!next; paint(); },
+    setDisabled(on) {
+      disabled = !!on;
+      setClass(root, 'dis', disabled);
+      const a = disabled ? 'true' : 'false';
+      if (root.__ad !== a) { root.__ad = a; root.setAttribute('aria-disabled', a); }
+    },
+  };
+}
+
+/** Settings group heading: serif small-caps + kanji over a diamond-centred rule. */
+export function groupHead(title, kanji) {
+  return h('div.sk-sgrp',
+    h('div.hd', h('h4', title), kanji ? h('span.kj', kanji) : null),
+    h('div.fl'));
+}
+
+/** Gold-keylined parchment note — used to tell someone a preference was honoured. */
+export function noteBox(text) {
+  return h('div.sk-note', h('span.d'), h('p', text));
+}
+
 /** Gold segmented control — one bevelled shell, N inset segments, no flat rects. */
 export function segmented(items, onpick) {
   const btns = new Map();

@@ -15,10 +15,17 @@ import { buildGraph, renderGraphOffline } from '../lib/audio-graph.js';
  *
  * COMFORT FIRST. The complaint that produced this rewrite was "screeching
  * noises, hurts my ears", so every layer is lowpassed at the source, the koto's
- * Karplus-Strong loop is heavily damped, the master bus tilts everything above
- * 2.2 kHz down by 6 dB before two cascaded lowpasses at 3.4/3.8 kHz, and a
- * soft-knee compressor sits in front of the master gain. Too quiet and too sparse is the
- * intended failure direction.
+ * Karplus-Strong loop is damped, the master bus tilts everything above 2.2 kHz
+ * down before two cascaded lowpasses at 3.4/3.8 kHz, and a soft-knee compressor,
+ * a fast limiter and a WaveShaper hard ceiling at 0.95 sit in front of the master
+ * gain. Too quiet and too sparse is the intended failure direction.
+ *
+ * MUSICALITY SECOND, BUT NOT OPTIONAL. The koto is the melody and the loudest
+ * musical layer; the pad breathes underneath it instead of droning. The koto
+ * plays 3-5 note phrases in its real register (D4-D5) separated by real silence
+ * (ma). See the KOTO REGISTER note in audio-graph.js for why the pitch used to
+ * be stuck an octave and a half too low, and how running Karplus-Strong in plain
+ * JS instead of a DelayNode feedback cycle removed the ceiling.
  *
  * SHOT MODE. `ctx.shotMode` means no AudioContext, no listeners, no per-frame
  * work and no allocation — but `renderOffline()` still works, because it builds

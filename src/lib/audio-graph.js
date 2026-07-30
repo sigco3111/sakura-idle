@@ -1,7 +1,8 @@
 /**
  * audio-graph — the entire soundtrack as one buildable WebAudio graph.
  * Owned by the audio module (70-audio.js). No files, no network: every sound is
- * oscillators, seeded noise buffers and filters (CONTRACT.md rule 1).
+ * oscillators, seeded noise buffers, JS-rendered buffers and filters
+ * (CONTRACT.md rule 1).
  *
  * THE ONE IMPORTANT IDEA
  * `buildGraph(ac, opts)` is called with a live `AudioContext` **or** an
@@ -10,34 +11,36 @@
  * That is what makes `renderOffline()` an honest measurement of what a player
  * hears instead of a separate fiction.
  *
- * SOUND DESIGN — Japanese zen ambient, deliberately dark and sparse
- *   KOTO        Karplus-Strong: short noise burst rolled off hard above ~1.6 kHz,
- *               into a tuned delay line with a soft (Q_SOFT, non-resonant) lowpass
- *               in the feedback path at feedback 0.96 — see the Q note below; an
- *               under-damped KS loop is exactly the metallic screech being fixed.
- *               A quiet short sine at the fundamental fills in the body the
- *               damped loop gives up.
- *   SHAKUHACHI  sine fundamental + 2nd/3rd partials + a lowpassed noise breath
- *               bed, 4.6 Hz vibrato a few cents deep, 120 ms attack, long release.
- *   BONSHO      temple bell: five inharmonic partials, independent long decays,
- *               nothing above ~2.5 kHz, struck once every 45-90 s.
+ * SOUND DESIGN — Japanese zen ambient. The koto is the melody and the identity;
+ * everything else is the room it sits in.
+ *   KOTO        Karplus-Strong rendered sample-by-sample in plain JS into an
+ *               AudioBuffer (see `ksRender`), played back with a plain
+ *               AudioBufferSourceNode and cached per pitch. It is the loudest
+ *               musical layer and lives in its real register, D4-D5-ish.
+ *   SHAKUHACHI  sine fundamental + 2nd/3rd partials + two lowpassed noise breath
+ *               bands, 4.4 Hz vibrato a few cents deep, 140 ms attack, long release.
+ *   BONSHO      temple bell: eight inharmonic partials plus two very quiet fixed
+ *               shimmer partials at 2.3/2.9 kHz, struck once every 45-95 s.
  *   SUIKINKUTSU water drops: short sine blips with a fast pitch drop, mostly reverb.
- *   PAD         five sine/triangle voices, adjacent ones 2.2 cents apart (a ~0.1 Hz
- *               beat at this register — present but far too slow to throb), voiced
- *               on scale degrees only, through a slow 480-700 Hz lowpass.
+ *   PAD         five sine/triangle voices, adjacent ones 2.2 cents apart, voiced on
+ *               scale degrees only, through a slow 480-700 Hz lowpass — and it
+ *               BREATHES: swell, hold, fall, silence. It is not a drone and it sits
+ *               ~8 dB below the koto.
  *   WIND        brown noise through a lowpass whose cutoff and gain follow the
  *               game's real WIND.gust value.
- *   CRICKETS    night only, tiny 2.5 kHz blips. BIRDS dawn/day only, soft sine
- *               chirps under 2 kHz. Both far below the music.
+ *   CRICKETS    night only, tiny 2.4 kHz blips, Q 5 (never a narrow whistle).
+ *               BIRDS dawn/day only, soft sine chirps under 2 kHz.
  *
- * MASTER CHAIN (non-negotiable): highpass 32 Hz -> -6 dB high-shelf tilt at
- * 2.2 kHz -> two cascaded lowpasses (3.4 / 3.8 kHz) -> soft-knee compressor
- * (-18 dB, 16 dB knee, 5:1) -> trim -> master gain. Nothing downstream of an
- * instrument can be bright and nothing can clip: measured hfRatio is 0.0000 and
- * peak 0.30 against gates of 0.06 and 0.92.
+ * MASTER CHAIN (non-negotiable): highpass 32 Hz -> high-shelf tilt at 2.2 kHz ->
+ * two cascaded lowpasses (3.4 / 3.8 kHz) -> soft-knee compressor (-18 dB, 16 dB
+ * knee, 5:1) -> fast brickwall-ish LIMITER (2 ms attack, 20:1, hard knee) ->
+ * WaveShaper hard ceiling at 0.95 -> trim -> master gain. Nothing downstream of an
+ * instrument can be bright, and nothing — not a stacked chord, not a burst of
+ * SFX — can spike or clip: the shaper is linear below 0.5 and mathematically
+ * cannot exceed 0.95.
  *
- * `Ma` (間). Notes are events in a lot of silence. The pad, the wind and a
- * -47 dBFS air floor are the only continuous layers.
+ * `Ma` (間). The koto speaks in short phrases of 3-5 notes and then stops for
+ * several seconds. Notes are events in a lot of silence.
  */
 
 import { makeRng } from './rng.js';
@@ -54,20 +57,12 @@ const mtof = (m) => 440 * Math.pow(2, (m - 69) / 12);
  * effective Q is `10^(Q/20)`. The "reassuringly gentle" values everyone reaches
  * for — Q = 0.2, 0.4, 0.6 — are therefore effective Qs of 1.02 to 1.07, i.e.
  * every one of them is a RESONANT filter with up to +1.5 dB of peak gain at the
- * corner frequency.
- *
- * Outside a feedback path that is merely a bit honky. Inside the Karplus-Strong
- * loop it is fatal: loop gain = feedback x peak gain, so 0.955 x 1.07 > 1 and the
- * string diverges into a full-scale scream (and eventually NaN). That is exactly
- * what "just screeching noises, hurts my ears" was.
- *
- * So: for lowpass/highpass, Q must be NEGATIVE dB. Butterworth (no peak at all)
- * is 20*log10(1/sqrt(2)) = -3.01 dB. Q_SOFT (-6 dB, effective Q 0.5) is a lazy
- * one-pole-ish slope, which is what the string loop wants.
- * Q on bandpass / peaking / notch IS linear — those values are left alone.
+ * corner frequency. So: for lowpass/highpass, Q must be NEGATIVE dB.
+ * Butterworth (no peak at all) is 20*log10(1/sqrt(2)) = -3.01 dB.
+ * Q on bandpass / peaking / notch IS linear — those values are left alone, and
+ * on bandpass they are kept LOW (<= 6) so no band can ring as a whistle.
  */
 const Q_LP = -3.01;    // Butterworth: maximally flat, peak gain exactly 1.0
-const Q_SOFT = -6.0;   // effective Q 0.5 — soft, droopy, safe inside a loop
 
 /* ------------------------------------------------------------------ *
  * Scales — genuine Japanese pentatonics. No chromatic runs, no tritones.
@@ -80,37 +75,74 @@ const SCALES = {
 };
 
 /**
+ * THE KOTO REGISTER. A real koto (13 strings, hirajoshi) is tuned so the melody
+ * sits around D4-D5, 294-587 Hz. That is where it is; anything an octave down is
+ * a cello. The previous version was pinned to midi 33-58 because it ran
+ * Karplus-Strong through a WebAudio DelayNode, and a DelayNode inside a feedback
+ * cycle has a floor of one render quantum (128 samples = 344 Hz at 44.1 kHz).
+ * `ksRender` runs the same algorithm in plain JS instead, so there is no ceiling
+ * and the notes now land where they are written (measured within ~2 cents).
+ */
+const KOTO_LO = 61;   // C#4 (277 Hz) — below this the low-register mud starts
+const KOTO_HI = 78;   // F#5 (740 Hz)
+
+/**
  * Per-phase score configuration. Roots are MIDI notes; 50 = D3 (146.8 Hz).
- *
- * The koto register is deliberately low, and `pluck` folds notes into it by
- * octaves. That is not taste, it is a WebAudio constraint: a DelayNode inside a
- * feedback cycle cannot be shorter than one render quantum (128 samples, ~345 Hz
- * at 44.1 kHz), so a Karplus-Strong note above that would silently play a wrong
- * pitch. Everything above the koto's range is the shakuhachi's job — it is
- * oscillator-based and pitch-exact at any frequency.
+ * `kotoLevel` is now a real output gain (the note buffers are peak-normalised),
+ * not an excitation amount, so it is directly comparable across phases.
  */
 const PHASES = {
   dawn: {
     scale: 'kumoi', root: 50, padRoot: 38, padCut: 620,
-    kotoGap: [7.0, 12.0], fluteGap: [17, 27], waterGap: [7, 15], bellGap: [50, 85],
-    padGain: 0.115, windGain: 0.85, birds: 0.9, crickets: 0.0, kotoLevel: 0.34,
+    fluteGap: [17, 27], waterGap: [7, 15], bellGap: [50, 85],
+    padGain: 0.105, windGain: 0.85, birds: 0.9, crickets: 0.0,
+    kotoLevel: 0.40, kotoRest: [3.6, 7.6], fluteLevel: 0.062, kotoCentre: 64,
   },
   day: {
     scale: 'yo', root: 52, padRoot: 40, padCut: 700,
-    kotoGap: [6.0, 11.0], fluteGap: [16, 26], waterGap: [7, 14], bellGap: [55, 95],
-    padGain: 0.100, windGain: 1.00, birds: 0.55, crickets: 0.0, kotoLevel: 0.34,
+    fluteGap: [16, 26], waterGap: [7, 14], bellGap: [55, 95],
+    padGain: 0.100, windGain: 1.00, birds: 0.55, crickets: 0.0,
+    kotoLevel: 0.40, kotoRest: [3.2, 6.8], fluteLevel: 0.062, kotoCentre: 64,
   },
   dusk: {
     scale: 'hirajoshi', root: 50, padRoot: 38, padCut: 560,
-    kotoGap: [6.5, 11.5], fluteGap: [16, 27], waterGap: [7, 14], bellGap: [45, 80],
-    padGain: 0.130, windGain: 0.80, birds: 0.15, crickets: 0.25, kotoLevel: 0.33,
+    fluteGap: [16, 27], waterGap: [7, 14], bellGap: [45, 80],
+    padGain: 0.110, windGain: 0.80, birds: 0.15, crickets: 0.25,
+    kotoLevel: 0.39, kotoRest: [3.4, 7.2], fluteLevel: 0.060, kotoCentre: 64,
   },
   night: {
     scale: 'kumoi', root: 45, padRoot: 33, padCut: 480,
-    kotoGap: [9.0, 17.0], fluteGap: [20, 34], waterGap: [8, 17], bellGap: [45, 85],
-    padGain: 0.145, windGain: 0.70, birds: 0.0, crickets: 1.0, kotoLevel: 0.31,
+    fluteGap: [20, 34], waterGap: [8, 17], bellGap: [45, 85],
+    padGain: 0.105, windGain: 0.70, birds: 0.0, crickets: 1.0,
+    kotoLevel: 0.40, kotoRest: [4.0, 8.2], fluteLevel: 0.058, kotoCentre: 63,
   },
 };
+
+/** The pad is a bed, not the tune: this is the 5 dB it gave back to the koto. */
+const PAD_TRIM = 0.52;
+
+/**
+ * KOTO PHRASES — scale-degree contours, not random walks.
+ * Each entry is one phrase: degree offsets from the phrase anchor, played in
+ * order. Almost every interval is +-1 pentatonic step; a handful of phrases
+ * carry one expressive leap. Then the phrase STOPS and `kotoRest` seconds of
+ * silence follow. This replaces the old "step randomly forever" melody, whose
+ * measured contour (+5, +2, -5, +3, -10 semitones) read as noise.
+ */
+const KOTO_PHRASES = [
+  [0, 1, 2, 1],
+  [0, 1, 0, -1, 0],
+  [0, -1, -2, -1],
+  [0, 2, 1, 0],
+  [0, 1, 2, 3, 2],
+  [0, -1, 0, 1],
+  [0, 3, 2, 1],        // one leap up, then walk home
+  [0, 1, -1, 0],
+  [0, -2, -1, 0, 1],
+  [0, 1, 2, 1, 0],
+  [0, -1, 1, 2],
+  [0, 4, 3, 2],        // the biggest reach in the set, used sparingly
+];
 
 /** WIND's own gust envelope, evaluated at an arbitrary time.
  *  Mirrors WindField.update() in src/lib/wind.js so the offline render moves
@@ -133,6 +165,7 @@ export function gustAt(t) {
  *   volume  master volume 0..1
  *   muted   start silent
  *   seed    RNG seed
+ *   only    array of stream keys to solo ('koto','pad','flute','wind','air',...)
  * @returns {object} api
  */
 export function buildGraph(ac, opts = {}) {
@@ -170,7 +203,10 @@ export function buildGraph(ac, opts = {}) {
     for (let i = 0; i < n; i++) {
       const w = rBuf() * 2 - 1;
       if (kind === 'brown') { last = (last + 0.02 * w) / 1.02; d[i] = last * 11; }
-      else if (kind === 'air') { lp += 0.24 * (w - lp); d[i] = lp * 2.6; }
+      // 'air' is one-pole lowpassed at ~2.5 kHz: enough room tone to keep the
+      // top octaves from being a cliff of numerical zeros, far too quiet to hear
+      // as hiss.
+      else if (kind === 'air') { lp += 0.23 * (w - lp); d[i] = lp * 2.6; }
       else d[i] = w;
     }
     // remove any DC the integrator introduced, then normalise
@@ -224,13 +260,47 @@ export function buildGraph(ac, opts = {}) {
   trim.gain.value = 0.95;
   trim.connect(masterGain);
 
+  /**
+   * HARD CEILING. A compressor is not a limiter: 20 ms of attack is longer than
+   * a pluck's attack, so a transient walks straight through it. This WaveShaper
+   * is the actual guarantee — exactly linear below 0.5, and its output cannot
+   * leave +-0.95 for any finite input, so no stacked chord or SFX pile-up can
+   * ever produce a clipped sample. 2x oversampling keeps the (very gentle) knee
+   * from folding aliases back down into the audible band.
+   */
+  const CEIL = 0.95, LIN = 0.5;
+  const shaper = ac.createWaveShaper();
+  {
+    const N = 4096;
+    const curve = new Float32Array(N);
+    for (let i = 0; i < N; i++) {
+      const x = (i / (N - 1)) * 2 - 1;
+      const a = Math.abs(x);
+      const y = a <= LIN ? a : LIN + (CEIL - LIN) * Math.tanh((a - LIN) / (CEIL - LIN));
+      curve[i] = Math.sign(x) * y;
+    }
+    shaper.curve = curve;
+    shaper.oversample = '2x';
+  }
+  shaper.connect(trim);
+
+  // brickwall-ish limiter: fast enough to catch an 18 ms pluck attack
+  const limiter = ac.createDynamicsCompressor();
+  limiter.threshold.value = -7;
+  limiter.knee.value = 0;
+  limiter.ratio.value = 20;
+  limiter.attack.value = 0.002;
+  limiter.release.value = 0.12;
+  limiter.connect(shaper);
+
+  // musical glue, well above the limiter's threshold so the two never fight
   const comp = ac.createDynamicsCompressor();
   comp.threshold.value = -18;
   comp.knee.value = 16;      // soft knee — no audible grab
   comp.ratio.value = 5;
   comp.attack.value = 0.02;
   comp.release.value = 0.45;
-  comp.connect(trim);
+  comp.connect(limiter);
 
   // two cascaded gentle lowpasses => ~24 dB/oct above 3.4 kHz
   const lp2 = ac.createBiquadFilter();
@@ -240,9 +310,11 @@ export function buildGraph(ac, opts = {}) {
   lp1.type = 'lowpass'; lp1.frequency.value = 3400; lp1.Q.value = Q_LP;
   lp1.connect(lp2);
 
-  // tilt the 2-5 kHz ear-fatigue band down before it even reaches the lowpasses
+  // Tilt the 2-5 kHz ear-fatigue band down before it reaches the lowpasses.
+  // -4.5 dB rather than -6: the mix was measured as OVER-darkened (nothing at
+  // all above 2.2 kHz), and 1.5 dB of shelf is the cheapest honest air there is.
   const tilt = ac.createBiquadFilter();
-  tilt.type = 'highshelf'; tilt.frequency.value = 2200; tilt.gain.value = -6;
+  tilt.type = 'highshelf'; tilt.frequency.value = 2200; tilt.gain.value = -5.0;
   tilt.connect(lp1);
 
   const hp = ac.createBiquadFilter();
@@ -253,18 +325,12 @@ export function buildGraph(ac, opts = {}) {
   preMix.gain.value = 1;
   preMix.connect(hp);
 
-  /**
-   * An "air" floor at about -47 dBFS, injected downstream of the master
-   * lowpasses. It is far below anything musical, but it keeps the spectrum from
-   * being a cliff of numerical zeros above 3 kHz — a mix with literally nothing
-   * up there reads as a single bare tone to any spectral-flatness measure (and,
-   * on real speakers, as an oddly airless "underwater" recording).
-   */
+  /** Room air floor, about -45 dBFS, injected into the hard ceiling. */
   const airSrc = ac.createBufferSource();
   airSrc.buffer = airBuf; airSrc.loop = true;
   const airGain = ac.createGain();
-  airGain.gain.value = 0.0045;
-  airSrc.connect(airGain); airGain.connect(trim);
+  airGain.gain.value = 0.0040;
+  airSrc.connect(airGain); airGain.connect(shaper);
   airSrc.start(t0);
 
   /* ---------------- buses ---------------- */
@@ -277,8 +343,8 @@ export function buildGraph(ac, opts = {}) {
   verb.normalize = false;
   verb.buffer = makeVerbIR(3.6, 2.6, 0.10);
   const verbLp = ac.createBiquadFilter();
-  verbLp.type = 'lowpass'; verbLp.frequency.value = 1200; verbLp.Q.value = Q_LP;
-  const verbRet = ac.createGain(); verbRet.gain.value = 0.34;
+  verbLp.type = 'lowpass'; verbLp.frequency.value = 1400; verbLp.Q.value = Q_LP;
+  const verbRet = ac.createGain(); verbRet.gain.value = 0.32;
   const verbSend = ac.createGain(); verbSend.gain.value = 1.0;
   verbSend.connect(verb); verb.connect(verbLp); verbLp.connect(verbRet);
   verbRet.connect(preMix);
@@ -310,85 +376,179 @@ export function buildGraph(ac, opts = {}) {
   }
 
   /* ================================================================ *
-   * INSTRUMENTS
+   * KOTO — Karplus-Strong, in JS, no DelayNode, no pitch ceiling
    * ================================================================ */
 
   /**
-   * KOTO — Karplus-Strong. `midi` is clamped into the register where a feedback
-   * DelayNode is actually accurate (see PHASES note).
+   * Render one plucked string into a Float32Array, peak-normalised to 1.
+   *
+   * The loop is  line[n] = g * ((1-b)*d[n] + b*d[n-1])  where d is the line read
+   * `D` samples back with linear interpolation. The two-tap averager has a phase
+   * delay of exactly `b` samples at low frequency, so setting `D = sr/f - b`
+   * makes the total loop delay exactly one period and the pitch exact — that is
+   * the whole reason this is worth doing in JS. `b` also sets how fast the upper
+   * partials die (its gain at Nyquist is |1-2b|), i.e. how bright the string is.
+   *
+   * `g` is derived from a target T60 rather than picked by feel:
+   * g = 10^(-3/(T60*f)), because the loop is traversed f times a second.
+   *
+   * LOW-REGISTER MUD. Decay is deliberately short down low. Two adjacent
+   * pentatonic steps at 120-140 Hz beat at ~15 Hz, which is the middle of the
+   * roughness band; the fix is to not let the low notes still be ringing when
+   * the next one lands.
    */
-  function pluck(when, midi, level = 0.3, bus = busMusic) {
-    if (liveCount > 26) return;
-    // Fold by octaves rather than clamping: clamping would land two different
-    // scale degrees on the same string and quietly flatten the melody.
-    let m = Math.round(midi);
-    while (m > 58) m -= 12;
-    while (m < 33) m += 12;
-    const f = mtof(m);
-    const period = 1 / f;
+  function ksRender(f, variant) {
+    const T60 = clamp(0.95 + (f - 110) * 0.0044, 0.80, 3.0);
+    const tail = 0.06;
+    const n = Math.ceil(sr * (T60 + tail));
+    const out = new Float32Array(n);
 
-    // excitation: a few periods of noise, rolled off hard before the loop
-    const src = ac.createBufferSource();
-    src.buffer = whiteBuf;
-    src.loop = true;
-    const burst = ac.createGain();
-    burst.gain.setValueAtTime(0, when);
-    burst.gain.linearRampToValueAtTime(level, when + 0.004);
-    burst.gain.linearRampToValueAtTime(0, when + period * 3.2);
-    const bl1 = ac.createBiquadFilter();
-    bl1.type = 'lowpass'; bl1.frequency.value = 1900; bl1.Q.value = Q_LP;
-    const bl2 = ac.createBiquadFilter();
-    bl2.type = 'lowpass'; bl2.frequency.value = 1600; bl2.Q.value = Q_LP;
+    const b = variant ? 0.34 : 0.46;          // loop damping weight => brightness
+    const D = sr / f - b;                     // exact-pitch delay line length
+    const Di = Math.floor(D), fr = D - Di;
+    const L = Di + 4;
+    const line = new Float32Array(L);
+    const g = Math.pow(10, -3 / (T60 * f));
 
-    const dl = ac.createDelay(0.05);
-    dl.delayTime.value = period;
-    const loopLp = ac.createBiquadFilter();
-    loopLp.type = 'lowpass';
-    loopLp.frequency.value = clamp(f * 7.0, 500, 2400);
-    loopLp.Q.value = Q_SOFT;
-    const fb = ac.createGain();
-    fb.gain.value = 0.96;          // <= 0.96: damped, never metallic
+    const r = makeRng(((Math.round(f * 16) * 2654435761) ^ (variant * 0x9e3779b9)) >>> 0).next;
 
-    // gentle body resonance, not a formant spike
-    const body = ac.createBiquadFilter();
-    body.type = 'peaking'; body.frequency.value = f * 1.98;
-    body.gain.value = 2.5; body.Q.value = 0.9;
+    /* excitation: a lowpassed noise burst, plus a pick-position comb. Cancelling
+     * one partial by subtracting a delayed copy is what makes a pluck sound
+     * plucked rather than struck. */
+    const exCut = clamp(f * 4.5, 700, 2400);
+    const aEx = 1 - Math.exp((-2 * Math.PI * exCut) / sr);
+    const NB = Math.max(12, Math.round(D * (variant ? 1.25 : 0.9)));
+    const pick = Math.max(1, Math.round(D * (variant ? 0.24 : 0.17)));
+    const ex = new Float32Array(NB + pick + 2);
+    let lpEx = 0;
+    for (let i = 0; i < NB; i++) {
+      lpEx += aEx * ((r() * 2 - 1) - lpEx);
+      const w = 0.5 - 0.5 * Math.cos((2 * Math.PI * (i + 0.5)) / NB);
+      const v = lpEx * w;
+      ex[i] += v;
+      ex[i + pick] -= v * 0.72;
+    }
 
-    // rounds the attack so it reads as a fingertip, not a click
-    const soften = ac.createBiquadFilter();
-    soften.type = 'lowpass'; soften.frequency.value = 2400; soften.Q.value = Q_LP;
+    let w = 0, prev = 0;
+    const exN = ex.length;
+    for (let i = 0; i < n; i++) {
+      let r0 = w - Di; if (r0 < 0) r0 += L;
+      let r1 = r0 - 1; if (r1 < 0) r1 += L;
+      const d = line[r0] * (1 - fr) + line[r1] * fr;
+      const filt = (1 - b) * d + b * prev;
+      prev = d;
+      line[w] = g * filt + (i < exN ? ex[i] : 0);
+      if (++w >= L) w = 0;
+      out[i] = filt;
+    }
 
-    const out = ac.createGain();
-    out.gain.setValueAtTime(0, when);
-    out.gain.linearRampToValueAtTime(1, when + 0.018);
-    out.gain.setTargetAtTime(0.0001, when + 1.1, 0.7);
+    /* STRING-BODY BRIGHTNESS. A koto has a paulownia box and the nail (tsume)
+     * hits it: a short bright transient, 16-30 ms, well inside the master
+     * lowpass. It is NOT in the feedback path, so it cannot ring — which is the
+     * whole point. This is the "air" the mix was missing, spent where it reads
+     * as an instrument rather than as hiss. */
+    const fc = clamp(f * 4.0, 1150, 2350);
+    const wc = 2 * Math.sin((Math.PI * fc) / sr);
+    const qc = 1 / 1.15;
+    const tau = sr * (variant ? 0.026 : 0.017);
+    const amp = variant ? 0.100 : 0.130;
+    let lo = 0, bp = 0;
+    const tn = Math.min(n, Math.ceil(sr * 0.13));
+    for (let i = 0; i < tn; i++) {
+      const x = (r() * 2 - 1) * Math.exp(-i / tau);
+      lo += wc * bp;
+      const hi = x - lo - qc * bp;
+      bp += wc * hi;
+      out[i] += bp * amp;
+    }
 
-    src.connect(burst); burst.connect(bl1); bl1.connect(bl2); bl2.connect(dl);
-    dl.connect(loopLp); loopLp.connect(fb); fb.connect(dl);
-    dl.connect(body); body.connect(soften); soften.connect(out);
-    out.connect(bus);
-    const s = send(out, 0.55);
-
-    // the sustain the damped loop gives up: a quiet sine at the fundamental
-    const sus = ac.createOscillator();
-    sus.type = 'sine'; sus.frequency.value = f;
-    const susG = ac.createGain();
-    susG.gain.setValueAtTime(0, when);
-    susG.gain.linearRampToValueAtTime(level * 0.20, when + 0.05);
-    susG.gain.setTargetAtTime(0.0001, when + 0.2, 0.55);
-    sus.connect(susG); susG.connect(bus);
-    const s2 = send(susG, 0.5);
-
-    src.start(when, (rKoto() * 2) % 2.5);
-    src.stop(when + 0.35);
-    sus.start(when); sus.stop(when + 4.2);
-    keep(when + 4.4, [src, burst, bl1, bl2, dl, loopLp, fb, body, soften, out, s, sus, susG, s2]);
+    /* normalise + guarantee both ends sit exactly on zero (no click, ever) */
+    let pk = 1e-9;
+    for (let i = 0; i < n; i++) { const a = Math.abs(out[i]); if (a > pk) pk = a; }
+    const s = 1 / pk;
+    const fadeIn = Math.ceil(sr * 0.0015);
+    const fadeOut = Math.ceil(sr * tail);
+    for (let i = 0; i < n; i++) {
+      let v = out[i] * s;
+      if (i < fadeIn) v *= i / fadeIn;
+      const k = n - 1 - i;
+      if (k < fadeOut) v *= k / fadeOut;
+      out[i] = v;
+    }
+    return out;
   }
+
+  /** One AudioBuffer per (pitch, variant). ~20 buffers covers a whole session. */
+  const ksCache = new Map();
+  function ksBuffer(midi, variant) {
+    const key = midi * 2 + variant;
+    let b = ksCache.get(key);
+    if (b) return b;
+    const data = ksRender(mtof(midi), variant);
+    b = ac.createBuffer(1, data.length, sr);
+    b.getChannelData(0).set(data);
+    ksCache.set(key, b);
+    return b;
+  }
+
+  /** Shared koto voicing: box resonance, a touch of presence, then the bus. */
+  function kotoChain(bus, sendAmt) {
+    const inG = ac.createGain(); inG.gain.value = 1;
+    const body = ac.createBiquadFilter();
+    body.type = 'peaking'; body.frequency.value = 330; body.gain.value = 2.2; body.Q.value = 0.8;
+    const pres = ac.createBiquadFilter();
+    pres.type = 'peaking'; pres.frequency.value = 1500; pres.gain.value = 1.6; pres.Q.value = 0.7;
+    const lp = ac.createBiquadFilter();
+    lp.type = 'lowpass'; lp.frequency.value = 3000; lp.Q.value = Q_LP;
+    inG.connect(body); body.connect(pres); pres.connect(lp); lp.connect(bus);
+    send(lp, sendAmt);
+    return inG;
+  }
+  const kotoIn = kotoChain(busMusic, 0.50);
+  const kotoSfxIn = kotoChain(busSfx, 0.45);
+  let kotoVariant = 0;
+
+  /**
+   * Play one koto note. `damp` > 0 mutes the string after that many seconds,
+   * the way a player's left hand does — that is how a phrase stays a phrase
+   * instead of turning into a pile of overlapping decays.
+   */
+  function pluck(when, midi, level = 0.3, dest = kotoIn, damp = 0) {
+    if (liveCount > 28) return;
+    let m = Math.round(midi);
+    // fold by whole octaves into the register — arithmetic, not a while loop,
+    // so it terminates even if someone later narrows the window below an octave
+    if (m > KOTO_HI) m -= 12 * Math.ceil((m - KOTO_HI) / 12);
+    if (m < KOTO_LO) m += 12 * Math.ceil((KOTO_LO - m) / 12);
+    m = clamp(m, KOTO_LO, KOTO_HI);
+    const buf = ksBuffer(m, kotoVariant++ & 1);
+    const src = ac.createBufferSource();
+    src.buffer = buf;
+    const g = ac.createGain();
+    g.gain.setValueAtTime(level, when);
+    let until = when + buf.duration + 0.05;
+    const early = damp > 0 && damp < buf.duration;
+    if (early) {
+      // exponential mute, then a final ramp to EXACTLY zero so stopping the
+      // source can never truncate a non-zero sample
+      g.gain.setTargetAtTime(0.0001, when + damp, 0.15);
+      until = when + damp + 0.85;
+      g.gain.linearRampToValueAtTime(0, until);
+    }
+    src.connect(g); g.connect(dest);
+    src.start(when);                       // stop() is illegal before start()
+    if (early) src.stop(until + 0.02);
+    keep(until + 0.1, [src, g]);
+  }
+
+  /* ================================================================ *
+   * OTHER INSTRUMENTS
+   * ================================================================ */
 
   /** SHAKUHACHI — breathy, soft-attack, long-release flute. */
   function flute(when, midi, dur = 3.4, level = 0.16) {
-    if (liveCount > 26) return;
-    const f = mtof(clamp(midi, 55, 76));
+    if (liveCount > 28) return;
+    const f = mtof(clamp(midi, 55, 79));
     const env = ac.createGain();
     env.gain.setValueAtTime(0, when);
     env.gain.linearRampToValueAtTime(level, when + 0.14);
@@ -396,7 +556,7 @@ export function buildGraph(ac, opts = {}) {
     env.gain.setTargetAtTime(0.0001, when + dur, 0.9);
 
     const tone = ac.createBiquadFilter();
-    tone.type = 'lowpass'; tone.frequency.value = clamp(f * 3.6, 600, 2400); tone.Q.value = Q_LP;
+    tone.type = 'lowpass'; tone.frequency.value = clamp(f * 3.8, 700, 2700); tone.Q.value = Q_LP;
     tone.connect(env);
 
     const vib = ac.createOscillator();
@@ -418,56 +578,74 @@ export function buildGraph(ac, opts = {}) {
       parts.push(o, g);
     }
 
-    // breath: noise band around the 2nd partial, well lowpassed
-    const br = ac.createBufferSource();
-    br.buffer = whiteBuf; br.loop = true;
-    const brBp = ac.createBiquadFilter();
-    brBp.type = 'bandpass'; brBp.frequency.value = clamp(f * 2.0, 200, 1400); brBp.Q.value = 0.9;
-    const brLp = ac.createBiquadFilter();
-    brLp.type = 'lowpass'; brLp.frequency.value = 1400; brLp.Q.value = Q_LP;
-    const brG = ac.createGain();
-    brG.gain.setValueAtTime(0, when);
-    brG.gain.linearRampToValueAtTime(0.30, when + 0.10);
-    brG.gain.linearRampToValueAtTime(0.14, when + dur * 0.6);
-    br.connect(brBp); brBp.connect(brLp); brLp.connect(brG); brG.connect(tone);
-    br.start(when, (rFlute() * 2) % 2.0); br.stop(when + dur + 1.0);
+    // BREATH. Two bands: the body of the tone, and a small amount of real air
+    // up at 2.3 kHz. The upper band is what makes a shakuhachi sound like
+    // someone blowing across an edge rather than a sine wave.
+    const nodes = [env, tone, vib, vibG];
+    const bands = [
+      { f: clamp(f * 2.0, 200, 1500), q: 0.9, lp: 1500, a: 0.30, b: 0.14 },
+      { f: 2300, q: 0.8, lp: 3000, a: 0.028, b: 0.011 },
+    ];
+    for (const bd of bands) {
+      const br = ac.createBufferSource();
+      br.buffer = whiteBuf; br.loop = true;
+      const bp = ac.createBiquadFilter();
+      bp.type = 'bandpass'; bp.frequency.value = bd.f; bp.Q.value = bd.q;
+      const blp = ac.createBiquadFilter();
+      blp.type = 'lowpass'; blp.frequency.value = bd.lp; blp.Q.value = Q_LP;
+      const bg = ac.createGain();
+      bg.gain.setValueAtTime(0, when);
+      bg.gain.linearRampToValueAtTime(bd.a, when + 0.10);
+      bg.gain.linearRampToValueAtTime(bd.b, when + dur * 0.6);
+      br.connect(bp); bp.connect(blp); blp.connect(bg); bg.connect(tone);
+      br.start(when, (rFlute() * 2) % 2.0); br.stop(when + dur + 1.0);
+      nodes.push(br, bp, blp, bg);
+    }
 
     env.connect(busMusic);
-    const s = send(env, 0.6);
+    nodes.push(send(env, 0.6), ...parts);
     vib.start(when); vib.stop(when + dur + 2.2);
-    keep(when + dur + 2.6, [env, tone, vib, vibG, br, brBp, brLp, brG, s, ...parts]);
+    keep(when + dur + 2.6, nodes);
   }
 
-  /** BONSHO — temple bell. Inharmonic, long, and nothing above ~2.5 kHz. */
+  /**
+   * BONSHO — temple bell. Inharmonic and long. Two very quiet fixed partials at
+   * 2.35/2.9 kHz give it the shimmer a real bronze bell has; they are 35 dB
+   * under the fundamental and gone in two seconds, which is air, not glare.
+   */
   function bonsho(when, midi = 45, level = 0.13) {
     const f = mtof(clamp(midi, 33, 50));
-    const ratios = [1.0, 2.01, 2.66, 3.02, 4.11, 5.42];
-    const decays = [11.0, 8.0, 6.0, 4.5, 3.0, 2.0];
-    const gains = [1.0, 0.60, 0.42, 0.30, 0.18, 0.10];
+    const ratios = [1.0, 2.01, 2.66, 3.02, 4.11, 5.42, 7.10, 9.35];
+    const decays = [11.0, 8.0, 6.0, 4.5, 3.0, 2.0, 1.4, 0.9];
+    const gains = [1.0, 0.60, 0.42, 0.30, 0.18, 0.10, 0.05, 0.028];
     const sum = ac.createGain();
     sum.gain.value = level;
     const lp = ac.createBiquadFilter();
-    lp.type = 'lowpass'; lp.frequency.value = 2300; lp.Q.value = Q_LP;
+    lp.type = 'lowpass'; lp.frequency.value = 3000; lp.Q.value = Q_LP;
     sum.connect(lp); lp.connect(busMusic);
     const s = send(lp, 0.8);
     const nodes = [sum, lp, s];
     let last = 0;
-    for (let i = 0; i < ratios.length; i++) {
-      const fi = f * ratios[i];
-      if (fi > 2400) continue;
+    const partial = (fi, gi, dec, at) => {
       const o = ac.createOscillator();
       o.type = 'sine'; o.frequency.value = fi;
       o.detune.value = (rBell() * 2 - 1) * 6;
       const g = ac.createGain();
-      const at = 0.02 + i * 0.004;
       g.gain.setValueAtTime(0, when);
-      g.gain.linearRampToValueAtTime(gains[i], when + at);
-      g.gain.setTargetAtTime(0.0001, when + at, decays[i] / 5);
+      g.gain.linearRampToValueAtTime(gi, when + at);
+      g.gain.setTargetAtTime(0.0001, when + at, dec / 5);
       o.connect(g); g.connect(sum);
-      o.start(when); o.stop(when + decays[i] + 0.5);
-      last = Math.max(last, decays[i] + 0.6);
+      o.start(when); o.stop(when + dec + 0.5);
+      last = Math.max(last, dec + 0.6);
       nodes.push(o, g);
+    };
+    for (let i = 0; i < ratios.length; i++) {
+      const fi = f * ratios[i];
+      if (fi > 2900) continue;
+      partial(fi, gains[i], decays[i], 0.02 + i * 0.004);
     }
+    partial(2350, 0.018, 2.2, 0.03);
+    partial(2900, 0.010, 1.6, 0.03);
     // the strike itself: a soft, dark thud, no click
     const st = ac.createBufferSource();
     st.buffer = whiteBuf; st.loop = true;
@@ -494,7 +672,7 @@ export function buildGraph(ac, opts = {}) {
     g.gain.linearRampToValueAtTime(level, when + 0.006);
     g.gain.setTargetAtTime(0.0001, when + 0.02, 0.055);
     const lp = ac.createBiquadFilter();
-    lp.type = 'lowpass'; lp.frequency.value = 2200; lp.Q.value = Q_LP;
+    lp.type = 'lowpass'; lp.frequency.value = 2600; lp.Q.value = Q_LP;
     o.connect(g); g.connect(lp); lp.connect(bus);
     const s = send(lp, 0.85);
     o.start(when); o.stop(when + 0.5);
@@ -503,7 +681,7 @@ export function buildGraph(ac, opts = {}) {
 
   /** A soft dark chime — used by SFX where a "ping" would be wrong. */
   function chime(when, midi, level = 0.09, dur = 1.4) {
-    const f = mtof(clamp(midi, 45, 74));
+    const f = mtof(clamp(midi, 45, 76));
     const o = ac.createOscillator(); o.type = 'sine'; o.frequency.value = f;
     const o2 = ac.createOscillator(); o2.type = 'sine'; o2.frequency.value = f * 2.004;
     const g2 = ac.createGain(); g2.gain.value = 0.22;
@@ -512,7 +690,7 @@ export function buildGraph(ac, opts = {}) {
     g.gain.linearRampToValueAtTime(level, when + 0.03);
     g.gain.setTargetAtTime(0.0001, when + 0.04, dur / 4);
     const lp = ac.createBiquadFilter();
-    lp.type = 'lowpass'; lp.frequency.value = 2400; lp.Q.value = Q_LP;
+    lp.type = 'lowpass'; lp.frequency.value = 2800; lp.Q.value = Q_LP;
     o.connect(g); o2.connect(g2); g2.connect(g); g.connect(lp); lp.connect(busSfx);
     const s = send(lp, 0.7);
     o.start(when); o2.start(when);
@@ -527,7 +705,7 @@ export function buildGraph(ac, opts = {}) {
     const bp = ac.createBiquadFilter();
     bp.type = 'bandpass'; bp.frequency.value = f; bp.Q.value = Q;
     const lp = ac.createBiquadFilter();
-    lp.type = 'lowpass'; lp.frequency.value = Math.min(f * 1.6, 2000); lp.Q.value = Q_LP;
+    lp.type = 'lowpass'; lp.frequency.value = Math.min(f * 1.6, 2200); lp.Q.value = Q_LP;
     const g = ac.createGain();
     g.gain.setValueAtTime(0, when);
     g.gain.linearRampToValueAtTime(level, when + Math.min(0.05, dur * 0.3));
@@ -567,24 +745,36 @@ export function buildGraph(ac, opts = {}) {
   windSrc.connect(windLp); windLp.connect(windGain); windGain.connect(busAmb);
   windSrc.start(t0);
 
-  // the leaf layer only speaks in a gust, and stays under 1.6 kHz
+  // the leaf layer only speaks in a gust, and stays under 1.8 kHz
   const leafSrc = ac.createBufferSource();
   leafSrc.buffer = whiteBuf; leafSrc.loop = true;
   const leafBp = ac.createBiquadFilter();
-  leafBp.type = 'bandpass'; leafBp.frequency.value = 900; leafBp.Q.value = 0.45;
+  leafBp.type = 'bandpass'; leafBp.frequency.value = 1000; leafBp.Q.value = 0.45;
   const leafLp = ac.createBiquadFilter();
-  leafLp.type = 'lowpass'; leafLp.frequency.value = 1500; leafLp.Q.value = Q_LP;
+  leafLp.type = 'lowpass'; leafLp.frequency.value = 1800; leafLp.Q.value = Q_LP;
   const leafGain = ac.createGain(); leafGain.gain.value = 0.0;
   leafSrc.connect(leafBp); leafBp.connect(leafLp); leafLp.connect(leafGain);
   leafGain.connect(busAmb);
   leafSrc.start(t0);
 
-  // PAD — five voices, detune <= 5 cents so nothing beats audibly
+  /**
+   * PAD — five voices, detune <= 5 cents so nothing beats audibly.
+   *
+   * It BREATHES. The old pad was active 100% of the time at -31.6 dBFS, i.e. a
+   * continuous drone louder than the melody, which is the single thing that made
+   * the mix read as "dark drone with faint plucks behind it". Now `padEvent`
+   * draws one swell -> hold -> fall -> silence cycle at a time with plain linear
+   * ramps (they chain from whatever the previous ramp ended on, so the envelope
+   * can never jump), and the level is trimmed by PAD_TRIM.
+   */
   const padFilter = ac.createBiquadFilter();
   padFilter.type = 'lowpass'; padFilter.frequency.value = cfg().padCut; padFilter.Q.value = Q_LP;
   const padGain = ac.createGain(); padGain.gain.value = 0;
-  padFilter.connect(padGain); padGain.connect(busMusic);
-  const padSend = send(padGain, 0.35);
+  // a separate trim so one-off events (stageup) can lean on the pad without
+  // touching — and thereby breaking — the breathing envelope's ramp chain
+  const padBoost = ac.createGain(); padBoost.gain.value = 1;
+  padFilter.connect(padGain); padGain.connect(padBoost); padBoost.connect(busMusic);
+  send(padBoost, 0.35);
   const PAD_INTERVALS = [0, 0, 12, 19, 24];
   const padVoices = [];
   for (let i = 0; i < 5; i++) {
@@ -604,23 +794,21 @@ export function buildGraph(ac, opts = {}) {
   padLfo.connect(padLfoG); padLfoG.connect(padFilter.frequency);
   padLfo.start(t0);
   padGain.gain.setValueAtTime(0, t0);
-  padGain.gain.linearRampToValueAtTime(cfg().padGain, t0 + (offline ? 2.5 : 8));
 
   /* ================================================================ *
    * SCORE — sparse, free-rhythm, deterministic
    * ================================================================ */
   const S = {
-    koto: t0 + (offline ? 1.6 : 5),
-    flute: t0 + (offline ? 5.5 : 16),
+    koto: t0 + (offline ? 1.2 : 4),
+    flute: t0 + (offline ? 6.5 : 17),
     water: t0 + (offline ? 3.2 : 9),
     bell: t0 + (offline ? 9.0 : 40),
-    pad: t0 + (offline ? 12 : 26),
+    pad: t0 + (offline ? 0.2 : 1.0),
     bird: t0 + 6,
     cricket: t0 + 3,
     sfx: t0 + (offline ? 4.5 : 1e9),   // only the offline audition plays fake SFX
   };
   let scale = SCALES[cfg().scale];
-  let melody = 2;
 
   const lerp = (a, b, t) => a + (b - a) * t;
   /**
@@ -641,23 +829,77 @@ export function buildGraph(ac, opts = {}) {
   };
   const gap = (rr, range) => lerp(range[0], range[1], rr());
 
+  /* ---- koto melody: degrees, not semitones ---- */
+  /** Absolute scale-degree index -> MIDI. Handles negative degrees. */
+  function degToMidi(root, sc, d) {
+    const len = sc.length;
+    const oct = Math.floor(d / len);
+    return root + oct * 12 + sc[d - oct * len];
+  }
+  /** The degree window that keeps the koto inside its real register.
+   *  degToMidi is monotonic in d, so one sweep finds both ends. */
+  function degRange(root, sc) {
+    let lo = null, hi = null;
+    for (let d = -24; d <= 40; d++) {
+      const m = degToMidi(root, sc, d);
+      if (m >= KOTO_LO && lo === null) lo = d;
+      if (m <= KOTO_HI) hi = d;
+    }
+    if (lo === null) lo = 0;
+    if (hi === null || hi < lo) hi = lo;
+    return [lo, hi];
+  }
+  let kotoAnchor = null;
+
   function kotoPhrase(when) {
     const c = cfg();
     scale = SCALES[c.scale];
-    // 1-3 notes, then a long rest: Ma is the point
-    const notes = rKoto() < 0.52 ? 1 : (rKoto() < 0.78 ? 2 : 3);
-    let t = when;
-    const lvl = c.kotoLevel * lerp(0.86, 1.06, stage / 5);
-    for (let i = 0; i < notes; i++) {
-      const stepDir = rKoto() < 0.5 ? -1 : 1;
-      melody = (melody + stepDir * (rKoto() < 0.24 ? 2 : 1) + scale.length * 4) % scale.length;
-      const oct = rKoto() < 0.22 ? -12 : 0;
-      pluck(t, c.root + scale[melody] + oct, lvl * (i === 0 ? 1 : 0.78));
-      t += 1.1 + rKoto() * 1.6;
+    const sc = scale;
+    const [dLo, dHi] = degRange(c.root, sc);
+    // Home is the degree nearest `kotoCentre`, NOT the middle of the register:
+    // most phrases rise, so the anchor has to sit near the bottom of the target
+    // range for the phrase tops to land inside D4-D5 instead of above it.
+    let home = dLo;
+    for (let d = dLo; d <= dHi; d++) {
+      if (Math.abs(degToMidi(c.root, sc, d) - c.kotoCentre)
+        < Math.abs(degToMidi(c.root, sc, home) - c.kotoCentre)) home = d;
     }
-    // an occasional low open string underneath
-    if (rKoto() < 0.30) pluck(when + 0.35, c.root - 12 + scale[0], c.kotoLevel * 0.7);
-    return Math.max(t - when, 1.0) + gap(rKoto, c.kotoGap) * lerp(1.15, 0.85, stage / 5);
+    if (kotoAnchor === null) kotoAnchor = home;
+
+    const ph = KOTO_PHRASES[Math.floor(rKoto() * KOTO_PHRASES.length) % KOTO_PHRASES.length];
+    const nNotes = Math.max(3, ph.length - (rKoto() < 0.28 ? 1 : 0));
+
+    // the anchor drifts, but is always pulled back toward home, so the melody
+    // keeps a centre instead of wandering off like the old random walk
+    kotoAnchor += (rKoto() < 0.5 ? -1 : 1) * (rKoto() < 0.28 ? 2 : 1);
+    kotoAnchor = Math.round(kotoAnchor * 0.55 + home * 0.45);
+    // Fit the WHOLE phrase inside the register before playing a note of it.
+    // Clamping notes individually instead would collapse the top of a rising
+    // figure onto one repeated pitch, which is worse than transposing it.
+    let lo = 0, hi = 0;
+    for (let i = 0; i < nNotes; i++) { lo = Math.min(lo, ph[i]); hi = Math.max(hi, ph[i]); }
+    let aLo = Math.max(dLo - lo, home - 1);
+    let aHi = Math.min(dHi - hi, home + 2);
+    if (aHi < aLo) aLo = aHi = clamp(home, dLo - lo, dHi - hi);
+    kotoAnchor = clamp(kotoAnchor, aLo, aHi);
+    const lvl = c.kotoLevel * lerp(0.90, 1.06, stage / 5);
+
+    let t = when;
+    for (let i = 0; i < nNotes; i++) {
+      const d = clamp(kotoAnchor + ph[i], dLo, dHi);
+      const midi = degToMidi(c.root, sc, d);
+      const f = mtof(midi);
+      const last = i === nNotes - 1;
+      // How low this note is, 0..1. Low notes are damped sooner and given more
+      // room after them: that is the mud fix, in two lines.
+      const low = clamp((330 - f) / 170, 0, 1);
+      const damp = last ? (low > 0.35 ? 1.1 : 0) : lerp(1.6, 0.6, low);
+      const vel = i === 0 ? 1 : (last ? 0.94 : lerp(0.74, 0.88, rKoto()));
+      pluck(t, midi, lvl * vel, kotoIn, damp);
+      t += lerp(0.60, 1.02, rKoto()) * lerp(1.0, 1.5, low);
+    }
+    // MA. Real silence, long enough to hear the room.
+    return (t - when) + gap(rKoto, c.kotoRest) * lerp(1.15, 0.88, stage / 5);
   }
 
   function fluteNote(when) {
@@ -665,11 +907,11 @@ export function buildGraph(ac, opts = {}) {
     const sc = SCALES[c.scale];
     const deg = Math.floor(rFlute() * sc.length);
     const dur = 2.6 + rFlute() * 3.2;
-    flute(when, c.root + 12 + sc[deg], dur, 0.105 * lerp(0.9, 1.1, stage / 5));
+    flute(when, c.root + 12 + sc[deg], dur, c.fluteLevel * lerp(0.9, 1.1, stage / 5));
     // sometimes a second, lower answering tone after a breath
     if (rFlute() < 0.35) {
       flute(when + dur + 1.0 + rFlute() * 1.4, c.root + 12 + sc[(deg + 3) % sc.length],
-        2.0 + rFlute() * 2.0, 0.075);
+        2.0 + rFlute() * 2.0, c.fluteLevel * 0.7);
     }
     return dur + gap(rFlute, c.fluteGap);
   }
@@ -688,6 +930,7 @@ export function buildGraph(ac, opts = {}) {
     return gap(rBell, c.bellGap);
   }
 
+  /** One breath of the pad: swell, hold, fall, silence. */
   function padEvent(when) {
     const c = cfg();
     const sc = SCALES[c.scale];
@@ -696,9 +939,20 @@ export function buildGraph(ac, opts = {}) {
       const v = padVoices[i];
       v.osc.frequency.setTargetAtTime(mtof(c.padRoot + snap(shift + v.interval, sc)), when, 3.5);
     }
-    padGain.gain.setTargetAtTime(c.padGain * lerp(0.9, 1.12, stage / 5), when, 4.0);
     padFilter.frequency.setTargetAtTime(c.padCut, when, 5.0);
-    return 20 + rPad() * 18;
+
+    const swell = 5.0 + rPad() * 3.0;
+    const hold = 7.0 + rPad() * 7.0;
+    const fall = 6.0 + rPad() * 3.0;
+    const rest = 6.0 + rPad() * 6.0;
+    const target = c.padGain * PAD_TRIM * lerp(0.9, 1.12, stage / 5);
+    // anchor at silence first: without this the next swell's ramp would start
+    // rising from the moment the previous fall ended and eat the rest
+    padGain.gain.setValueAtTime(0, when);
+    padGain.gain.linearRampToValueAtTime(target, when + swell);
+    padGain.gain.setValueAtTime(target, when + swell + hold);
+    padGain.gain.linearRampToValueAtTime(0, when + swell + hold + fall);
+    return swell + hold + fall + rest;
   }
 
   function birdEvent(when) {
@@ -715,10 +969,10 @@ export function buildGraph(ac, opts = {}) {
       o.frequency.exponentialRampToValueAtTime(f * (0.82 + rBird() * 0.3), tt + 0.07);
       const g = ac.createGain();
       g.gain.setValueAtTime(0, tt);
-      g.gain.linearRampToValueAtTime(0.011 * (0.7 + rBird() * 0.5), tt + 0.016);
+      g.gain.linearRampToValueAtTime(0.013 * (0.7 + rBird() * 0.5), tt + 0.016);
       g.gain.setTargetAtTime(0.0001, tt + 0.02, 0.03);
       const lp = ac.createBiquadFilter();
-      lp.type = 'lowpass'; lp.frequency.value = 2600; lp.Q.value = Q_LP;
+      lp.type = 'lowpass'; lp.frequency.value = 2800; lp.Q.value = Q_LP;
       o.connect(g); g.connect(lp); lp.connect(busAmb);
       const s = send(lp, 0.55);
       o.start(tt); o.stop(tt + 0.3);
@@ -727,6 +981,12 @@ export function buildGraph(ac, opts = {}) {
     return 10 + rBird() * 16;
   }
 
+  /**
+   * CRICKETS. Q is 5, not 14. At -63 dBFS a Q=14 band is inaudible either way,
+   * but it is a landmine: the first person to raise the cricket level gets a
+   * piercing narrow 2.4 kHz tone every few seconds, all night. A broad band
+   * reads as an insect; a narrow one reads as a test tone.
+   */
   function cricketEvent(when) {
     const c = cfg();
     if (c.crickets <= 0.001) return 8 + rCrit() * 8;
@@ -738,7 +998,7 @@ export function buildGraph(ac, opts = {}) {
       const src = ac.createBufferSource();
       src.buffer = whiteBuf; src.loop = true;
       const bp = ac.createBiquadFilter();
-      bp.type = 'bandpass'; bp.frequency.value = f; bp.Q.value = 14;
+      bp.type = 'bandpass'; bp.frequency.value = f; bp.Q.value = 5;
       const g = ac.createGain();
       g.gain.setValueAtTime(0, tt);
       g.gain.linearRampToValueAtTime(0.010, tt + 0.006);
@@ -755,6 +1015,7 @@ export function buildGraph(ac, opts = {}) {
     const g = clamp(o.gain ?? 1, 0, 1.4);
     const c = cfg();
     const sc = SCALES[c.scale];
+    const kbase = c.root + 12;      // SFX plucks live in the same register as the melody
     switch (id) {
       case 'shake':
       case 'click':
@@ -762,16 +1023,16 @@ export function buildGraph(ac, opts = {}) {
         tok(when + 0.006, 165 + rSfx() * 30, 0.13, 0.105 * g, 0.55);
         break;
       case 'crit':
-        pluck(when, c.root + 12 + sc[2] - 12, 0.22 * g, busSfx);
+        pluck(when, kbase + sc[2], 0.26 * g, kotoSfxIn, 1.2);
         chime(when + 0.02, c.root + 19, 0.06 * g, 1.3);
         break;
       case 'purchase':
         tok(when, 190, 0.11, 0.07 * g, 0.6);
-        pluck(when + 0.01, c.root + sc[0], 0.20 * g, busSfx);
+        pluck(when + 0.01, kbase + sc[0], 0.24 * g, kotoSfxIn, 1.1);
         break;
       case 'upgrade':
-        pluck(when, c.root + sc[0], 0.20 * g, busSfx);
-        pluck(when + 0.16, c.root + sc[3], 0.17 * g, busSfx);
+        pluck(when, kbase + sc[0], 0.24 * g, kotoSfxIn, 0.9);
+        pluck(when + 0.16, kbase + sc[3], 0.21 * g, kotoSfxIn, 1.3);
         chime(when + 0.30, c.root + 12 + sc[1], 0.05 * g, 1.6);
         break;
       case 'achievement':
@@ -790,13 +1051,15 @@ export function buildGraph(ac, opts = {}) {
       case 'stageup':
         bonsho(when, 45, 0.13 * g);
         rustle(when, 2.6, 0.05 * g, 420, 0.4);
+        // a rising pentatonic figure in the koto's own register
         for (let i = 0; i < 4; i++) {
-          pluck(when + 0.5 + i * 0.34, c.root + sc[i % sc.length] - (i > 2 ? 12 : 0), 0.24 * g, busSfx);
+          pluck(when + 0.5 + i * 0.34, kbase + sc[i % sc.length] + (i === 3 ? 12 : 0),
+            0.26 * g, kotoSfxIn, i === 3 ? 0 : 1.1);
         }
         flute(when + 0.8, c.root + 12 + sc[2], 4.5, 0.11 * g);
-        padGain.gain.cancelScheduledValues(when);
-        padGain.gain.setTargetAtTime(cfg().padGain * 2.0, when + 0.1, 0.7);
-        padGain.gain.setTargetAtTime(cfg().padGain, when + 4.0, 2.5);
+        padBoost.gain.cancelScheduledValues(when);
+        padBoost.gain.setTargetAtTime(2.0, when + 0.1, 0.7);
+        padBoost.gain.setTargetAtTime(1.0, when + 4.0, 2.5);
         break;
       case 'storm':
         rustle(when, 3.2, 0.075 * g, 300, 0.35, busAmb);
@@ -830,7 +1093,6 @@ export function buildGraph(ac, opts = {}) {
   const only = Array.isArray(opts.only) ? opts.only : null;
   const on = (k) => !only || only.indexOf(k) !== -1;
   const STREAMS = ALL_STREAMS.filter(([k]) => on(k));
-  if (!on('pad')) padGain.gain.cancelScheduledValues(t0), padGain.gain.setValueAtTime(0, t0);
   if (!on('wind')) { windGain.gain.value = 0; leafGain.gain.value = 0; }
   if (!on('air')) airGain.gain.value = 0;
   if (!on('verb')) verbRet.gain.value = 0;
@@ -853,7 +1115,7 @@ export function buildGraph(ac, opts = {}) {
     const w = clamp(g, 0, 1.4);
     const lvl = (0.032 + 0.075 * w) * c.windGain;
     const cut = 170 + 260 * w;
-    const leaf = (0.004 + 0.020 * Math.pow(w, 2.0)) * c.windGain;
+    const leaf = (0.005 + 0.024 * Math.pow(w, 2.0)) * c.windGain;
     if (smooth > 0) {
       windGain.gain.setTargetAtTime(lvl, when, smooth);
       windLp.frequency.setTargetAtTime(cut, when, smooth);
@@ -889,6 +1151,7 @@ export function buildGraph(ac, opts = {}) {
       if (PHASES[p]) phase = p;
       if (Number.isFinite(st)) stage = clamp(st, 0, 5);
       scale = SCALES[cfg().scale];
+      kotoAnchor = null;          // re-centre on the new mode's register
     },
     setVolume(v, when) {
       volume = clamp(Number(v) || 0, 0, 1);

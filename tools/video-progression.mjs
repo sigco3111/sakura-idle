@@ -55,14 +55,15 @@ const BEATS = [
     title: 'NPR ramp shading, calibrated',
     sub: 'two tone bands, violet hue-shifted shadow, rim light',
     ken: { s0: 1.02, s1: 1.08, dx: -0.6, dy: 0.5 },
-    boxes: [{ x0: 0.0, y0: 0.855, x1: 0.30, y1: 1.0, label: 'shading probes', side: 'above' }],
+    align: 'right',
+    boxes: [{ x0: 0.0, y0: 0.85, x1: 0.295, y1: 1.0, label: 'shading probes', side: 'right' }],
   },
   {
     file: '03-sky-lighting-postfx.png', dur: 2.6,
     title: 'sky, atmosphere, post chain',
     sub: 'painted clouds, layered hills, bloom, vignette, grade',
     ken: { s0: 1.02, s1: 1.08, dx: 0.5, dy: -0.5 },
-    boxes: [{ x0: 0.02, y0: 0.40, x1: 0.98, y1: 0.60, label: 'aerial perspective', side: 'above', underline: true }],
+    boxes: [{ x0: 0.08, y0: 0.40, x1: 0.92, y1: 0.60, label: 'aerial perspective', side: 'above', underline: true }],
   },
   {
     file: '04-first-real-tree.png', dur: 2.8,
@@ -80,18 +81,15 @@ const BEATS = [
     file: '06-game-ui-lands.png', dur: 2.7,
     title: 'the UI arrives',
     sub: 'parchment panels, gold keyline, serif display type',
-    ken: { s0: 1.015, s1: 1.07, dx: 0.35, dy: 0.35 },
-    boxes: [{ x0: 0.655, y0: 0.008, x1: 0.965, y1: 0.335, label: 'DOM over the scene', side: 'below' }],
+    ken: { s0: 1.012, s1: 1.062, dx: 0.4, dy: -0.35 },
+    boxes: [{ x0: 0.652, y0: 0.01, x1: 0.955, y1: 0.335, label: 'DOM over the scene', side: 'below' }],
   },
   {
     file: '07-pond-props-torii.png', dur: 2.9,
     title: 'pond, torii, lanterns, mossy wall',
     sub: 'the grove stops being a field with a tree in it',
-    ken: { s0: 1.02, s1: 1.08, dx: -0.5, dy: 0.45 },
-    boxes: [
-      { x0: 0.735, y0: 0.515, x1: 0.995, y1: 0.905, label: 'vermilion torii', side: 'above' },
-      { x0: 0.0, y0: 0.845, x1: 0.20, y1: 0.985, label: 'pond', side: 'above' },
-    ],
+    ken: { s0: 1.02, s1: 1.08, dx: 0.45, dy: 0.4 },
+    boxes: [{ x0: 0.735, y0: 0.515, x1: 0.99, y1: 0.905, label: 'vermilion torii', side: 'above' }],
   },
   {
     file: '08-pond-reflection.png', dur: 2.8,
@@ -105,19 +103,19 @@ const BEATS = [
     title: 'canopy: violet → sakura pink',
     sub: 'the deep interior tint had been lifting blue above red',
     ken: { s0: 1.025, s1: 1.085, dx: -0.15, dy: -0.3 },
-    boxes: [{ x0: 0.375, y0: 0.185, x1: 0.545, y1: 0.50, label: 'rose, not mauve', side: 'right' }],
+    boxes: [{ x0: 0.383, y0: 0.235, x1: 0.555, y1: 0.60, label: 'rose, not mauve', side: 'right' }],
   },
   {
     file: '10-current-full-bloom.png', dur: 3.3,
     title: 'full bloom',
     sub: 'god rays, seven tenders, eleven million petals',
     ken: { s0: 1.015, s1: 1.075, dx: -0.3, dy: 0.3 },
-    boxes: [{ x0: 0.395, y0: 0.30, x1: 0.545, y1: 0.72, label: 'god rays', side: 'right' }],
+    boxes: [{ x0: 0.398, y0: 0.285, x1: 0.545, y1: 0.70, label: 'god rays', side: 'left' }],
   },
 ];
 
 const TITLE = { dur: 3.5, backdrop: '10-current-full-bloom.png' };
-const ENDCARD = { dur: 3.6, backdrop: '08-pond-reflection.png' };
+const ENDCARD = { dur: 3.6, backdrop: '10-current-full-bloom.png' };
 
 /* ---- build the timeline: title, ten beats, end card, overlapping by XF ---- */
 const cards = [
@@ -340,10 +338,10 @@ function tag(g, text, ax, ay, halign, valign) {
 }
 
 /* ---------- the caption plate for a beat ---------- */
-function captionPlate(g, step, total, title, sub) {
+function captionPlate(g, step, total, title, sub, align) {
   const M = 74;                       // margin from frame edge
   const padX = 26, padTop = 20, padBot = 21;
-  const badgeW = 74;
+  const badgeW = 86;
 
   g.font = '600 41px ' + SERIF;
   const twTitle = trackedWidth(g, title, 1.6);
@@ -354,26 +352,32 @@ function captionPlate(g, step, total, title, sub) {
   const bodyH = 41 + 15 + 22;
   const plateW = padX + badgeW + 22 + textW + padX;
   const plateH = padTop + bodyH + padBot;
-  const x = M, y = H - M - plateH - 34;   // sits clear of the game's own bottom pill
+  const x = align === 'right' ? W - M - plateW : M;
+  const y = H - M - plateH - 34;          // sits clear of the game's own bottom pill
 
   plate(g, x, y, plateW, plateH);
 
-  // step badge: kanji mark, number, total
+  // step badge: kanji mark above, then "07 / 10"
   const bx = x + padX, byTop = y + padTop;
   g.save();
   g.textBaseline = 'alphabetic';
   g.fillStyle = C.goldDeep;
-  g.font = '400 25px ' + SERIF;
-  g.fillText('桜', R(bx + 21), R(byTop + 25));
-  g.fillStyle = C.ink;
-  g.font = '600 34px ' + SERIF;
+  g.font = '400 23px ' + SERIF;
+  const kw = g.measureText('桜').width;
+  g.fillText('桜', R(bx + badgeW / 2 - kw / 2 - 3), R(byTop + 24));
   const num = String(step).padStart(2, '0');
+  const tot = ' / ' + String(total);
+  g.font = '600 31px ' + SERIF;
   const nw = g.measureText(num).width;
-  g.fillText(num, R(bx + badgeW / 2 - nw / 2 - 4), R(byTop + 63));
+  g.font = '400 16px ' + SANS;
+  const tw = g.measureText(tot).width;
+  const gx = bx + badgeW / 2 - (nw + tw) / 2 - 3;
+  g.fillStyle = C.ink;
+  g.font = '600 31px ' + SERIF;
+  g.fillText(num, R(gx), R(byTop + 63));
   g.fillStyle = C.inkSoft;
-  g.font = '400 15px ' + SANS;
-  const tot = '/ ' + String(total);
-  g.fillText(tot, R(bx + badgeW / 2 - nw / 2 + nw / 2 + 5), R(byTop + 63));
+  g.font = '400 16px ' + SANS;
+  g.fillText(tot, R(gx + nw + 1), R(byTop + 63));
   g.restore();
 
   // tapering vertical hairline between badge and text
@@ -411,15 +415,18 @@ function vignette(g, strength) {
 
 function progressTicker(g, step, total) {
   // ten small diamonds, bottom-right, filled up to the current step
-  const r = 4.5, gap = 20;
+  const r = 5.5, gap = 24;
   const totalW = (total - 1) * gap;
   const x0 = W - 74 - totalW, y = H - 74 + 4;
+  g.save();
+  g.shadowColor = 'rgba(18,12,8,0.75)'; g.shadowBlur = 8;
   for (let i = 0; i < total; i++) {
     const cx = x0 + i * gap, on = i < step;
-    g.globalAlpha = on ? 0.95 : 0.42;
-    diamond(g, R(cx) + 0.5, R(y) + 0.5, on ? r : r - 1.2,
-      on ? '#E8C56A' : 'rgba(243,235,220,0.55)', 'rgba(40,30,20,0.55)');
+    g.globalAlpha = on ? 1 : 0.8;
+    diamond(g, R(cx) + 0.5, R(y) + 0.5, on ? r : r - 1.6,
+      on ? '#E8C56A' : 'rgba(243,235,220,0.32)', on ? 'rgba(60,44,20,0.7)' : 'rgba(243,235,220,0.8)');
   }
+  g.restore();
   g.globalAlpha = 1;
 }
 
@@ -436,17 +443,22 @@ function drawBeat(g, img, card, p) {
   g.fillStyle = lg; g.fillRect(0, R(H * 0.68), W, R(H * 0.32));
 
   for (const b of (card.boxes || [])) callout(g, b, kb.map);
-  captionPlate(g, card.step, 10, card.title, card.sub);
+  captionPlate(g, card.step, 10, card.title, card.sub, card.align);
   progressTicker(g, card.step, 10);
 }
 
-function drawBackdrop(g, img, scale, blur, dark) {
+/* Blurred, darkened backdrop. "focus" zooms into a region so the game's own UI
+ * panels stay out of frame — a blurred rectangle still reads as a rectangle. */
+function drawBackdrop(g, img, scale, blur, dark, focus) {
   const s = scale;
+  const fu = focus ? focus[0] : 0.5, fv = focus ? focus[1] : 0.5;
   const sw = img.width / s, sh = img.height / s;
+  const sx = clamp(fu * img.width - sw / 2, 0, img.width - sw);
+  const sy = clamp(fv * img.height - sh / 2, 0, img.height - sh);
   g.save();
-  g.filter = 'blur(' + blur + 'px) saturate(0.85)';
+  g.filter = 'blur(' + blur + 'px) saturate(0.9)';
   g.imageSmoothingQuality = 'high';
-  g.drawImage(img, (img.width - sw) / 2, (img.height - sh) / 2, sw, sh, -30, -30, W + 60, H + 60);
+  g.drawImage(img, sx, sy, sw, sh, -30, -30, W + 60, H + 60);
   g.restore();
   g.fillStyle = 'rgba(22,15,20,' + dark + ')';
   g.fillRect(0, 0, W, H);
@@ -454,7 +466,7 @@ function drawBackdrop(g, img, scale, blur, dark) {
 }
 
 function drawTitle(g, img, p) {
-  drawBackdrop(g, img, 1.06 + 0.06 * p, 19, 0.52);
+  drawBackdrop(g, img, 2.1 + 0.14 * p, 22, 0.50, [0.46, 0.44]);
   const cx = W / 2;
   g.save();
   g.textBaseline = 'alphabetic';
@@ -495,27 +507,27 @@ function drawTitle(g, img, p) {
 }
 
 function drawEnd(g, img, p) {
-  drawBackdrop(g, img, 1.05 + 0.05 * p, 22, 0.56);
-  const pw = 980, ph = 322;
-  const x = (W - pw) / 2, y = (H - ph) / 2 - 10;
-  plate(g, x, y, pw, ph, { alpha: 0.96, shadow: 34 });
+  drawBackdrop(g, img, 1.9 + 0.12 * p, 24, 0.44, [0.24, 0.66]);
+  const pw = 1000, ph = 352;
+  const x = (W - pw) / 2, y = (H - ph) / 2 - 6;
+  plate(g, x, y, pw, ph, { alpha: 0.985, shadow: 36 });
   const cx = W / 2;
   g.save();
   g.textBaseline = 'alphabetic';
   g.fillStyle = C.goldDeep;
   g.font = '400 30px ' + SERIF;
   const kw = g.measureText('桜').width;
-  g.fillText('桜', R(cx - kw / 2), y + 60);
+  g.fillText('桜', R(cx - kw / 2), y + 62);
   g.fillStyle = C.ink;
   g.font = '600 34px ' + SERIF;
   const nm = 'Sakura — Petals of the Everblossom';
   const nw = trackedWidth(g, nm, 2.2);
-  tracked(g, nm, cx - nw / 2, y + 104, 2.2);
-  divider(g, cx - 230, y + 126, 460, 'rgba(169,121,44,0.8)');
-  diamond(g, R(cx) + 0.5, y + 126.5, 4, '#C9A227', null);
+  tracked(g, nm, cx - nw / 2, y + 116, 2.2);
+  divider(g, cx - 230, y + 142, 460, 'rgba(169,121,44,0.8)');
+  diamond(g, R(cx) + 0.5, y + 142.5, 4, '#C9A227', null);
 
   const rows = [['play', 'sakura-idle.vercel.app'], ['source', 'github.com/danmana/sakura-idle']];
-  let ry = y + 182;
+  let ry = y + 204;
   for (const [k, v] of rows) {
     g.font = '400 19px ' + SANS;
     g.fillStyle = C.inkSoft;

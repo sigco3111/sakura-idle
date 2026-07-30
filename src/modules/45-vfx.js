@@ -1,5 +1,6 @@
 import * as THREE from 'three';
 import { makeRng } from '../lib/rng.js';
+import { SETTINGS } from '../lib/settings.js';
 import { createLightUniforms } from '../lib/lighting.js';
 import {
   makeQuadInstanced, makeShaftInstanced, makePetalGeometry,
@@ -33,7 +34,22 @@ import {
  *           upgrade:bought, bloom:stage.
  * Emits:    sfx {id}, vfx:golden {point, kind}.
  *
- * Debug scenarios: vfx-demo, vfx-crit, vfx-stage, vfx-golden, vfx-off.
+ * Accessibility — every motion and flash effect here is gated on the shared
+ * `SETTINGS.motion` store (src/lib/settings.js), read FRESH at each call site so a
+ * toggle lands on the next frame and never needs a reload. Camera kicks, the
+ * stage-up push and the time-dilation lurch require `motion.shake`; the
+ * full-screen washes require `motion.flashes`; petal bursts require
+ * `motion.bursts`.
+ *
+ * Turning motion off must not turn the game into a corpse, so the physical kick
+ * is *replaced* rather than deleted: `calmCue()` breathes a soft vignette inward
+ * (edge opacity only — nothing translates or scales), the shockwave ring runs a
+ * touch wider and longer, the spark count goes up and the floating gain number
+ * scales up. Stage-up keeps its shockwave, shafts and title card and loses only
+ * the push and the lurch.
+ *
+ * Debug scenarios: vfx-demo, vfx-crit, vfx-stage, vfx-golden, vfx-off,
+ *                  vfx-motion-off, vfx-motion-on, vfx-shake-calm.
  */
 
 const TAU = Math.PI * 2;
@@ -83,6 +99,39 @@ export default {
     let dilateT = -1, dilateDur = 0;
     const uTime = { value: 0 };
     const uAgeOverride = { value: -1 };     // >=0 freezes every effect at a phase
+
+    /* ---------------- accessibility gates ---------------- *
+     * SETTINGS.motion is read at the moment of use, never captured here: a player
+     * who is being made unwell by camera shake has to be free of it on the very
+     * next click, and caching the flag at setup would make that a reload. */
+
+    /**
+     * Camera impulse, gated and scaled by the player's motion preference.
+     * Returns false when nothing was applied, which is the caller's cue to pay the
+     * feedback back some other way (see calmCue).
+     */
+    function kickCam(strength, opts) {
+      const m = SETTINGS.motion;
+      if (!m.shake) return false;
+      const s = (Number(strength) || 0) * m.shakeScale;
+      if (s <= 0) return false;
+      ctx.assets.cameraRig?.kick?.(s, opts);
+      return true;
+    }
+
+    /**
+     * Petal burst — the game's core click feedback, so it survives reduced motion
+     * unless `petalBursts` is switched off explicitly. With the camera kick gone it
+     * also carries a little more of the hit.
+     */
+    function burst(point, count, power = 1) {
+      if (!point) return false;
+      const m = SETTINGS.motion;
+      if (!m.bursts) return false;
+      const k = m.shake ? 1 : 1.35;
+      ctx.assets.petals?.burst?.(point, Math.round((count || 40) * k), power);
+      return true;
+    }
 
     /* ---------------- rings ---------------- */
     const ringGeo = makeQuadInstanced(B.rings);
@@ -276,6 +325,7 @@ export default {
     let numCur = 0;
     let hudAnchor = null;
     let flashA = 0, flashDecay = 4, flashWarm = 0;
+    let vigA = 0, vigDecay = 4.2;
 
     /**
      * Where a gain flies to. 65-ui owns the HUD, so find its bank counter in the
@@ -310,6 +360,17 @@ export default {
         'background:radial-gradient(125% 95% at 50% 46%,' +
         'rgba(255,241,214,.92) 0%,rgba(255,199,224,.46) 36%,rgba(255,214,180,0) 74%)';
       el.appendChild(flash);
+      // The calm cue. Sits UNDER the numbers so a gain never dims, and darkens
+      // only the outer frame — a luminance change at the periphery reads as
+      // impact without a bright flash and without a single pixel of movement.
+      // Radii are 52% of each axis, so the gradient's 100% stop lands ON the frame
+      // edge (a larger ellipse puts its dark end outside the viewport and the cue
+      // becomes invisible — measured: 118% radii darkened the edge by 0.5%).
+      const vig = document.createElement('div');
+      vig.style.cssText = 'position:absolute;inset:-2px;opacity:0;' +
+        'background:radial-gradient(52% 52% at 50% 50%,' +
+        'rgba(38,22,30,0) 58%,rgba(34,20,28,.46) 86%,rgba(26,14,22,.80) 100%)';
+      el.appendChild(vig);
       for (let i = 0; i < B.numbers; i++) {
         const s = document.createElement('div');
         s.style.cssText = 'position:absolute;left:0;top:0;opacity:0;white-space:nowrap;' +
@@ -321,7 +382,7 @@ export default {
         NUM.push({ el: s, active: false, t0: 0, dur: 1, x0: 0, y0: 0, x1: 0, y1: 0, cx: 0, cy: 0, scale: 1 });
       }
       document.body.appendChild(el);
-      dom = { el, flash };
+      dom = { el, flash, vig };
       return dom;
     }
 
@@ -361,7 +422,8 @@ export default {
       slot.x1 = hx; slot.y1 = hy;
       slot.cx = slot.x0 * 0.55 + hx * 0.45 + (r() - 0.5) * 60;
       slot.cy = Math.min(slot.y0, hy) - (crit ? 150 : 92);
-      slot.scale = crit ? 1.6 : 1;
+      // With the kick gone the number carries more of the punch (brief §3).
+      slot.scale = (crit ? 1.6 : 1) * (SETTINGS.motion.shake ? 1 : 1.16);
       slot.el.textContent = o.text ?? ('+' + fmt(amount));
       slot.el.style.color = crit ? '#FFF3CF' : '#FFEAF2';
       slot.el.style.fontWeight = crit ? '700' : '600';
@@ -370,10 +432,34 @@ export default {
         : '0 0 9px rgba(255,178,206,.85),0 2px 0 rgba(74,64,52,.7)';
     }
 
+    /** Full-screen bright wash. Exactly what `flashes: false` exists to stop. */
     function flash(strength = 0.35, warm = 0, decay = 4) {
-      const d = ensureDom(); if (!d) return;
+      if (!SETTINGS.motion.flashes) return false;
+      const d = ensureDom(); if (!d) return false;
       flashA = Math.max(flashA, clamp(strength, 0, 1));
       flashWarm = warm; flashDecay = decay;
+      return true;
+    }
+
+    /**
+     * A soft inward vignette breath. Darkens the frame edge for a moment: no
+     * translation, no scale, no bright pulse, so it is safe both for vestibular
+     * sensitivity and for photosensitivity. Capped low on purpose.
+     */
+    function vignette(strength = 0.10, decay = 4.2) {
+      const d = ensureDom(); if (!d) return;
+      vigA = Math.max(vigA, clamp(strength, 0, 0.30));
+      vigDecay = decay;
+    }
+
+    /**
+     * The stand-in for a camera kick when screen shake is off. A player who turns
+     * shake off must still get an answer to their click — a calm game, not a dead
+     * one — so the impact is paid back in light and scale rather than movement.
+     * Callers pair this with a wider ring, more sparks and a larger number.
+     */
+    function calmCue(power = 1) {
+      vignette(0.07 + 0.032 * clamp(power, 0.25, 4), 4.2);
     }
 
     /* ---------------- composite effects ---------------- */
@@ -404,37 +490,64 @@ export default {
       return null;
     }
 
-    /** A shake: petals off the nearest branch, a shockwave, a camera nudge. */
+    /**
+     * A shake: petals off the nearest branch, a shockwave, a camera nudge.
+     * With `screenShake` off the nudge is dropped and the ring / sparks / number
+     * grow to carry the hit instead — the click still lands, it just no longer
+     * moves the horizon.
+     */
     function shakeFx(point, power = 1) {
       if (muted || !point) return;
+      const m = SETTINGS.motion;
+      const calm = !m.shake;
       const pw = clamp(power, 0.25, 4);
-      ring(point, { radius: 1.5 + 0.6 * pw, dur: 0.55, kind: 0, tint: TINT.pale, gain: 0.95 });
-      sparks(point, 5 + Math.round(3 * pw), {
-        speed: 1.7 * pw, life: 0.6, size: 0.085, gravity: 4.0, tint: TINT.petal, jitter: 0.18,
+      ring(point, {
+        radius: (1.5 + 0.6 * pw) * (calm ? 1.15 : 1),
+        dur: calm ? 0.62 : 0.55,
+        kind: 0, tint: TINT.pale,
+        // brightness only goes up if bright pulses are still welcome; the size
+        // and duration boost above is geometry, not luminance, so it always applies
+        gain: 0.95 * (calm && m.flashes ? 1.18 : 1),
+      });
+      sparks(point, Math.round((5 + 3 * pw) * (calm ? 1.5 : 1)), {
+        speed: 1.7 * pw, life: calm ? 0.68 : 0.6, size: calm ? 0.10 : 0.085,
+        gravity: 4.0, tint: TINT.petal, jitter: 0.18,
       });
       const src = nearestBranch(point) ?? point;
-      const n = Math.round(10 + 8 * pw);
-      if (ctx.assets.petals?.burst) ctx.assets.petals.burst(src, n, 0.85 + 0.3 * pw);
-      ctx.assets.cameraRig?.kick?.(0.20 + 0.10 * pw, { sign: r() < 0.5 ? -1 : 1 });
+      burst(src, Math.round(10 + 8 * pw), 0.85 + 0.3 * pw);
+      if (!kickCam(0.20 + 0.10 * pw, { sign: r() < 0.5 ? -1 : 1 })) calmCue(pw);
     }
 
     /** A crit: bigger burst, brighter number, a distinct gold flash. */
     function critFx(point, amount) {
       if (muted) return;
+      const m = SETTINGS.motion;
       const p = point ?? canopyCentre();
       ring(p, { radius: 3.4, dur: 0.78, kind: 1, tint: TINT.goldHot, gain: 1.5 });
       ring(p, { radius: 2.0, dur: 0.46, kind: 0, tint: TINT.pale, gain: 1.2 });
-      sparks(p, 26, { speed: 4.2, life: 1.0, size: 0.155, gravity: 3.6, tint: TINT.gold, up: 0.9 });
-      ctx.assets.petals?.burst?.(p, 34, 1.7);
-      flash(0.17, 1, 5.5);
+      // no wash and no kick available => spend it on motes, which are small and
+      // local and read as sparkle rather than as a pulse
+      sparks(p, m.flashes && m.shake ? 26 : 36, {
+        speed: 4.2, life: 1.0, size: 0.155, gravity: 3.6, tint: TINT.gold, up: 0.9,
+      });
+      burst(p, 34, 1.7);
+      flash(0.17, 1, 5.5);                        // no-ops when flashes are off
+      if (!m.shake || !m.flashes) calmCue(1.7);
       number(amount, p, { crit: true });
     }
 
-    /** Stage-up — the reward moment: dilation, shockwave, shafts, wash. */
+    /**
+     * Stage-up — the reward moment: dilation, shockwave, shafts, wash.
+     * With motion off it must still read as a celebration, so the shockwave, the
+     * shafts, the petal storm and 65-ui's title card all stay; only the camera
+     * push and the time-dilation lurch are dropped.
+     */
     function stageUp(stage) {
+      const m = SETTINGS.motion;
       const c = canopyCentre();
       const rad = ctx.assets.tree?.canopyBounds?.radius ?? 6;
-      dilateT = 0; dilateDur = 2.6;
+      if (m.shake) { dilateT = 0; dilateDur = 2.6; }
+      else { dilateT = -1; timeScale = 1; }
       ring(c, { radius: rad * 1.15, dur: 1.5, kind: 2, tint: TINT.goldHot, gain: 1.7 });
       ring(c, { radius: rad * 0.72, dur: 1.0, kind: 1, tint: TINT.pale, gain: 1.5 });
       sparks(c, Math.min(B.sparks, 80), {
@@ -442,9 +555,10 @@ export default {
         tint: TINT.goldHot, up: 1.4, jitter: rad * 0.5, stagger: 0.35,
       });
       shafts(c, B.shafts, { dur: 2.6, length: 11, width: 0.34, tint: TINT.goldHot });
-      ctx.assets.petals?.burst?.(c, 220, 2.6);
+      burst(c, 220, 2.6);
       flash(0.20, 0, 0.9);
-      ctx.assets.cameraRig?.pushIn?.(0.85, 1.3);
+      if (m.shake) ctx.assets.cameraRig?.pushIn?.(0.85 * m.shakeScale, 1.3);
+      else vignette(0.15, 1.15);        // one slow inward breath instead of the push
       ctx.bus.emit('sfx', { id: 'stageup', gain: 1 });
       if (Number.isFinite(stage)) uGoldGlow.value = 1 + stage * 0.06;
     }
@@ -480,10 +594,10 @@ export default {
       const p = tmpP.copy(goldPos);
       ring(p, { radius: 4.2, dur: 0.95, kind: 1, tint: TINT.goldHot, gain: 2.0 });
       sparks(p, Math.min(64, B.sparks), { speed: 5.0, life: 1.5, size: 0.20, gravity: 2.2, tint: TINT.gold, up: 1.0 });
-      ctx.assets.petals?.burst?.(p, 90, 2.0);
+      burst(p, 90, 2.0);
       flash(0.20, 1, 3.2);
       number(0, p, { crit: true, text: '金 !' });
-      ctx.assets.cameraRig?.kick?.(0.7);
+      if (!kickCam(0.7)) calmCue(2.0);
       ctx.bus.emit('sfx', { id: 'golden', gain: 1 });
       ctx.bus.emit('vfx:golden', { point: p.clone(), kind: 'caught' });
       goldenHide();
@@ -536,9 +650,22 @@ export default {
       ring(p, { radius: 2.2, dur: 0.7, kind: 3, tint: TINT.gold, gain: 1.2 });
       sparks(p, 22, { speed: 3.0, life: 1.1, size: 0.14, gravity: 2.4, tint: TINT.goldHot, up: 1.1, jitter: 0.5 });
       flash(0.075, 1, 6);
-      ctx.assets.cameraRig?.kick?.(0.22);
-      if ((e?.tier ?? 0) >= 4) ctx.assets.petals?.burst?.(p, 40, 1.2);
+      if (!kickCam(0.22)) calmCue(0.7);
+      if ((e?.tier ?? 0) >= 4) burst(p, 40, 1.2);
     }));
+    /* Live settings. Someone reaching for the shake toggle is often reaching for it
+     * because they already feel unwell, so anything already in flight is cancelled
+     * here rather than allowed to play out: the dilation snaps back to real time and
+     * a wash that is mid-decay is cleared on the spot. */
+    offs.push(SETTINGS.on('change', () => {
+      const m = SETTINGS.motion;
+      if (!m.shake && dilateT >= 0) { dilateT = -1; timeScale = 1; }
+      if (!m.flashes && flashA > 0) {
+        flashA = 0;
+        if (dom) { dom.flash.style.opacity = '0'; dom.flash.style.filter = 'none'; }
+      }
+    }));
+
     let lastStage = -1;
     offs.push(ctx.bus.on('bloom:stage', (e) => {
       const s = Number(e?.stage);
@@ -597,12 +724,36 @@ export default {
         critFx(new THREE.Vector3(c.x + 1.2, c.y - 0.8, c.z + 1.8), 1.234e6);
         holdNumbers = 0.34;
       };
+      // accessibility harness: flip the shared store so a probe or a critic can
+      // photograph the calm path without a settings panel.
+      /** The calm cue alone, over an otherwise untouched frame — an A/B against the
+       *  plain preset shot is the only honest way to check it is actually visible. */
+      sc['vfx-vignette'] = () => { forceDom(); calmCue(1.6); holdNumbers = 0.28; };
+      /** Stage-up on the reduced-motion path: shockwave, shafts and storm intact,
+       *  no push and no lurch. Compare against `vfx-stage`. */
+      sc['vfx-stage-calm'] = () => {
+        forceDom(); SETTINGS.patch({ reducedMotion: true });
+        uAgeOverride.value = 0.30; stageUp(4); holdNumbers = 0.28;
+      };
+      sc['vfx-motion-off'] = () => SETTINGS.patch({ reducedMotion: true });
+      sc['vfx-motion-on'] = () => SETTINGS.patch({ reducedMotion: false });
+      /** The reduced-motion answer to a click: no kick, wider ring, soft vignette. */
+      sc['vfx-shake-calm'] = () => {
+        forceDom(); SETTINGS.patch({ reducedMotion: true });
+        uAgeOverride.value = 0.34;
+        const c = canopyCentre();
+        shakeFx(new THREE.Vector3(c.x + 1.0, c.y - 1.2, c.z + 2.0), 1.6);
+        number(4321, new THREE.Vector3(c.x + 1.0, c.y - 1.0, c.z + 2.0));
+        holdNumbers = 0.30;
+      };
     }
 
     /* ---------------- public API ---------------- */
     ctx.assets.vfx = {
-      ring, sparks, shafts, number, flash,
+      ring, sparks, shafts, number, flash, vignette,
       shake: shakeFx, crit: critFx, stageUp,
+      /** Live view of the shared motion gates — a read-through, never a copy. */
+      get motion() { return SETTINGS.motion; },
       golden: {
         spawn: goldenSpawn, catch: goldenCatch, hide: goldenHide,
         get active() { return gold.active; },
@@ -646,7 +797,9 @@ export default {
       object3D: group,
 
       update(dt) {
-        // --- stage-up time dilation
+        // --- stage-up time dilation (motion; belt-and-braces with the change
+        // listener so no code path can leave someone stuck in a lurch)
+        if (dilateT >= 0 && !SETTINGS.motion.shake) { dilateT = -1; timeScale = 1; }
         if (dilateT >= 0) {
           dilateT += dt;
           const u = dilateT / dilateDur;
@@ -689,6 +842,12 @@ export default {
             if (holdNumbers < 0) flashA = Math.max(0, flashA - flashDecay * dt);
           } else if (dom.flash.style.opacity !== '0') {
             dom.flash.style.opacity = '0';
+          }
+          if (vigA > 0.001) {
+            dom.vig.style.opacity = vigA.toFixed(3);
+            if (holdNumbers < 0) vigA = Math.max(0, vigA - vigDecay * dt);
+          } else if (dom.vig.style.opacity !== '0') {
+            dom.vig.style.opacity = '0';
           }
         }
       },

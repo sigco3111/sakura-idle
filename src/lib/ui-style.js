@@ -301,6 +301,46 @@ export function blossomSpray(w = 200, h = 140) {
   return enc(svg);
 }
 
+/**
+ * Slider thumb — a tapered rhombus with a real dark keyline. The keyline is
+ * load-bearing: the thumb rides ON the gold fill, so a gold-on-gold diamond
+ * without an outline disappears exactly where the player needs to see it.
+ */
+export function sliderThumb(px = 18) {
+  const svg = `<svg xmlns="http://www.w3.org/2000/svg" width="${px}" height="${px}" viewBox="0 0 18 18">
+    <defs><linearGradient id="st" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#FFFBEA"/><stop offset=".46" stop-color="${T.goldPale}"/>
+      <stop offset="1" stop-color="#A8792C"/>
+    </linearGradient></defs>
+    <path d="M9 1.1 L16.9 9 L9 16.9 L1.1 9 Z" fill="url(#st)"
+      stroke="rgba(40,28,8,.92)" stroke-width="1.1" stroke-linejoin="round"/>
+    <path d="M9 3.6 L14.4 9 L9 8.2 L4.6 8.6 Z" fill="#FFFDF0" opacity=".6"/>
+  </svg>`;
+  return enc(svg);
+}
+
+/**
+ * Speaker glyph for the one-click mute button. Ink body so it reads on
+ * parchment; gold arcs when live, a vermilion cross when silenced — the state
+ * is carried by SHAPE, not only by colour.
+ */
+export function speakerIcon(on = true) {
+  const mark = on
+    ? `<g fill="none" stroke="${T.goldInk}" stroke-width="1.8" stroke-linecap="round">
+         <path d="M15.6 8.8 C 17.7 10.7 17.7 13.3 15.6 15.2"/>
+         <path d="M18.6 5.9 C 22.3 9.3 22.3 14.7 18.6 18.1"/>
+       </g>`
+    : `<g fill="none" stroke="${T.vermilion}" stroke-width="2.1" stroke-linecap="round">
+         <path d="M15.8 9.2 L21.6 14.8"/><path d="M21.6 9.2 L15.8 14.8"/>
+       </g>`;
+  const svg = `<svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24">
+    <path d="M3.4 9.5 H6.8 L11.5 5.1 A.85 .85 0 0 1 12.95 5.72 V18.28 A.85 .85 0 0 1 11.5 18.9 L6.8 14.5 H3.4 A1.05 1.05 0 0 1 2.35 13.45 V10.55 A1.05 1.05 0 0 1 3.4 9.5 Z"
+      fill="${T.ink}" stroke="rgba(255,255,255,.45)" stroke-width=".55" stroke-linejoin="round"/>
+    ${mark}
+  </svg>`;
+  return enc(svg);
+}
+
 /** A stylised five-petal blossom — the Petals currency glyph. */
 export function blossomIcon(size = 26) {
   const p = [];
@@ -1157,6 +1197,151 @@ export function uiCss() {
   border:1px solid rgba(74,64,52,.42);border-radius:2px;color:#4A3F30;width:calc(var(--u)*10);
   box-shadow:0 2px 4px rgba(60,44,26,.16) inset,0 1px 0 rgba(255,255,255,.6);}
 
+/* ================= sound & motion (accessibility) =================
+   Not one default form control anywhere in here (ART_BIBLE §7): the slider is
+   a gold-filled track with a keylined rhombus thumb, the toggle is a bevelled
+   parchment capsule that fills with gold. Both are real focusable widgets with
+   ARIA roles, because someone turning the shake off may be doing it by keyboard
+   while already feeling unwell. */
+#ui-root .sk-sgrid{display:grid;grid-template-columns:1fr 1fr;gap:0 calc(var(--u)*1.7);align-items:start;}
+#ui-root .sk-sgrid>div{min-width:0;}
+@media (max-width:1024px){#ui-root .sk-sgrid{grid-template-columns:1fr;}}
+
+/* --- group head: serif small-caps + kanji over a diamond-centred rule --- */
+#ui-root .sk-sgrp{margin:calc(var(--u)*.2) 0 calc(var(--u)*.34);}
+#ui-root .sk-sgrp .hd{display:flex;align-items:baseline;justify-content:center;gap:calc(var(--u)*.6);}
+#ui-root .sk-sgrp h4{font-family:var(--serif);font-size:calc(var(--u)*1.0);font-weight:600;
+  letter-spacing:.34em;text-indent:.34em;color:#2F281F;text-transform:uppercase;}
+#ui-root .sk-sgrp .kj{font-family:var(--serif);font-size:calc(var(--u)*.98);letter-spacing:.16em;
+  color:var(--gold-ink);}
+#ui-root .sk-sgrp .fl{position:relative;height:10px;margin-top:calc(var(--u)*.26);
+  background:${brule} no-repeat center/100% 10px;}
+#ui-root .sk-sgrp .fl::after{content:"";position:absolute;left:50%;top:0;
+  width:calc(var(--u)*.7);height:calc(var(--u)*.7);margin-left:calc(var(--u)*-.35);
+  transform:translateY(calc(var(--u)*-.05));
+  background:${dia} no-repeat center/contain;filter:drop-shadow(0 1px 0 rgba(255,255,255,.6));}
+
+/* --- slider --- */
+#ui-root .sk-sld{padding:calc(var(--u)*.44) 0 calc(var(--u)*.5);outline:none;
+  border-bottom:1px dashed rgba(74,64,52,.2);}
+#ui-root .sk-sld .hd{display:flex;align-items:baseline;justify-content:space-between;
+  gap:calc(var(--u)*.5);margin-bottom:calc(var(--u)*.4);}
+#ui-root .sk-sld .lbl{font-family:var(--serif);font-size:calc(var(--u)*.92);color:#332B22;
+  letter-spacing:.06em;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;}
+#ui-root .sk-sld .lbl em{font-style:normal;color:var(--gold-ink);font-size:calc(var(--u)*.84);
+  letter-spacing:.1em;margin-left:.5em;}
+#ui-root .sk-sld .rt{display:flex;align-items:baseline;gap:calc(var(--u)*.42);flex:0 0 auto;}
+#ui-root .sk-sld .mu{display:none;font-size:calc(var(--u)*.66);font-weight:700;letter-spacing:.14em;
+  text-transform:uppercase;color:#7A3527;padding:0 calc(var(--u)*.26);border-radius:2px;
+  background:rgba(255,246,238,.75);border:1px solid rgba(122,53,39,.42);}
+#ui-root .sk-sld.off .mu{display:inline-block;}
+#ui-root .sk-sld .val{font-family:var(--serif);font-size:calc(var(--u)*1.0);font-weight:600;
+  color:#3E3220;min-width:3.1em;text-align:right;}
+#ui-root .sk-sld .trk{position:relative;height:calc(var(--u)*.62);border-radius:99px;cursor:pointer;
+  margin:0 calc(var(--u)*.6);touch-action:none;
+  background:linear-gradient(180deg,rgba(96,80,58,.36),rgba(150,132,102,.18));
+  border:1px solid rgba(74,64,52,.52);
+  box-shadow:0 2px 4px rgba(60,44,26,.3) inset,0 1px 0 rgba(255,255,255,.62);}
+#ui-root .sk-sld .fil{position:absolute;left:0;top:0;bottom:0;width:0%;border-radius:99px;
+  background:linear-gradient(90deg,${T.goldDeep} 0%,#CFA43E 52%,${T.goldPale} 100%);
+  box-shadow:0 1px 0 rgba(255,255,255,.5) inset,0 0 calc(var(--u)*.4) rgba(201,162,39,.42);}
+#ui-root .sk-sld .thb{position:absolute;top:50%;left:0%;
+  width:calc(var(--u)*1.22);height:calc(var(--u)*1.22);
+  margin:calc(var(--u)*-.61) 0 0 calc(var(--u)*-.61);pointer-events:none;
+  background:${sliderThumb(22)} no-repeat center/contain;
+  filter:drop-shadow(0 1px 2px rgba(40,26,6,.55));
+  transition:transform .1s var(--ease);}
+#ui-root .sk-sld .trk:hover .thb{transform:scale(1.1);}
+#ui-root .sk-sld:focus-visible{outline:none;}
+#ui-root .sk-sld:focus-visible .trk{border-color:rgba(232,197,106,.95);
+  box-shadow:0 2px 4px rgba(60,44,26,.3) inset,0 0 0 2px rgba(232,197,106,.55);}
+#ui-root .sk-sld:focus-visible .thb{transform:scale(1.14);}
+/* muted: the control stays fully readable but visibly inert — a dimmed slider
+   that still shows its number tells you the level is remembered, not lost */
+#ui-root .sk-sld.off .fil{background:linear-gradient(90deg,#8E8571,#B8AD96);box-shadow:none;}
+#ui-root .sk-sld.off .val{color:#6B5E4B;}
+#ui-root .sk-sld.off .thb{filter:drop-shadow(0 1px 2px rgba(40,26,6,.4)) saturate(.25) brightness(1.04);}
+
+/* --- toggle switch --- */
+#ui-root .sk-tgl{display:flex;width:100%;align-items:center;text-align:left;
+  gap:calc(var(--u)*.8);padding:calc(var(--u)*.48) 0;
+  border-bottom:1px dashed rgba(74,64,52,.2);}
+#ui-root .sk-tgl .tx{flex:1 1 auto;min-width:0;}
+#ui-root .sk-tgl .lbl{font-family:var(--serif);font-size:calc(var(--u)*.92);color:#332B22;letter-spacing:.06em;}
+#ui-root .sk-tgl .lbl em{font-style:normal;color:var(--gold-ink);font-size:calc(var(--u)*.84);
+  letter-spacing:.1em;margin-left:.5em;}
+#ui-root .sk-tgl .ds{font-family:var(--serif);font-style:italic;font-size:var(--t-sec);
+  color:var(--ink-soft);line-height:1.4;margin-top:2px;}
+#ui-root .sk-tgl .lk{display:none;font-size:var(--t-sec);font-weight:600;letter-spacing:.06em;
+  color:var(--gold-ink);margin-top:3px;}
+#ui-root .sk-tgl.dis .lk{display:block;}
+#ui-root .sk-tgl .sw{position:relative;flex:0 0 auto;
+  width:calc(var(--u)*2.75);height:calc(var(--u)*1.35);border-radius:99px;
+  background:linear-gradient(180deg,rgba(96,80,58,.32),rgba(150,132,102,.16));
+  border:1px solid rgba(74,64,52,.52);
+  box-shadow:0 2px 4px rgba(60,44,26,.28) inset,0 1px 0 rgba(255,255,255,.62);
+  transition:background .16s ease,border-color .16s ease,box-shadow .16s ease;}
+#ui-root .sk-tgl .sw>i{position:absolute;top:calc(var(--u)*.11);left:calc(var(--u)*.11);
+  width:calc(var(--u)*1.07);height:calc(var(--u)*1.07);border-radius:99px;
+  background:radial-gradient(120% 120% at 34% 26%,#FFFCEF,#E9DCC0 54%,#B9A98B);
+  border:1px solid rgba(70,56,30,.6);
+  box-shadow:0 1px 2px rgba(40,26,6,.38),0 1px 0 rgba(255,255,255,.55) inset;
+  transition:transform .16s var(--ease),background .16s ease;}
+#ui-root .sk-tgl.on .sw{border-color:#7A5A18;
+  background:linear-gradient(180deg,${T.goldLo} 0%,#DFBE60 48%,${T.goldHi} 100%);
+  box-shadow:0 1px 0 rgba(255,255,255,.55) inset,0 -2px 4px rgba(120,84,16,.3) inset,
+             0 0 calc(var(--u)*.7) rgba(232,197,106,.5);}
+#ui-root .sk-tgl.on .sw>i{transform:translateX(calc(var(--u)*1.42));
+  background:radial-gradient(120% 120% at 34% 26%,#FFFEF6,#FFF3D2 54%,#D5B25A);}
+#ui-root .sk-tgl:hover .sw{border-color:rgba(74,64,52,.8);}
+#ui-root .sk-tgl.on:hover .sw{border-color:#5E4310;}
+#ui-root .sk-tgl:focus-visible{outline:none;}
+#ui-root .sk-tgl:focus-visible .sw{box-shadow:0 0 0 2px rgba(232,197,106,.7),0 2px 4px rgba(60,44,26,.28) inset;}
+/* forced off by Reduce motion: still legible, plainly not yours to set right now */
+#ui-root .sk-tgl.dis{cursor:not-allowed;}
+/* the row's own NAME stays the primary text — dim it too far and the gold
+   "held off by…" line becomes the loudest thing in the group */
+#ui-root .sk-tgl.dis .lbl{opacity:.8;}
+#ui-root .sk-tgl.dis .ds{opacity:.62;}
+#ui-root .sk-tgl.dis .sw{opacity:.55;}
+#ui-root .sk-tgl.dis:hover .sw{border-color:rgba(74,64,52,.52);}
+
+/* --- the "we already honoured your system setting" note --- */
+#ui-root .sk-note{display:flex;gap:calc(var(--u)*.6);align-items:flex-start;
+  margin:calc(var(--u)*.55) 0 calc(var(--u)*.2);
+  padding:calc(var(--u)*.55) calc(var(--u)*.72);border-radius:2px;
+  border:1px solid rgba(201,162,39,.55);
+  background:linear-gradient(180deg,rgba(255,250,230,.85),rgba(240,228,198,.6));
+  box-shadow:0 1px 0 rgba(255,255,255,.65) inset,0 1px 3px rgba(60,44,26,.12);}
+#ui-root .sk-note .d{flex:0 0 auto;width:calc(var(--u)*.78);height:calc(var(--u)*.78);
+  margin-top:calc(var(--u)*.16);background:${dia} no-repeat center/contain;}
+#ui-root .sk-note p{font-family:var(--serif);font-style:italic;font-size:calc(var(--u)*.88);
+  color:${T.inkSoft};line-height:1.46;}
+
+/* --- always-visible one-click mute, bottom-left of the HUD ---
+   The tab-behind-a-panel settings screen is the right home for the full mix,
+   but when a sound startles you, you reach for one button and you reach NOW. */
+#ui-root .sk-mute{position:absolute;left:calc(var(--u)*1.35);bottom:calc(var(--u)*1.5);
+  width:calc(var(--u)*2.8);height:calc(var(--u)*2.8);border-radius:99px;
+  display:grid;place-items:center;pointer-events:auto;z-index:3;
+  background:linear-gradient(180deg,rgba(255,251,240,.92),rgba(224,210,184,.84));
+  border:1px solid rgba(74,64,52,.5);
+  box-shadow:0 1px 0 rgba(255,255,255,.72) inset,0 -2px 5px rgba(120,96,60,.18) inset,
+             0 2px 8px rgba(30,20,10,.36);
+  transition:transform .14s var(--ease),box-shadow .16s ease,background .16s ease;}
+#ui-root .sk-mute::before{content:"";position:absolute;inset:3px;border-radius:99px;
+  pointer-events:none;border:1px solid rgba(201,162,39,.55);}
+#ui-root .sk-mute i{width:calc(var(--u)*1.5);height:calc(var(--u)*1.5);
+  background:${speakerIcon(true)} no-repeat center/contain;
+  filter:drop-shadow(0 1px 0 rgba(255,255,255,.5));}
+#ui-root .sk-mute:hover{transform:translateY(-1px);
+  box-shadow:0 1px 0 rgba(255,255,255,.8) inset,0 2px 10px rgba(30,20,10,.4),
+             0 0 calc(var(--u)*1.1) rgba(232,197,106,.7);}
+#ui-root .sk-mute:active{transform:translateY(1px) scale(.97);}
+#ui-root .sk-mute.off{background:linear-gradient(180deg,rgba(234,222,204,.88),rgba(202,188,164,.82));
+  box-shadow:0 2px 5px rgba(56,42,22,.32) inset,0 1px 0 rgba(255,255,255,.5);}
+#ui-root .sk-mute.off i{background-image:${speakerIcon(false)};}
+
 /* ================= stage-up set piece ================= */
 #ui-root .sk-stageup{position:absolute;inset:0;display:grid;place-items:center;pointer-events:none;z-index:6;
   animation:sk-fade .3s ease both;}
@@ -1437,6 +1622,16 @@ export function uiCss() {
 @media (prefers-reduced-motion:reduce){
   #ui-root *{animation-duration:.01ms!important;transition-duration:.01ms!important;}
 }
+/* The in-game "Reduce motion" switch, applied by 65-ui as a class on #ui-root.
+   Someone who turns it on because movement makes them unwell did not mean
+   "everything except the HUD": the breathing icons, the sheen sweeps, the
+   pulsing call-to-action and the panel slide-ins are all movement too, and the
+   camera settings alone cannot reach them. Iteration count is pinned to 1 so
+   looping decoration genuinely stops instead of running invisibly fast. */
+#ui-root.rm *,#ui-root.rm *::before,#ui-root.rm *::after{
+  animation-duration:.01ms!important;animation-delay:0ms!important;
+  animation-iteration-count:1!important;
+  transition-duration:.01ms!important;transition-delay:0ms!important;}
 `;
 }
 

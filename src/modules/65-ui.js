@@ -12,6 +12,7 @@
 
 import * as THREE from 'three';
 import { injectUiStyle } from '../lib/ui-style.js';
+import { SETTINGS } from '../lib/settings.js';
 import {
   h, clear, mount, setText, setClass, setW,
   formatNumber, formatRate, formatTime,
@@ -19,6 +20,7 @@ import {
   UPGRADE_FAMILIES, CONSTEL_BRANCHES,
   makeTicker, panel, bar, stars, corners, goldBtn,
   buyBtn, segmented, stageCapsule, rarityOf, groupRule, sealedRow,
+  slider, toggleRow, groupHead, noteBox,
 } from '../lib/ui-widgets.js';
 
 const SVGNS = 'http://www.w3.org/2000/svg';
@@ -131,6 +133,98 @@ export default {
     const EMPTY_RATES = { perSecond: 0, perShake: 1, critChance: 0.03, critMult: 8, totalTenders: 0 };
 
     /* ============================================================== *
+     * 1b.  Settings bridge
+     *
+     * SETTINGS (src/lib/settings.js) is the single source of truth — this
+     * module keeps NO copy of a volume or a motion flag. It writes through
+     * SETTINGS.set/patch, and re-reads SETTINGS.all whenever anything changes,
+     * including changes made by somebody else.
+     *
+     * The extra `ctx.assets.audio` calls below are belt and braces. The audio
+     * module has its own bus mix; until it applies SETTINGS itself, driving its
+     * public API from here is what makes the master volume and the mutes do
+     * something audible TODAY rather than at some later commit. Every call is
+     * optional-chained: `ctx.assets.audio` does not exist in shot mode, and
+     * boots at order 70 — after us.
+     * ============================================================== */
+    const AUDIO = () => ctx.assets?.audio ?? null;
+    /** The graph's designed stem mix (70-audio: music/amb .9, sfx .8). The
+     *  player's per-stem volume SCALES that mix instead of replacing it, so a
+     *  slider at 100% restores the sound designer's balance and never exceeds it.
+     *  Master is deliberately left out — `setVolume()` already owns it, and
+     *  applying it twice would square it. */
+    const STEM = { music: 0.9, amb: 0.9, sfx: 0.8 };
+    /** Tracks the audio module's gesture-unlock so the mix can be re-applied. */
+    let audioUnlocked = false;
+
+    function applyAudioSettings() {
+      const a = AUDIO();
+      if (!a) return;
+      const s = SETTINGS.all;
+      try { a.setVolume?.(s.masterVolume); } catch { /* audio graph not up yet */ }
+      try { a.setMuted?.(!!s.muteAll); } catch { /* ignore */ }
+      /* Separate stems are the audio agent's next job; if the setters are
+         already there, honour the music/sfx mutes now. Ambience rides with
+         music — it is the same continuous bed, not an effect. */
+      const music = (s.muteAll || s.muteMusic) ? 0 : s.musicVolume;
+      const sfx = (s.muteAll || s.muteSfx) ? 0 : s.sfxVolume;
+      try { a.setMusicVolume?.(STEM.music * music); } catch { /* ignore */ }
+      try { a.setAmbientVolume?.(STEM.amb * music); } catch { /* ignore */ }
+      try { a.setSfxVolume?.(STEM.sfx * sfx); } catch { /* ignore */ }
+    }
+
+    /** Controls currently on screen, so a live SETTINGS change repaints them. */
+    let setCtl = null;
+    /** The always-visible HUD mute button; built with the rest of the HUD below. */
+    let muteBtn = null;
+
+    function syncSettingsUi() {
+      const s = SETTINGS.all;
+      /* Reduce motion covers the HUD's own animation too — see ui-style.js
+         `#ui-root.rm`. The camera flags cannot reach DOM keyframes. */
+      setClass(root, 'rm', !!s.reducedMotion);
+      if (muteBtn) {
+        setClass(muteBtn, 'off', !!s.muteAll);
+        muteBtn.setAttribute('aria-pressed', s.muteAll ? 'true' : 'false');
+        muteBtn.setAttribute('aria-label', s.muteAll ? 'Unmute all sound' : 'Mute all sound');
+        muteBtn.title = s.muteAll ? 'Sound is off — click to bring it back' : 'Mute all sound  音';
+      }
+
+      /* No isConnected test here: buildSoundAndMotion() paints its controls
+         before they are mounted, and an isConnected check would drop the handle
+         at build time and leave every control in the panel dead. closeModal()
+         is what releases it. */
+      if (!setCtl) return;
+      setCtl.master.set(s.masterVolume);
+      setCtl.music.set(s.musicVolume);
+      setCtl.sfx.set(s.sfxVolume);
+      setCtl.master.setDimmed(s.muteAll);
+      setCtl.music.setDimmed(s.muteAll || s.muteMusic);
+      setCtl.sfx.setDimmed(s.muteAll || s.muteSfx);
+      setCtl.muteAll.set(s.muteAll);
+      setCtl.muteMusic.set(s.muteMusic);
+      setCtl.muteSfx.set(s.muteSfx);
+      /* muteAll subsumes the per-stem mutes: showing them as still-settable
+         while nothing can be heard is a lie about what the controls do */
+      setCtl.muteMusic.setDisabled(s.muteAll);
+      setCtl.muteSfx.setDisabled(s.muteAll);
+
+      const rm = !!s.reducedMotion;
+      setCtl.reduced.set(rm);
+      setCtl.shake.set(rm ? false : s.screenShake);
+      setCtl.drift.set(rm ? false : s.cameraDrift);
+      setCtl.flashes.set(rm ? false : s.flashes);
+      setCtl.shake.setDisabled(rm);
+      setCtl.drift.setDisabled(rm);
+      setCtl.flashes.setDisabled(rm);
+    }
+
+    const offSettings = SETTINGS.on('change', () => {
+      applyAudioSettings();
+      syncSettingsUi();
+    });
+
+    /* ============================================================== *
      * 2.  DOM skeleton — HUD
      * ============================================================== */
     const ui = h('div.sk-ui', { style: { position: 'absolute', inset: '0' } });
@@ -209,6 +303,19 @@ export default {
       h('span', { style: { opacity: '.66', letterSpacing: '.16em' } }, '花びら'));
     ui.append(shakeBtn);
 
+    /* One-click mute, bottom-left, always on screen. The full mix lives behind
+       the 設 tab, but a sound that startles you needs a control you can hit in
+       one click without hunting through a panel — so this is not a shortcut for
+       the settings screen, it is the thing people actually reach for. */
+    muteBtn = h('button.sk-mute', {
+      type: 'button',
+      'aria-pressed': 'false',
+      'aria-label': 'Mute all sound',
+      title: 'Mute all sound  音',
+      onclick: (e) => { e.stopPropagation(); SETTINGS.set('muteAll', !SETTINGS.get('muteAll')); },
+    }, h('i'));
+    ui.append(muteBtn);
+
     const goldenHint = h('div.sk-golden', h('i'), h('span', '金花弁 — catch it'));
     goldenHint.style.display = 'none';
     ui.append(goldenHint);
@@ -257,7 +364,11 @@ export default {
       syncTabs();
       return scrim;
     }
-    function closeModal() { if (scrim) { scrim.remove(); scrim = null; syncTabs(); } }
+    function closeModal() {
+      if (!scrim) return;
+      scrim.remove(); scrim = null; setCtl = null;
+      syncTabs();
+    }
 
     /* ============================================================== *
      * 4.  Tender panel
@@ -639,14 +750,116 @@ export default {
     /* ============================================================== *
      * 8.  Settings modal
      * ============================================================== */
+    /**
+     * Sound 音 + Motion 動.
+     *
+     * The motion half is an ACCESSIBILITY control, not a taste preference:
+     * camera shake can genuinely make people unwell, so every switch here takes
+     * effect on the next frame, persists in its own localStorage key (survives a
+     * hard reset of the save), and cannot be reached into by the game state.
+     * Nothing in here is gated behind a confirm or an "apply".
+     */
+    function buildSoundAndMotion() {
+      const s = SETTINGS.all;
+      const write = (k) => (v) => { SETTINGS.set(k, v); syncSettingsUi(); };
+
+      const master = slider({
+        label: 'Master', kanji: '全体', ariaLabel: 'Master volume',
+        value: s.masterVolume, onInput: write('masterVolume'),
+      });
+      const music = slider({
+        label: 'Music', kanji: '音楽', ariaLabel: 'Music volume',
+        value: s.musicVolume, onInput: write('musicVolume'),
+      });
+      const sfx = slider({
+        label: 'Sound effects', kanji: '効果音', ariaLabel: 'Sound effects volume',
+        value: s.sfxVolume, onInput: write('sfxVolume'),
+      });
+      const muteAll = toggleRow({
+        label: 'Silence everything', kanji: '消音',
+        desc: 'one switch for the whole grove',
+        value: s.muteAll, onChange: write('muteAll'),
+      });
+      const muteMusic = toggleRow({
+        label: 'Mute music', kanji: '音楽切',
+        desc: 'the koto, and the wind bed under it',
+        lockNote: 'already silent — everything is muted',
+        value: s.muteMusic, onChange: write('muteMusic'),
+      });
+      const muteSfx = toggleRow({
+        label: 'Mute sound effects', kanji: '効果音切',
+        desc: 'the bough, the falling petals, the small bells',
+        lockNote: 'already silent — everything is muted',
+        value: s.muteSfx, onChange: write('muteSfx'),
+      });
+
+      const HELD = 'held off by Reduce motion';
+      const reduced = toggleRow({
+        label: 'Reduce motion', kanji: '動きを控える',
+        desc: 'holds all three below off at once, whatever they are set to',
+        value: s.reducedMotion, onChange: write('reducedMotion'),
+      });
+      const shake = toggleRow({
+        label: 'Screen shake', kanji: '揺れ',
+        desc: 'the small camera kick when you shake the bough',
+        lockNote: HELD, value: s.screenShake, onChange: write('screenShake'),
+      });
+      const drift = toggleRow({
+        label: 'Camera drift', kanji: '漂い',
+        desc: 'the slow breathing of the view while you stand still',
+        lockNote: HELD, value: s.cameraDrift, onChange: write('cameraDrift'),
+      });
+      const flashes = toggleRow({
+        label: 'Flashes', kanji: '閃光',
+        desc: 'the bright bloom on a critical shake or a new stage',
+        lockNote: HELD, value: s.flashes, onChange: write('flashes'),
+      });
+
+      /* Someone who set prefers-reduced-motion system-wide should be TOLD it was
+         honoured. Leaving them to find the toggle and wonder whether the damage
+         was already done is the failure this note exists to prevent. */
+      let osReduce = false;
+      try { osReduce = !!window.matchMedia?.('(prefers-reduced-motion: reduce)')?.matches; } catch { /* ignore */ }
+
+      const root = h('div',
+        h('div.sk-sgrid',
+          h('div',
+            groupHead('Sound', '音'),
+            master.root, music.root, sfx.root,
+            muteAll.root, muteMusic.root, muteSfx.root),
+          h('div',
+            groupHead('Motion', '動'),
+            reduced.root, shake.root, drift.root, flashes.root,
+            osReduce
+              ? noteBox('Your system asks for reduced motion. The grove noticed before you '
+                + 'arrived and left these off — turn any of them back on whenever you like.')
+              : h('div.sk-flavour', { style: { marginTop: 'calc(var(--u)*.7)', lineHeight: '1.5' } },
+                'None of this changes the game — only how much the picture moves. '
+                + 'Nothing you earn depends on it.')),
+        ),
+      );
+
+      setCtl = {
+        root, master, music, sfx, muteAll, muteMusic, muteSfx,
+        reduced, shake, drift, flashes,
+      };
+      syncSettingsUi();
+      return root;
+    }
+
     function buildSettings() {
-      const p = panel({ title: 'SETTINGS', kanji: '設 定', cls: 'sk-modal', close: closeModal });
+      const p = panel({ title: 'SETTINGS', kanji: '設 定', cls: 'sk-modal wide', close: closeModal });
       const io = h('textarea.sk-io', { spellcheck: 'false', placeholder: 'paste a save here, or press EXPORT to read yours out' });
       const confirmIn = h('input.sk-in', { type: 'text', placeholder: 'type ERASE' });
       const status = h('div.sk-hint', { style: { textAlign: 'right', minHeight: '1.3em' } }, '');
       const say = (m) => { status.textContent = m; };
       const st = A.state();
       mount(p.body,
+        /* Sound and Motion sit FIRST. Everything under them is save plumbing
+           and statistics; the accessibility controls are what someone opens
+           this panel in a hurry to find. */
+        buildSoundAndMotion(),
+        groupHead('The grove', '記録'),
         h('div.sk-row', h('div', h('div.lbl', 'Export save'), h('div.sub', 'base64 · copy it somewhere safe')),
           goldBtn('EXPORT', () => { io.value = A.exportSave(); io.select?.(); say('written into the box below'); })),
         h('div.sk-row', h('div', h('div.lbl', 'Import save'), h('div.sub', 'overwrites everything you have now')),
@@ -1018,6 +1231,15 @@ export default {
         if (stageCardT <= 0) { stageCard.remove(); stageCard = null; }
       }
 
+      /* The audio graph only exists after the browser's first-gesture unlock, so
+         the stem gains set before that landed on nothing. Re-apply the moment it
+         comes up — one boolean compare a frame, and it means a player who muted
+         during the title beat stays muted once sound is actually possible. */
+      if (!ctx.shotMode) {
+        const un = !!AUDIO()?.unlocked;
+        if (un !== audioUnlocked) { audioUnlocked = un; if (un) applyAudioSettings(); }
+      }
+
       slow -= dt;
       if (slow <= 0 || dirty) {
         slow = 0.125; dirty = false;
@@ -1051,7 +1273,11 @@ export default {
       ctx.bus.on('petals:gain', (p) => { if (p && p.amount > 0 && p.point) flyNumber(p.amount, p.point, !!p.crit); }),
       ctx.bus.on('bloom:stage', refresh),
       ctx.bus.on('time:phase', (p) => { phaseId = p?.phase ?? phaseId; refresh(); }),
+      /* audio boots at order 70 — after us — so the saved mix is pushed once
+         every module is up rather than at our own setup, when it would be lost */
+      ctx.bus.on('game:ready', () => { applyAudioSettings(); syncSettingsUi(); }),
       offResize,
+      offSettings,
     ];
 
     /* ============================================================== *
@@ -1095,6 +1321,18 @@ export default {
       S['ui-star'] = () => { base('rich'); selectTab('star'); };
       S['ui-star-late'] = () => { base('lategame'); selectTab('star'); };
       S['ui-settings'] = () => { base('rich'); selectTab('set'); };
+      /* Both of these WRITE to SETTINGS, which persists — debug-only, and named
+         so nobody wires them into anything a player can reach. */
+      S['ui-settings-reduced'] = () => {
+        base('rich');
+        SETTINGS.set('reducedMotion', true);
+        selectTab('set');
+      };
+      S['ui-settings-muted'] = () => {
+        base('rich');
+        SETTINGS.patch({ muteAll: false, muteMusic: true, muteSfx: false, masterVolume: 0.8 });
+        selectTab('set');
+      };
       S['ui-storm'] = () => { base('rich'); try { S['game-storm']?.(); } catch { /* ignore */ } refresh(); update(0.2); };
       /* `game-stageup` bumps state.stage by hand, but the harness then warms 420
          frames and 60-game's applyStage() recomputes the stage from
@@ -1117,8 +1355,16 @@ export default {
       };
     }
 
-    window.__ui = { toast, stageUp, welcomeBack, selectTab, closeModal, refresh, adapter: A };
+    window.__ui = {
+      toast, stageUp, welcomeBack, selectTab, closeModal, refresh, adapter: A,
+      /** Exposed for probes and the audio agent: settings are read-only from
+       *  here, SETTINGS itself is the place to write them. */
+      settings: SETTINGS,
+      applyAudioSettings,
+    };
 
+    applyAudioSettings();
+    syncSettingsUi();
     update(0);
     update(0.4);
 
