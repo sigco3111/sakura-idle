@@ -138,6 +138,39 @@ vec3  applyAerial(vec3 color, float viewDist, float worldY)
 
 Every surface module calls `nprShade` + `applyAerial` rather than rolling its own lighting.
 
+## Player settings — read them, never fork them
+
+`src/lib/settings.js` is the scaffold-owned single source of truth for audio levels and
+motion/accessibility preferences. It persists to its own localStorage key (`sakura.settings.v1`),
+separate from the save game on purpose: a hard reset must not wipe someone's accessibility
+preferences, and a corrupt save must not trap them with motion they cannot tolerate.
+
+```js
+import { SETTINGS } from '../lib/settings.js';
+
+// audio buses — apply these, do not invent your own volume maths
+musicBus.gain.value = SETTINGS.musicGain();   // 0 when muteMusic or muteAll
+sfxBus.gain.value   = SETTINGS.sfxGain();
+
+// motion gates — always read SETTINGS.motion, never the raw flags
+if (SETTINGS.motion.shake)   applyCameraKick(amp * SETTINGS.motion.shakeScale);
+if (SETTINGS.motion.drift)   applyIdleDrift();
+if (SETTINGS.motion.flashes) flashScreen();
+
+// react live — a setting that needs a reload to take effect is a bug
+SETTINGS.on('change', ({ key, all }) => { /* re-apply immediately */ });
+```
+
+Keys: `masterVolume`, `musicVolume`, `sfxVolume` (0..1), `muteAll`, `muteMusic`, `muteSfx`,
+`screenShake`, `cameraDrift`, `flashes`, `petalBursts`, `reducedMotion`.
+
+`reducedMotion` defaults to the OS `prefers-reduced-motion` media query and acts as a master
+switch over the motion flags. `SETTINGS.set(k, v)` clamps, persists and notifies; `SETTINGS.patch({…})`
+does several at once; `SETTINGS.reset()` restores defaults.
+
+Two hard rules: **no module may keep its own copy of a volume or motion flag**, and every consumer
+must apply changes on the `change` event immediately rather than at next boot.
+
 ## Non-negotiable technical rules
 
 1. **No network requests.** No CDN, no external textures/fonts/HDRIs/audio files.
