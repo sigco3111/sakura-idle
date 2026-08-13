@@ -15,8 +15,11 @@ window.__ctx = ctx;
 const errors = [];
 window.__errors = errors;
 
-// Initialize Vercel Web Analytics
-inject();
+// Vercel Web Analytics. Skipped under the screenshot/capture harness: it only
+// transmits from a real production deployment anyway, but automated runs against
+// the deployed URL would otherwise register as pageviews and skew the numbers.
+// Real players are never in shotMode, so production behaviour is unchanged.
+if (!ctx.shotMode) inject();
 
 const descriptors = Object.entries(found)
   .map(([path, mod]) => {

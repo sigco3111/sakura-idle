@@ -173,7 +173,10 @@ must apply changes on the `change` event immediately rather than at next boot.
 
 ## Non-negotiable technical rules
 
-1. **No network requests.** No CDN, no external textures/fonts/HDRIs/audio files.
+1. **No network requests** *for assets*. No CDN, no external textures/fonts/HDRIs/audio files.
+   ONE deliberate exception, added by the project owner and not a mistake to "fix": Vercel Web
+   Analytics (`inject()` in `src/main.js`), which is skipped in shotMode so captures stay clean.
+   Do not remove it, and do not add any further network calls.
    Everything procedural or generated at runtime (canvas, noise, DataTexture, WebAudio).
    The harness will flag any request. Fonts: system stack only.
 2. **Colour management.** Renderer is `SRGBColorSpace` output + `ACESFilmicToneMapping`.
