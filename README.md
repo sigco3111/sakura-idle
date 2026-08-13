@@ -94,3 +94,7 @@ complete idle game attached, and a set of tools that make automated visual itera
 ## Licence
 
 MIT. Sakura variety names and the Japanese text are ordinary botanical/common terms.
+
+---
+
+Made with ❤️ by Opus 5 and [@danmana](https://x.com/danmana) · [source](https://github.com/danmana/sakura-idle/)

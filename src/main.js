@@ -115,8 +115,16 @@ window.__game = {
   /** Blocking GPU sync — required for any honest frame-time measurement. */
   syncGPU() { const gl = ctx.renderer.getContext(); gl.finish(); },
   setCamera(preset) { applyPreset(ctx.camera, preset); ctx.bus.emit('camera:preset', preset); },
-  /** Toggle DOM UI for clean 3D-only comparison shots. */
-  setUI(on) { const r = document.getElementById('ui-root'); if (r) r.style.display = on ? '' : 'none'; },
+  /** Toggle DOM UI for clean 3D-only comparison shots.
+   *  #credit lives outside #ui-root (so the UI module cannot rebuild it away) and
+   *  therefore has to be hidden in step, or every `--ui 0` art shot would carry the
+   *  attribution line. */
+  setUI(on) {
+    for (const id of ['ui-root', 'credit']) {
+      const el = document.getElementById(id);
+      if (el) el.style.display = on ? '' : 'none';
+    }
+  },
   /** Modules can register named debug states (e.g. 'night', 'bloom-stage'). */
   scenarios: {},
   info() {
