@@ -39,10 +39,10 @@ const EVENT_PRIORITY = ['storm', 'clickFrenzy', 'frenzy', 'bloomfall', 'rain', '
  * the chip forced 花びら to wrap and the HUD plate grew 30 px on dusk alone.
  */
 const PHASE_META = {
-  dawn: { kanji: '朝', name: 'DAWN', note: '첫 빛' },
-  day: { kanji: '昼', name: 'DAY', note: '온갖 햇살' },
-  dusk: { kanji: '夕', name: 'DUSK', note: '황금시 +15%' },
-  night: { kanji: '夜', name: 'NIGHT', note: '보름달 +25%' },
+  dawn: { kanji: '朝', name: '새벽', note: '첫 빛' },
+  day: { kanji: '昼', name: '낮', note: '온갖 햇살' },
+  dusk: { kanji: '夕', name: '황혼', note: '황금시 +15%' },
+  night: { kanji: '夜', name: '밤', note: '보름달 +25%' },
 };
 /**
  * Keyboard map — the whole of it, in one place, so a new binding cannot quietly
@@ -284,7 +284,7 @@ export default {
     const elBlossom = h('span.num', '0');
     const elEssence = h('span.num', '0');
     const elStageK = h('div.sk-stage-k', '冬芽');
-    const elStageN = h('div.sk-stage-n', 'Winter Bud');
+    const elStageN = h('div.sk-stage-n', '겨울 눈봉우리');
     const elStageI = h('div.sk-stage-i', 'I / VI');
     const elStageA = h('span.num', '0');
     const elStageB = h('span.num', '1,000');
@@ -310,7 +310,7 @@ export default {
        phase is load-bearing information: dusk is Golden Hour and night is Full
        Moon, so the player needs to see which window they are in. */
     const elPhaseK = h('i.sk-kanji', '昼');
-    const elPhaseN = h('b', 'DAY');
+    const elPhaseN = h('b', '낮');
     const elPhaseNote = h('span', '온갖 햇살');
     const phaseChip = h('div.sk-phase', { title: '시간대' }, elPhaseK,
       h('div', elPhaseN, elPhaseNote));
@@ -352,7 +352,7 @@ export default {
       'aria-label': '가지 흔들기 — Space',
     },
       h('div.tip', { 'aria-hidden': 'true' }, '여기서 시작 — 가지를 흔들면 꽃잎이 떨어집니다'),
-      h('kbd', { 'aria-hidden': 'true' }, 'SPACE'),
+      h('kbd', { 'aria-hidden': 'true' }, '스페이스'),
       h('span', '가지 흔들기'),
       h('div.bar', { 'aria-hidden': 'true' }),
       elShake2,
@@ -552,8 +552,8 @@ export default {
         const outTotal = h('u', '0.00');
         const mBar = bar('track', false);
         const mLbl = h('b', '10');
-        const mPre = h('span', 'next ×2 at ');
-        const btn = buyBtn(() => buyTender(d.id), `Buy ${d.name}`, 'TEND');
+        const mPre = h('span', '다음 ×2 시점: ');
+        const btn = buyBtn(() => buyTender(d.id), `${d.nameKo ?? d.name} 돌봄`, '돌봄');
         const row = h('div.sk-card', {
           class: 'r' + rarity,
           onclick: () => buyTender(d.id),
@@ -578,7 +578,7 @@ export default {
       teaserNeed = sealed.need;
       tenderPanel.body.append(teaser);
 
-      bulkSeg = segmented([['×1', 1], ['×10', 10], ['×25', 25], ['MAX', -1]],
+      bulkSeg = segmented([['×1', 1], ['×10', 10], ['×25', 25], ['최대', -1]],
         (v) => { A.setBulk(v); refresh(); }, { ariaLabel: '한 번에 구매할 수량' });
       tenderTotalEl = h('span.sk-hint.num', '');
       tenderPanel.root.append(h('div.sk-panel-foot', bulkSeg.root, tenderTotalEl));

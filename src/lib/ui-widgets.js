@@ -386,8 +386,8 @@ export function sealedRow() {
   const need = h('b.num', '40');
   const root = h('div.sk-teaser',
     h('div.seal'),
-    h('h3', '封 sealed'),
-    h('div.tx', 'Hold ', need, ' petals at once and another pair of hands steps out of the grove.'),
+    h('h3', '封 봉인됨'),
+    h('div.tx', '꽃잎 ', need, ' 개를 동시에 모으면, 숲에서 또 한 쌍의 손이 걸어 나온다.'),
   );
   return { root, need };
 }
@@ -404,7 +404,7 @@ export function sealedRow() {
  * `stopPropagation` matters — the row itself is also clickable and a bubbled
  * click would buy twice.
  */
-export function buyBtn(onclick, title, verb = 'TEND') {
+export function buyBtn(onclick, title, verb = '돌봄') {
   const v = h('span.v.num', '0');
   const x = h('span.x.num', '×1');
   const act = h('span.act', verb);
