@@ -380,6 +380,25 @@ export default {
     }, h('i', { 'aria-hidden': 'true' }, '?'));
     ui.append(helpBtn);
 
+    /* 큰 라벨 도움말 진입 버튼 — muteBtn과 helpBtn(작은 원형) 옆에
+       배치하여 사용자가 한 눈에 "도움말"이 있다는 사실을 인식하게 한다. */
+    const helpEntry = h('button.sk-help-entry', {
+      type: 'button',
+      'aria-label': '도움말 열기',
+      title: '도움말 — ? 키',
+      onclick: (e) => { e.stopPropagation(); openHelp(); },
+    },
+      h('span.ico', '?'),
+      h('span.label', '도움말'),
+      h('span.kbd', '?'),
+    );
+    /* 위치는 muteBtn 아래 — 도움말 버튼 옆. ui.append으로 자유 위치 */
+    helpEntry.style.position = 'absolute';
+    helpEntry.style.top = 'calc(var(--u) * 2.4)';
+    helpEntry.style.right = 'calc(var(--u) * 1.0)';
+    helpEntry.style.width = 'auto';
+    ui.append(helpEntry);
+
     const goldenHint = h('div.sk-golden', h('i'), h('span', '황금 꽃잎 — 잡아라'));
     goldenHint.style.display = 'none';
     ui.append(goldenHint);

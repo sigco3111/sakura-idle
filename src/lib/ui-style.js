@@ -1698,34 +1698,83 @@ export function uiCss() {
 @keyframes sk-up-en{0%{opacity:0;transform:translateY(calc(var(--u)*.8));}100%{opacity:1;transform:none;}}
 @keyframes sk-up-bar{0%{opacity:0;transform:scaleX(0);}100%{opacity:1;transform:scaleX(1);}}
 
-/* ───── Help modal styles ───── */
-.sk-modal.help{width:min(960px,92vw);max-height:84vh;}
-.sk-modal.help .sk-body{padding:0;overflow-y:auto;max-height:calc(84vh - 64px);}
-.sk-modal.help .help-sec{padding:calc(var(--u)*1.0) calc(var(--u)*1.4);border-bottom:1px solid rgba(255,255,255,.07);}
-.sk-modal.help .help-sec:last-child{border-bottom:none;}
-.sk-modal.help .help-sec h2{margin:0 0 calc(var(--u)*.55);font-size:calc(var(--u)*1.1);font-weight:600;color:rgba(255,220,230,.95);letter-spacing:.04em;}
-.sk-modal.help .help-grid{display:flex;flex-direction:column;gap:calc(var(--u)*.45);}
-.sk-modal.help .help-tbl{width:100%;border-collapse:collapse;table-layout:fixed;}
-.sk-modal.help .help-tbl th{width:30%;text-align:left;vertical-align:top;padding:calc(var(--u)*.4) calc(var(--u)*.7) calc(var(--u)*.4) 0;font-weight:600;color:rgba(255,180,200,.9);font-size:calc(var(--u)*.78);}
-.sk-modal.help .help-tbl td{padding:calc(var(--u)*.4) 0;vertical-align:top;color:rgba(255,235,235,.86);font-size:calc(var(--u)*.78);line-height:1.45;}
-.sk-modal.help .help-tbl tr{border-bottom:1px dashed rgba(255,255,255,.06);}
-.sk-modal.help .help-tbl tr:last-child{border-bottom:none;}
-.sk-modal.help .help-p{margin:0;color:rgba(255,225,225,.78);font-size:calc(var(--u)*.78);line-height:1.55;}
-.sk-modal.help .help-foot{padding:calc(var(--u)*1.0) calc(var(--u)*1.4);text-align:center;color:rgba(255,200,210,.65);font-style:italic;font-size:calc(var(--u)*.8);border-top:1px solid rgba(255,255,255,.05);}
+/* ───── Help modal styles ─────
+   핵심: 모달 안의 모든 텍스트는 짙은 색으로 통일하고, 본문은
+   거의 흰색에 가까운 종이결 배경 위에 올려서 다른 패널과 동등하게
+   읽히게 한다. th는 짙은 와인색 라벨 + 흰 글자, td는 어두운 회색
+   본문으로 시각적 위계를 만든다. */
+.sk-modal.help{width:min(1140px,96vw);max-height:88vh;}
+.sk-modal.help .sk-body{padding:0;overflow-y:auto;max-height:calc(88vh - 64px);background:rgba(252,247,239,.96);}
+.sk-modal.help .sk-body::before{display:none;} /* 종이결 텍스처 비활성 */
+.sk-modal.help .help-sec{padding:calc(var(--u)*1.0) calc(var(--u)*1.6);border-bottom:1px solid rgba(120,60,80,.18);}
+.sk-modal.help .help-sec:last-of-type{border-bottom:none;}
 
-/* Help button on the HUD */
+.sk-modal.help .help-sec h2{margin:0 0 calc(var(--u)*.65);font-size:calc(var(--u)*1.25);font-weight:800;color:#5a1f3a;letter-spacing:.04em;text-shadow:0 1px 0 rgba(255,255,255,.5);}
+
+/* 카드: 흰 종이결 위에 부드러운 그림자 */
+.sk-modal.help .help-card{background:#fdfaf3;border:1px solid rgba(120,60,80,.16);border-radius:6px;padding:calc(var(--u)*.6) calc(var(--u)*1.0);box-shadow:0 2px 8px rgba(60,30,40,.10);margin-bottom:calc(var(--u)*.6);}
+.sk-modal.help .help-card:last-child{margin-bottom:0;}
+
+/* 그리드 컨테이너 */
+.sk-modal.help .help-grid{display:flex;flex-direction:column;gap:calc(var(--u)*.5);}
+.sk-modal.help .help-grid .help-card{margin-bottom:0;} /* grid gap이 여백 담당 */
+
+/* 표: 위계 명확 */
+.sk-modal.help .help-tbl{width:100%;border-collapse:collapse;table-layout:fixed;background:transparent;}
+.sk-modal.help .help-tbl th{width:28%;text-align:left;vertical-align:top;padding:calc(var(--u)*.5) calc(var(--u)*.9);font-weight:700;color:#fff;background:linear-gradient(180deg,#6e2541 0%,#5a1f3a 100%);border-right:2px solid #fdfaf3;font-size:calc(var(--u)*.88);line-height:1.45;}
+.sk-modal.help .help-tbl th:first-child{border-top-left-radius:4px;border-bottom-left-radius:4px;}
+.sk-modal.help .help-tbl td{padding:calc(var(--u)*.5) calc(var(--u)*.9);vertical-align:top;color:#2a1820;background:#fff;font-weight:500;font-size:calc(var(--u)*.88);line-height:1.55;}
+.sk-modal.help .help-tbl tr{border-bottom:1px solid rgba(120,60,80,.12);}
+.sk-modal.help .help-tbl tr:last-child{border-bottom:none;}
+.sk-modal.help .help-tbl tr:hover td{background:#fdf4e3;}
+
+/* 단락 */
+.sk-modal.help .help-p{margin:calc(var(--u)*.55) 0 0;padding:calc(var(--u)*.5) calc(var(--u)*.9);color:#2a1820;background:#fdf4e3;border-left:3px solid #b8637d;font-size:calc(var(--u)*.9);line-height:1.65;border-radius:0 4px 4px 0;}
+.sk-modal.help .help-p.help-p:last-child{margin-bottom:0;}
+
+/* 푸터 */
+.sk-modal.help .help-foot{padding:calc(var(--u)*1.0) calc(var(--u)*1.6);text-align:center;color:#5a1f3a;font-style:italic;font-size:calc(var(--u)*.95);border-top:1px solid rgba(120,60,80,.18);background:rgba(252,247,239,.6);}
+
+/* 모달 헤더 자체도 어둡게 */
+.sk-modal.help .sk-head{background:linear-gradient(180deg,#6e2541 0%,#5a1f3a 100%);}
+.sk-modal.help .sk-head h1,
+.sk-modal.help .sk-head .sk-h1{color:#fff !important;font-weight:800;}
+
+/* 도움 버튼 (HUD 우상단) — 위치: muteBtn과 0.7u 간격 */
 .sk-help{
   position:absolute;top:calc(var(--u)*.7);right:calc(var(--u)*3.5);
-  width:calc(var(--u)*1.4);height:calc(var(--u)*1.4);
+  width:calc(var(--u)*1.6);height:calc(var(--u)*1.6);
   display:grid;place-items:center;
-  background:rgba(255,255,255,.06);border:1px solid rgba(255,255,255,.12);
-  border-radius:50%;color:rgba(255,210,220,.85);
-  font-size:calc(var(--u)*.9);font-weight:700;
-  cursor:pointer;transition:background .15s,transform .15s,color .15s;
+  background:linear-gradient(180deg,rgba(110,37,65,.92),rgba(90,31,58,.92));border:1px solid rgba(255,200,210,.4);
+  border-radius:50%;color:#fff;
+  font-size:calc(var(--u)*1.0);font-weight:800;
+  cursor:pointer;transition:transform .15s,box-shadow .15s;
   z-index:4;
+  box-shadow:0 2px 6px rgba(60,30,40,.35);
 }
-.sk-help:hover{background:rgba(255,180,200,.22);color:#fff;transform:scale(1.05);}
-.sk-help:focus-visible{outline:2px solid rgba(255,200,210,.7);outline-offset:2px;}
+.sk-help:hover{transform:scale(1.08);box-shadow:0 4px 12px rgba(184,99,125,.55);background:linear-gradient(180deg,#b8637d,#9d4b6a);}
+.sk-help:active{transform:scale(.95);}
+.sk-help:focus-visible{outline:2px solid #ffd2dd;outline-offset:2px;}
+
+/* HUD 도움 버튼 — 큰 라벨 (모달 안 "도움말 열기" 탭 진입점)
+   탭 패널 안에 명시적인 큰 버튼을 추가하면 시인성이 더 좋다. */
+.sk-help-entry{
+  display:flex;align-items:center;gap:calc(var(--u)*.7);
+  width:100%;padding:calc(var(--u)*.65) calc(var(--u)*.9);
+  background:linear-gradient(180deg,#fff8e6,#f5e6c0);
+  border:1px solid #b89a55;border-radius:5px;
+  color:#5a4310;font-weight:700;font-size:calc(var(--u)*.82);
+  cursor:pointer;transition:transform .12s,background .12s;
+  margin:calc(var(--u)*.5) 0;
+  box-shadow:0 1px 3px rgba(120,90,40,.18);
+}
+.sk-help-entry:hover{background:linear-gradient(180deg,#fff5d2,#f1dba0);transform:translateX(2px);}
+.sk-help-entry .ico{
+  width:calc(var(--u)*1.3);height:calc(var(--u)*1.3);
+  display:grid;place-items:center;
+  background:linear-gradient(180deg,#6e2541,#5a1f3a);
+  color:#fff;border-radius:50%;font-size:calc(var(--u)*.85);font-weight:800;
+}
 
 @media (prefers-reduced-motion:reduce){
   #ui-root *{animation-duration:.01ms!important;transition-duration:.01ms!important;}
