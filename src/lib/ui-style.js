@@ -1758,30 +1758,35 @@ export function uiCss() {
 
 /* HUD 도움 버튼 — 큰 라벨 (모달 안 "도움말 열기" 탭 진입점)
    탭 패널 안에 명시적인 큰 버튼을 추가하면 시인성이 더 좋다.
-   위치: 좌측 하단 muteBtn 바로 위 (muteBtn과 같은 left 정렬, bottom만 위로). */
+   위치: 좌측 하단 muteBtn 바로 위 (muteBtn과 같은 left 정렬, bottom만 위로).
+   크기: muteBtn(약 1.5u 원형)보다 충분히 크게 — 1.3u 패딩 + 1.5u 아이콘. */
 .sk-help-entry{
-  position:absolute;left:calc(var(--u)*1.35);bottom:calc(var(--u)*3.3);
-  display:flex;align-items:center;gap:calc(var(--u)*.7);
-  width:auto;padding:calc(var(--u)*.55) calc(var(--u)*.9);
+  position:absolute;left:calc(var(--u)*0.7);bottom:calc(var(--u)*4.0);
+  display:flex;align-items:center;gap:calc(var(--u)*0.85);
+  width:auto;padding:calc(var(--u)*0.7) calc(var(--u)*1.1);
   background:linear-gradient(180deg,#fff8e6,#f5e6c0);
-  border:1px solid #b89a55;border-radius:5px;
-  color:#5a4310;font-weight:700;font-size:calc(var(--u)*.82);
+  border:1.5px solid #b89a55;border-radius:6px;
+  color:#5a4310;font-weight:800;font-size:calc(var(--u)*1.0);
   cursor:pointer;transition:transform .12s,background .12s;
-  z-index:4;
-  box-shadow:0 1px 3px rgba(120,90,40,.18);
+  z-index:5;
+  box-shadow:0 2px 5px rgba(120,90,40,.30);
 }
-.sk-help-entry:hover{background:linear-gradient(180deg,#fff5d2,#f1dba0);transform:translateX(2px);}
+.sk-help-entry:hover{background:linear-gradient(180deg,#fff5d2,#f1dba0);transform:translateX(2px);box-shadow:0 3px 8px rgba(120,90,40,.4);}
+.sk-help-entry:active{transform:translateX(2px) scale(.98);}
 .sk-help-entry .ico{
-  width:calc(var(--u)*1.3);height:calc(var(--u)*1.3);
+  width:calc(var(--u)*1.5);height:calc(var(--u)*1.5);
   display:grid;place-items:center;
   background:linear-gradient(180deg,#6e2541,#5a1f3a);
-  color:#fff;border-radius:50%;font-size:calc(var(--u)*.85);font-weight:800;
+  color:#fff;border-radius:50%;font-size:calc(var(--u)*1.0);font-weight:800;
+  flex-shrink:0;
 }
+.sk-help-entry .label{white-space:nowrap;letter-spacing:.02em;}
 .sk-help-entry .kbd{
-  display:inline-block;padding:1px 6px;border-radius:3px;
+  display:inline-block;padding:2px 7px;border-radius:3px;
   background:rgba(110,37,65,.15);color:#5a1f3a;
-  font-size:calc(var(--u)*.65);font-weight:700;
+  font-size:calc(var(--u)*.72);font-weight:700;
   border:1px solid rgba(110,37,65,.3);
+  flex-shrink:0;
 }
 
 @media (prefers-reduced-motion:reduce){
