@@ -1757,15 +1757,17 @@ export function uiCss() {
 .sk-help:focus-visible{outline:2px solid #ffd2dd;outline-offset:2px;}
 
 /* HUD 도움 버튼 — 큰 라벨 (모달 안 "도움말 열기" 탭 진입점)
-   탭 패널 안에 명시적인 큰 버튼을 추가하면 시인성이 더 좋다. */
+   탭 패널 안에 명시적인 큰 버튼을 추가하면 시인성이 더 좋다.
+   위치: 좌측 하단 muteBtn 바로 위 (muteBtn과 같은 left 정렬, bottom만 위로). */
 .sk-help-entry{
+  position:absolute;left:calc(var(--u)*1.35);bottom:calc(var(--u)*3.3);
   display:flex;align-items:center;gap:calc(var(--u)*.7);
-  width:100%;padding:calc(var(--u)*.65) calc(var(--u)*.9);
+  width:auto;padding:calc(var(--u)*.55) calc(var(--u)*.9);
   background:linear-gradient(180deg,#fff8e6,#f5e6c0);
   border:1px solid #b89a55;border-radius:5px;
   color:#5a4310;font-weight:700;font-size:calc(var(--u)*.82);
   cursor:pointer;transition:transform .12s,background .12s;
-  margin:calc(var(--u)*.5) 0;
+  z-index:4;
   box-shadow:0 1px 3px rgba(120,90,40,.18);
 }
 .sk-help-entry:hover{background:linear-gradient(180deg,#fff5d2,#f1dba0);transform:translateX(2px);}
@@ -1774,6 +1776,12 @@ export function uiCss() {
   display:grid;place-items:center;
   background:linear-gradient(180deg,#6e2541,#5a1f3a);
   color:#fff;border-radius:50%;font-size:calc(var(--u)*.85);font-weight:800;
+}
+.sk-help-entry .kbd{
+  display:inline-block;padding:1px 6px;border-radius:3px;
+  background:rgba(110,37,65,.15);color:#5a1f3a;
+  font-size:calc(var(--u)*.65);font-weight:700;
+  border:1px solid rgba(110,37,65,.3);
 }
 
 @media (prefers-reduced-motion:reduce){
