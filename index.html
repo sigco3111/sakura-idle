@@ -3,35 +3,35 @@
 <head>
 <meta charset="utf-8" />
 <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
-<title>Sakura — Petals of the Everblossom</title>
+<title>벚꽃 — 영원한 꽃의 꽃잎 (Sakura — Petals of the Everblossom)</title>
 
 <!-- ── Social / SEO metadata ──────────────────────────────────────────────────
      og:image and twitter:image MUST be absolute URLs — crawlers do not resolve
      relative paths. og.png lives in public/, which Vite copies to the dist root.
      If the canonical domain ever changes, every absolute URL below changes with it. -->
-<meta name="description" content="An idle game about growing one ancient cherry tree, from a bare winter bud to the Everblossom. Anime-styled Three.js rendering where every texture, sound and blossom is generated in code." />
-<link rel="canonical" href="https://sakura-idle.vercel.app/" />
+<meta name="description" content="겨울 눈봉우리에서 영원한 꽃까지, 한 그루의 오래된 벚꽃을 키우는 인크리멘털 아이들 게임. 모든 질감, 사운드, 꽃이 코드로 생성되는 애니메이션 스타일 Three.js 렌더링." />
+<link rel="canonical" href="https://sigco3111.github.io/sakura-idle/" />
 <meta name="theme-color" content="#0b0710" />
 <meta name="color-scheme" content="dark light" />
 
 <meta property="og:type" content="website" />
-<meta property="og:site_name" content="Sakura — Petals of the Everblossom" />
-<meta property="og:url" content="https://sakura-idle.vercel.app/" />
-<meta property="og:title" content="Sakura — Petals of the Everblossom" />
-<meta property="og:description" content="An idle game about growing one ancient cherry tree. Shake the bough, gather petals, and carry it to full bloom — every texture, sound and blossom generated in code." />
-<meta property="og:image" content="https://sakura-idle.vercel.app/og.jpg" />
-<meta property="og:image:secure_url" content="https://sakura-idle.vercel.app/og.jpg" />
+<meta property="og:site_name" content="벚꽃 — 영원한 꽃의 꽃잎 (Sakura — Petals of the Everblossom)" />
+<meta property="og:url" content="https://sigco3111.github.io/sakura-idle/" />
+<meta property="og:title" content="벚꽃 — 영원한 꽃의 꽃잎 (Sakura — Petals of the Everblossom)" />
+<meta property="og:description" content="한 그루의 오래된 벚꽃을 키우는 아이들 게임. 가지를 흔들고, 꽃잎을 모아, 만개까지 — 모든 질감, 사운드, 꽃이 코드로 생성됩니다." />
+<meta property="og:image" content="https://sigco3111.github.io/sakura-idle/og.jpg" />
+<meta property="og:image:secure_url" content="https://sigco3111.github.io/sakura-idle/og.jpg" />
 <meta property="og:image:type" content="image/jpeg" />
 <meta property="og:image:width" content="1200" />
 <meta property="og:image:height" content="630" />
-<meta property="og:image:alt" content="An ancient cherry tree in full pink bloom on a grassy rise, with a vermilion torii gate, stone lanterns and a still pond reflecting the sky." />
-<meta property="og:locale" content="en" />
+<meta property="og:image:alt" content="잔디 언덕 위에 분홍빛 만개를 자랑하는 오래된 벚꽃, 그리고 그 옆에 주홍빛 도리이 문, 석등롱, 하늘을 비추는 고요한 연못." />
+<meta property="og:locale" content="ko_KR" />
 
 <meta name="twitter:card" content="summary_large_image" />
-<meta name="twitter:title" content="Sakura — Petals of the Everblossom" />
-<meta name="twitter:description" content="An idle game about growing one ancient cherry tree. Shake the bough, gather petals, and carry it to full bloom — every texture, sound and blossom generated in code." />
-<meta name="twitter:image" content="https://sakura-idle.vercel.app/og.jpg" />
-<meta name="twitter:image:alt" content="An ancient cherry tree in full pink bloom, with a vermilion torii gate and a pond reflecting the sky." />
+<meta name="twitter:title" content="벚꽃 — 영원한 꽃의 꽃잎 (Sakura — Petals of the Everblossom)" />
+<meta name="twitter:description" content="한 그루의 오래된 벚꽃을 키우는 아이들 게임. 가지를 흔들고, 꽃잎을 모아, 만개까지 — 모든 질감, 사운드, 꽃이 코드로 생성됩니다." />
+<meta name="twitter:image" content="https://sigco3111.github.io/sakura-idle/og.jpg" />
+<meta name="twitter:image:alt" content="분홍빛 만개의 오래된 벚꽃, 그리고 그 옆에 주홍빛 도리이 문과 하늘을 비추는 연못." />
 <!-- Inline data: URI — CONTRACT rule 1 forbids runtime network requests, and a
      missing /favicon.ico logs a console error the harness treats as a failure. -->
 <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Cg fill='%23FFB6CE'%3E%3Ccircle cx='16' cy='7' r='5.4'/%3E%3Ccircle cx='24.6' cy='13.2' r='5.4'/%3E%3Ccircle cx='21.3' cy='23.4' r='5.4'/%3E%3Ccircle cx='10.7' cy='23.4' r='5.4'/%3E%3Ccircle cx='7.4' cy='13.2' r='5.4'/%3E%3C/g%3E%3Ccircle cx='16' cy='16' r='3.1' fill='%23E8C56A'/%3E%3C/svg%3E" />
@@ -74,14 +74,13 @@
   <div id="app"></div>
   <div id="ui-root"></div>
   <div id="credit">
-    <span>Made with <span class="hb" aria-hidden="true">&#10084;</span><span class="sr-only">love</span>
-      by Opus&nbsp;5 and <a href="https://x.com/danmana" target="_blank" rel="noopener noreferrer">@danmana</a></span>
-    <a class="gh" href="https://github.com/danmana/sakura-idle/" target="_blank" rel="noopener noreferrer"
-       aria-label="Source code on GitHub" title="Source on GitHub">
+    <span>Opus&nbsp;5 와 <a href="https://x.com/danmana" target="_blank" rel="noopener noreferrer">@danmana</a> 그리고 한국어판 sigco3111 이(가) <span class="hb" aria-hidden="true">&#10084;</span><span class="sr-only">사랑을 담아</span> 만들었습니다</span>
+    <a class="gh" href="https://github.com/sigco3111/sakura-idle/" target="_blank" rel="noopener noreferrer"
+       aria-label="GitHub 소스 코드" title="GitHub 소스">
       <svg viewBox="0 0 16 16" aria-hidden="true" focusable="false"><path d="M8 0C3.58 0 0 3.58 0 8c0 3.54 2.29 6.53 5.47 7.59.4.07.55-.17.55-.38 0-.19-.01-.82-.01-1.49-2.01.37-2.53-.49-2.69-.94-.09-.23-.48-.94-.82-1.13-.28-.15-.68-.52-.01-.53.63-.01 1.08.58 1.23.82.72 1.21 1.87.87 2.33.66.07-.52.28-.87.51-1.07-1.78-.2-3.64-.89-3.64-3.95 0-.87.31-1.59.82-2.15-.07-.2-.36-1.02.08-2.12 0 0 .67-.21 2.2.82.64-.18 1.32-.27 2-.27s1.36.09 2 .27c1.53-1.04 2.2-.82 2.2-.82.44 1.1.16 1.92.08 2.12.51.56.82 1.27.82 2.15 0 3.07-1.87 3.75-3.65 3.95.29.25.54.73.54 1.48 0 1.07-.01 1.93-.01 2.2 0 .21.15.46.55.38A7.995 7.995 0 0 0 16 8c0-4.42-3.58-8-8-8Z"/></svg>
     </a>
   </div>
-  <div id="boot"><div>咲かせる…</div></div>
+  <div id="boot"><div>피워내는 중…</div></div>
   <script type="module" src="/src/main.js"></script>
 </body>
 </html>

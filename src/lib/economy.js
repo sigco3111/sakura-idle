@@ -253,44 +253,44 @@ export const TUNING = {
 
 export const TENDERS = [
   {
-    id: 'sprite', name: 'Wind Sprite', kanji: '風精', baseCost: 15, rate: 0.1,
-    blurb: 'Too small to see, too loud to ignore. It shakes one branch at a time and is very proud of that.',
+    id: 'sprite', name: 'Wind Sprite', nameKo: '바람 정령', kanji: '風精', baseCost: 15, rate: 0.1,
+    blurb: '눈엔 안 보일 만큼 작지만, 무시하기엔 시끄럽다. 한 번에 나뭇가지 하나를 흔들고, 그것만으로 엄청나게 자랑한다.',
   },
   {
-    id: 'gatherer', name: 'Petal Gatherer', kanji: '花摘み', baseCost: 100, rate: 1,
-    blurb: 'Bare feet, wide basket, an eye for the ones that fell somewhere beautiful.',
+    id: 'gatherer', name: 'Petal Gatherer', nameKo: '꽃잎 줍는 아이', kanji: '花摘み', baseCost: 100, rate: 1,
+    blurb: '맨발, 넓은 바구니, 어딘가 아름다운 곳에 떨어진 것만 골라 눈독 들인다.',
   },
   {
-    id: 'miko', name: 'Shrine Maiden', kanji: '巫女', baseCost: 1.1e3, rate: 8,
-    blurb: 'She does not gather petals. She asks, politely, and they come.',
+    id: 'miko', name: 'Shrine Maiden', nameKo: '무녀', kanji: '巫女', baseCost: 1.1e3, rate: 8,
+    blurb: '꽃잎을 줍지 않는다. 정중히 부탁하면, 꽃잎이 스스로 온다.',
   },
   {
-    id: 'lantern', name: 'Stone Lantern', kanji: '石灯籠', baseCost: 1.2e4, rate: 47,
-    blurb: 'Petals drift toward light the way moths do. Nobody has told them they are not moths.',
+    id: 'lantern', name: 'Stone Lantern', nameKo: '석등롱', kanji: '石灯籠', baseCost: 1.2e4, rate: 47,
+    blurb: '꽃잎은 나방처럼 빛을 따라 흘러간다. 꽃잎에게 나방이 아니라는 건 아무도 알려준 적 없다.',
   },
   {
-    id: 'koi', name: 'Koi Spirit', kanji: '鯉霊', baseCost: 1.3e5, rate: 260,
-    blurb: 'It swims the air above the pond and drinks the reflections of blossoms.',
+    id: 'koi', name: 'Koi Spirit', nameKo: '잉어의 영혼', kanji: '鯉霊', baseCost: 1.3e5, rate: 260,
+    blurb: '연못 위 공기 속을 헤엄치며 꽃의 반영을 마신다.',
   },
   {
-    id: 'rabbit', name: 'Moon Rabbit', kanji: '月兎', baseCost: 1.4e6, rate: 1.4e3,
-    blurb: 'Pounds petals in a stone mortar. Whatever it is making, it is not rice cake.',
+    id: 'rabbit', name: 'Moon Rabbit', nameKo: '달 토끼', kanji: '月兎', baseCost: 1.4e6, rate: 1.4e3,
+    blurb: '돌 절구에서 꽃잎을 찧는다. 무엇을 만드는지는 모르겠지만, 확실히 떡은 아니다.',
   },
   {
-    id: 'kitsune', name: 'Kitsune Herald', kanji: '狐使', baseCost: 2.0e7, rate: 7.8e3,
-    blurb: 'Carries messages between the tree and something older. Never says which of them replies.',
+    id: 'kitsune', name: 'Kitsune Herald', nameKo: '여우 사자', kanji: '狐使', baseCost: 2.0e7, rate: 7.8e3,
+    blurb: '나무와 더 오래된 것 사이의 메시지를 옮긴다. 어느 쪽이 답하는지는 말해주지 않는다.',
   },
   {
-    id: 'envoy', name: "Wind God's Envoy", kanji: '風神使', baseCost: 3.3e8, rate: 4.4e4,
-    blurb: 'Arrives with a bag of unfinished weather and leaves the drawstring loose.',
+    id: 'envoy', name: "Wind God's Envoy", nameKo: '풍신의 사자', kanji: '風神使', baseCost: 3.3e8, rate: 4.4e4,
+    blurb: '끝내지 못한 날씨를 한 주머니에 담아오고, 끈을 느슨하게 묶은 채 떠난다.',
   },
   {
-    id: 'heart', name: 'Everblossom Heart', kanji: '常桜心', baseCost: 5.1e9, rate: 2.6e5,
-    blurb: 'Buried where the roots cross. Every beat pushes one more spring through the wood.',
+    id: 'heart', name: 'Everblossom Heart', nameKo: '영원한 꽃의 마음', kanji: '常桜心', baseCost: 5.1e9, rate: 2.6e5,
+    blurb: '뿌리가 엉키는 곳에 묻혀 있다. 한 번 뛸 때마다 하나의 봄이 나무를 통과한다.',
   },
   {
-    id: 'bough', name: 'Celestial Bough', kanji: '天樹枝', baseCost: 7.5e10, rate: 1.6e6,
-    blurb: 'A branch that grew past the sky, found more sky, and kept going out of politeness.',
+    id: 'bough', name: 'Celestial Bough', nameKo: '하늘의 가지', kanji: '天樹枝', baseCost: 7.5e10, rate: 1.6e6,
+    blurb: '하늘을 지나 더 많은 하늘을 만나고, 예의상 계속 자라난 가지.',
   },
 ];
 
@@ -606,25 +606,25 @@ export function upgradeUnlocked(u, state) {
  * ==================================================================== */
 
 export const HEARTWOOD = [
-  ['hw_prod1', 'Heartwood Ring', 3, { prod: 1.10 },
-    'One more ring than the tree should have for its age. It counts double.'],
-  ['hw_click1', 'Palmprint in the Bark', 5, { click: 1.25 },
-    'Worn into the trunk at exactly your height. It was there before you were.'],
-  ['hw_start1', 'Seedbed', 8, { startTender: ['sprite', 20] },
-    'Twenty sprites are already awake when the Season turns. They remember you.'],
-  ['hw_prod2', 'Deep Taproot', 14, { prod: 1.20 },
-    'It has found water that has not seen the sky since the mountains were young.'],
-  ['hw_crit1', 'Windfall Charm', 20, { crit: 0.05, critMult: 6 },
-    'Hung from the lowest branch. It swings when there is no wind.'],
-  ['hw_off1', 'Nightwatch Lantern', 28, { offRate: 0.12, dewH: 4 },
-    'Left burning at the gate so the grove knows you intend to come back.'],
-  ['hw_prod3', 'Crown of Years', 40, { prod: 1.35 },
-    'Every Season you turn adds a leaf. It is getting heavy in a good way.'],
-  ['hw_ess1', 'Essence Still', 60, { essence: 1.25 },
-    'Distils the last of a Season into something you can carry to the next one.'],
+  ['hw_prod1', 'Heartwood Ring', '나무심장 반지', 3, { prod: 1.10 },
+    '나무 나이보다 하나 더 많은 링. 두 배로 친다.'],
+  ['hw_click1', 'Palmprint in the Bark', '나무껍질의 손자국', 5, { click: 1.25 },
+    '정확히 내 키에 맞춰 줄기에 새겨졌다. 내가 있기 전부터 거기 있었다.'],
+  ['hw_start1', 'Seedbed', '묘판', 8, { startTender: ['sprite', 20] },
+    '계절이 돌아올 때 20마리의 정령이 이미 깨어 있다. 그들은 나를 기억한다.'],
+  ['hw_prod2', 'Deep Taproot', '깊은 주뿌리', 14, { prod: 1.20 },
+    '산이 젊었을 때부터 하늘을 보지 못한 물을 찾았다.'],
+  ['hw_crit1', 'Windfall Charm', '낙과 부적', 20, { crit: 0.05, critMult: 6 },
+    '가장 낮은 가지에 걸려 있다. 바람이 없을 때에도 흔들린다.'],
+  ['hw_off1', 'Nightwatch Lantern', '야경 등불', 28, { offRate: 0.12, dewH: 4 },
+    '문 앞에서 켜놓아서, 숲이 내가 돌아올 것을 알도록 한다.'],
+  ['hw_prod3', 'Crown of Years', '세월의 왕관', 40, { prod: 1.35 },
+    '돌린 계절마다 잎이 하나 더 달린다. 좋은 쪽으로 무거워지고 있다.'],
+  ['hw_ess1', 'Essence Still', '정수 증류기', 60, { essence: 1.25 },
+    '한 계절의 마지막을 다음 계절로 가지고 갈 수 있는 무언가로 증류한다.'],
 ];
 export const HEARTWOOD_BY_ID = Object.fromEntries(HEARTWOOD.map((h) => [h[0], {
-  id: h[0], name: h[1], cost: h[2], eff: h[3], flavour: h[4],
+  id: h[0], name: h[1], nameKo: h[2], cost: h[3], eff: h[4], flavour: h[5],
 }]));
 export const HEARTWOOD_LIST = HEARTWOOD.map((h) => HEARTWOOD_BY_ID[h[0]]);
 
@@ -633,12 +633,12 @@ export const HEARTWOOD_LIST = HEARTWOOD.map((h) => HEARTWOOD_BY_ID[h[0]]);
  * ==================================================================== */
 
 export const BLOOM_STAGES = [
-  { stage: 0, name: 'Winter Bud', kanji: '冬芽', threshold: 0, blurb: 'Bare dark branches, a handful of buds, and light with no warmth in it.' },
-  { stage: 1, name: 'Budding', kanji: '蕾', threshold: 1e3, blurb: 'The buds swell pink overnight. The first blossoms open where nobody is looking.' },
-  { stage: 2, name: 'First Bloom', kanji: '初咲', threshold: 1e5, blurb: 'A third of the canopy has turned. Petals begin to fall in ones and twos.' },
-  { stage: 3, name: 'Full Bloom', kanji: '満開', threshold: 1e7, blurb: 'Full canopy, constant fall, a carpet on the path. This is what people walk here for.' },
-  { stage: 4, name: 'Radiant', kanji: '輝咲', threshold: 1e10, blurb: 'The petals hold light after dusk. Motes drift up as often as down.' },
-  { stage: 5, name: 'Everblossom', kanji: '常桜', threshold: 1e13, blurb: 'Gold runs in the bark. The blossom no longer waits for spring, and neither does anything near it.' },
+  { stage: 0, name: 'Winter Bud', nameKo: '겨울 눈봉우리', kanji: '冬芽', threshold: 0, blurb: '벌거벗은 어두운 가지, 손에 잡힐 듯한 꽃봉우리, 온기 없는 빛뿐이다.' },
+  { stage: 1, name: 'Budding', nameKo: '봉우리', kanji: '蕾', threshold: 1e3, blurb: '꽃봉우리가 하룻밤 사이에 분홍색으로 부푼다. 아무도 보지 않는 곳에서 첫 꽃이 핀다.' },
+  { stage: 2, name: 'First Bloom', nameKo: '초咲', kanji: '初咲', threshold: 1e5, blurb: '캐노피의 3분의 1이 색을 바꿨다. 꽃잎이 하나둘씩 떨어지기 시작한다.' },
+  { stage: 3, name: 'Full Bloom', nameKo: '만개', kanji: '満開', threshold: 1e7, blurb: '캐노피 가득, 끊임없는 낙화, 길 위의 꽃잎 카펫. 사람들이 여기 걸어오려는 이유가 이것이다.' },
+  { stage: 4, name: 'Radiant', nameKo: '찬란한 꽃', kanji: '輝咲', threshold: 1e10, blurb: '꽃잎이 황혼 뒤에도 빛을 머금는다. 빛의 알갱이가 아래로보다 위로 더 자주 흘러간다.' },
+  { stage: 5, name: 'Everblossom', nameKo: '영원한 꽃', kanji: '常桜', threshold: 1e13, blurb: '나무껍질 속으로 금이 흐른다. 꽃은 더 이상 봄을 기다리지 않고, 그 곁의 어떤 것도 기다리지 않는다.' },
 ];
 
 /**
@@ -693,54 +693,54 @@ export function essenceGain(totalThisSeason, essenceMul = 1) {
 /* Five branches × six nodes. `a` = branch angle (deg), `r` = radial 0..1 —
  * the UI lays these out as a radial talent tree over a night sky. */
 const BRANCHES = [
-  { id: 'wind', name: 'Wind', kanji: '風', a: -90, color: '#BBD6E8' },
-  { id: 'water', name: 'Water', kanji: '水', a: -18, color: '#8FC4D8' },
-  { id: 'moon', name: 'Moon', kanji: '月', a: 54, color: '#C9C2E8' },
-  { id: 'stone', name: 'Stone', kanji: '石', a: 126, color: '#CFC6B4' },
-  { id: 'blossom', name: 'Blossom', kanji: '花', a: 198, color: '#FFB6CE' },
+  { id: 'wind', name: 'Wind', nameKo: '바람', kanji: '風', a: -90, color: '#BBD6E8' },
+  { id: 'water', name: 'Water', nameKo: '물', kanji: '水', a: -18, color: '#8FC4D8' },
+  { id: 'moon', name: 'Moon', nameKo: '달', kanji: '月', a: 54, color: '#C9C2E8' },
+  { id: 'stone', name: 'Stone', nameKo: '돌', kanji: '石', a: 126, color: '#CFC6B4' },
+  { id: 'blossom', name: 'Blossom', nameKo: '꽃', kanji: '花', a: 198, color: '#FFB6CE' },
 ];
 export const CONSTELLATION_BRANCHES = BRANCHES;
 
 const NODE_ROWS = {
   wind: [
-    ['First Breath', 1, { passive: 1.08 }, 'The grove takes one breath a day. Be there for it.'],
-    ['Gustling', 3, { stormDur: 1.5 }, 'A small wind that has decided to become weather.'],
-    ['Following Wind', 8, { startTender: ['sprite', 15] }, 'Fifteen sprites are waiting at the gate when the Season turns.'],
-    ['Squall', 20, { stormMult: 16 }, 'Ten was a storm. Sixteen is an argument.'],
-    ['Typhoon Heart', 50, { passive: 1.25 }, 'There is a stillness at the centre of it that produces everything.'],
-    ['The Long Exhale', 120, { stormRate: 0.5 }, 'Storms come twice as often now. The grove has stopped holding its breath.'],
+    ['First Breath', '첫 숨결', 1, { passive: 1.08 }, '숲이 하루에 한 번 숨을 쉰다. 그 자리에 함께 있어라.'],
+    ['Gustling', '잔바람 아이', 3, { stormDur: 1.5 }, '날씨가 되기로 작정한 작은 바람.'],
+    ['Following Wind', '따르는 바람', 8, { startTender: ['sprite', 15] }, '계절이 바뀔 때 문 앞에 15마리의 정령이 기다린다.'],
+    ['Squall', '돌풍', 20, { stormMult: 16 }, '10은 폭풍이었다. 16은 논쟁이다.'],
+    ['Typhoon Heart', '태풍의 심장', 50, { passive: 1.25 }, '모든 것을 만들어내는 중심에 고요가 있다.'],
+    ['The Long Exhale', '긴 내쉼', 120, { stormRate: 0.5 }, '이제 폭풍이 두 배 자주 온다. 숲은 더 이상 숨을 참고 있지 않다.'],
   ],
   water: [
-    ['Still Pond', 1, { offRate: 0.10 }, 'Nothing moves on it. Everything under it does.'],
-    ['Deep Well', 4, { dewH: 4 }, 'Four more hours of you being elsewhere, kept cold and safe.'],
-    ['Spring Rain', 10, { rainChance: 2, rainPassive: 0.20 }, 'It falls straight down, and the petals take their time coming with it.'],
-    ['Tide Memory', 24, { offRate: 0.10 }, 'Water remembers where it has been. So does the grove.'],
-    ['Reservoir of Ages', 60, { dewH: 12 }, 'Half a day, held in stone, waiting without complaint.'],
-    ['Everflow', 120, { offFull: 1 }, 'Away or here, the grove works at full strength. It stopped noticing the difference.'],
+    ['Still Pond', '고요한 연못', 1, { offRate: 0.10 }, '수면엔 아무것도 움직이지 않는다. 그 아래 모든 것이 움직인다.'],
+    ['Deep Well', '깊은 우물', 4, { dewH: 4 }, '네 시간이 더, 차갑고 안전하게 보관된다.'],
+    ['Spring Rain', '봄비', 10, { rainChance: 2, rainPassive: 0.20 }, '그냥 똑바로 떨어지고, 꽃잎은 천천히 함께 내려온다.'],
+    ['Tide Memory', '조수의 기억', 24, { offRate: 0.10 }, '물은 자신이 있던 곳을 기억한다. 숲도 그렇다.'],
+    ['Reservoir of Ages', '태고의 저수지', 60, { dewH: 12 }, '반나절, 돌에 담겨, 불평 없이 기다린다.'],
+    ['Everflow', '끊임없는 흐름', 120, { offFull: 1 }, '떠나 있든 함께 있든, 숲은 온 힘을 다해 일한다. 차이를 알아차리지 못한다.'],
   ],
   moon: [
-    ['Moonwake', 1, { crit: 0.03 }, 'Work by moonlight long enough and your hands learn where the good branches are.'],
-    ['Silver Edge', 5, { critMult: 3 }, 'A shake with an edge on it.'],
-    ["Hare's Luck", 12, { goldRate: 0.75 }, 'The golden one comes round sooner. It has always been coming round.'],
-    ['Full Moon Rite', 28, { moonCrit: 0.45 }, 'Once a month the whole valley agrees to be lucky.'],
-    ['Tidefall', 65, { crit: 0.08 }, 'Fortune arrives the way water does: all at once, from underneath.'],
-    ['Lunar Mirror', 120, { goldDouble: 1 }, 'Catch one golden petal and its reflection grants a second boon.'],
+    ['Moonwake', '달빛 각성', 1, { crit: 0.03 }, '달빛 아래 오래 일하면, 손이 좋은 가지가 어디인지 알게 된다.'],
+    ['Silver Edge', '은빛의 날', 5, { critMult: 3 }, '날이 서 있는 흔들기.'],
+    ["Hare's Luck", '달 토끼의 행운', 12, { goldRate: 0.75 }, '황금 꽃잎이 더 빨리 온다. 늘 오고 있었다.'],
+    ['Full Moon Rite', '보름달 의식', 28, { moonCrit: 0.45 }, '한 달에 한 번, 온 계곡이 함께 운이 좋기로 합의한다.'],
+    ['Tidefall', '조수의 낙하', 65, { crit: 0.08 }, '행운이 물처럼 온다. 한꺼번에, 밑에서부터.'],
+    ['Lunar Mirror', '달의 거울', 120, { goldDouble: 1 }, '황금 꽃잎을 잡으면, 그 반영이 두 번째 은총을 준다.'],
   ],
   stone: [
-    ['Set Stone', 2, { cost: 0.98 }, 'Laid true the first time. Everything after it is cheaper to build.'],
-    ['Dry Wall', 6, { cost: 0.97 }, 'No mortar. It has stood for four hundred years out of sheer stubbornness.'],
-    ['Old Path', 14, { startTender: ['gatherer', 10] }, 'Ten gatherers already walking it when the Season turns.'],
-    ['Mason’s Ledger', 30, { upCost: 0.85 }, 'Every improvement, priced honestly, then discounted anyway.'],
-    ['Foundation Rite', 70, { cost: 0.95 }, 'Bury a coin, a petal, and a promise. Costs fall. Nobody asks why.'],
-    ['Bedrock', 120, { keepFirstTierUps: 1 }, 'The first improvement to each Tender survives the turning of the Season.'],
+    ['Set Stone', '놓인 돌', 2, { cost: 0.98 }, '처음에 바로 바로 놓았다. 그 뒤의 모든 것은 더 싸게 세워진다.'],
+    ['Dry Wall', '마른 담', 6, { cost: 0.97 }, '회반죽 없음. 400년을 고집 하나로 버텼다.'],
+    ['Old Path', '오래된 길', 14, { startTender: ['gatherer', 10] }, '계절이 바뀔 때 10명의 줍는 아이가 이미 그 길을 걷고 있다.'],
+    ['Mason\u2019s Ledger', '석공의 장부', 30, { upCost: 0.85 }, '모든 개선이 정직하게 가격 매겨지고, 어쨌든 할인된다.'],
+    ['Foundation Rite', '기반 의식', 70, { cost: 0.95 }, '동전 하나, 꽃잎 하나, 약속 하나를 묻는다. 가격이 내려간다. 아무도 이유를 묻지 않는다.'],
+    ['Bedrock', '바위바닥', 120, { keepFirstTierUps: 1 }, '각 정령에 대한 첫 번째 개선이 계절의 전환을 거친 뒤에도 살아남는다.'],
   ],
   blossom: [
-    ['Open Hand', 1, { click: 1.20 }, 'You stopped grabbing at the branch and started asking it.'],
-    ['Sympathetic Bloom', 4, { clickPassiveTerm: 0.0003 }, 'The bigger the grove grows, the more one shake is worth.'],
-    ['Second Hand', 11, { doubleShake: 0.25 }, 'One shake in four lands twice. You have stopped trying to see how.'],
-    ['Hastened Spring', 26, { bloomThreshold: 0.8 }, 'The tree stops waiting for permission to open.'],
-    ['Blossomheart', 60, { click: 2 }, 'Your hand on the bark and the tree’s pulse in your wrist, matched.'],
-    ['Everblossom Seed', 120, { prod: 1.5 }, 'Planted in the season you first turned. It has been paying for itself ever since.'],
+    ['Open Hand', '열린 손', 1, { click: 1.20 }, '가지를 움켜쥐는 것을 멈추고, 그에게 부탁하기 시작했다.'],
+    ['Sympathetic Bloom', '공감하는 꽃', 4, { clickPassiveTerm: 0.0003 }, '숲이 클수록, 한 번 흔들기의 가치가 더 커진다.'],
+    ['Second Hand', '두 번째 손', 11, { doubleShake: 0.25 }, '네 번 중 한 번의 흔들기가 두 번 들어간다. 어떻게 그렇게 되는지는 보려 하지 않는다.'],
+    ['Hastened Spring', '성급한 봄', 26, { bloomThreshold: 0.8 }, '나무가 열려도 되는지 허락을 기다리지 않는다.'],
+    ['Blossomheart', '꽃의 마음', 60, { click: 2 }, '나무껍질 위 손, 손목 안 나무의 맥박, 일치한다.'],
+    ['Everblossom Seed', '영원한 꽃의 씨앗', 120, { prod: 1.5 }, '처음으로 계절을 돌린 그 계절에 심겼다. 그 이후로 스스로 값을 벌고 있다.'],
   ],
 };
 
@@ -748,17 +748,18 @@ export const CONSTELLATION = [];
 for (const b of BRANCHES) {
   const rows = NODE_ROWS[b.id];
   rows.forEach((row, i) => {
-    const [name, cost, eff, flavour] = row;
+    const [name, nameKo, cost, eff, flavour] = row;
     // Gentle zig-zag so the constellation reads as stars, not spokes.
     const spread = [0, -9, 8, -6, 7, 0][i];
     CONSTELLATION.push({
       id: `${b.id}${i + 1}`,
       branch: b.id,
       branchName: b.name,
+      branchNameKo: b.nameKo,
       kanji: b.kanji,
       color: b.color,
       tier: i,
-      name, cost, eff, flavour,
+      name, nameKo, cost, eff, flavour,
       req: i === 0 ? null : `${b.id}${i}`,
       a: b.a + spread,
       r: 0.17 + i * 0.166,
@@ -777,32 +778,32 @@ export const CODEX = [
    * out on frame one, silently, during the quiet boot unlock pass. The petal
    * mark is the same moment the old stage-1 threshold described (~90 s) and it
    * gives that beat something to show now that the tree is already budded. */
-  ['somei', 'Somei Yoshino', '染井吉野', 3, '#FFD9E6', { passive: 1.02 },
-    { seasonTotal: 1e3 }, 'Five pale petals, almost white at the edge. Every avenue in the country is planted with clones of one tree, and every spring they all agree on the same day.'],
-  ['shidare', 'Shidarezakura', '枝垂桜', 3, '#FFC6DC', { click: 1.03 },
-    { tenderOwned: ['sprite', 25] }, 'The weeping cherry. Branches fall like water and blossom on the way down; the oldest in the north has been leaning for a thousand years.'],
-  ['yae', 'Yaezakura', '八重桜', 3, '#FFB6CE', { passive: 1.03 },
-    { tenderOwned: ['miko', 10] }, 'Layered — twenty, thirty, sometimes a hundred petals to a flower. Heavy enough that the branch nods. Blooms late, as if it needed the extra time.'],
-  ['yama', 'Yamazakura', '山桜', 3, '#F6D3D8', { passive: 1.03 },
-    { seasonTotal: 1e6 }, 'The mountain cherry, and the one the old poems mean. Copper leaves open with the flowers, so the whole hillside turns two colours at once.'],
-  ['oshima', 'Oshima-zakura', '大島桜', 4, '#FFF2F6', { click: 1.04 },
-    { clicks: 1000 }, 'White, broad-petalled, and faintly sweet. Its leaves are salted and wrapped around bean cakes; half the country tastes this tree every spring without seeing it.'],
-  ['kawazu', 'Kawazu-zakura', '河津桜', 4, '#F79EBD', { click: 1.04 },
-    { golden: 3 }, 'Deep rose, and impatient — it opens in February while the rest are still asleep, then holds the flower for a month as if daring the frost.'],
-  ['ukon', 'Ukon', '鬱金桜', 4, '#E7E2B0', { passive: 1.04 },
-    { storms: 3 }, 'Pale yellow-green, the colour of turmeric-dyed silk. Fades to pink at the centre as it ages, which is the wrong direction for a flower and it does not care.'],
-  ['gyoiko', 'Gyoiko', '御衣黄', 4, '#C8D8A8', { passive: 1.05 },
-    { stage: 3 }, 'Green. Genuinely green, with red streaks running up each petal. Named for the robes of the court, because nothing else was allowed to be that colour.'],
-  ['jugatsu', 'Jugatsu-zakura', '十月桜', 4, '#FFE1EA', { click: 1.05 },
-    { seasons: 1 }, 'Blooms twice: a scattering in October, the rest in spring. It has never explained the arrangement and nobody has managed to talk it out of it.'],
-  ['fuyu', 'Fuyuzakura', '冬桜', 5, '#EAF0FF', { prod: 1.04 },
-    { offlineH: 3 }, 'The winter cherry. Small, sparse, and flowering into the snow — proof that the grove keeps working during the hours you are not in it.'],
-  ['yoko', 'Yoko', '陽光桜', 5, '#FF9FBE', { prod: 1.05 },
-    { crits: 100 }, 'Bred after a war by a schoolteacher who wanted something that would grow anywhere, in memory of students who did not come home. Vivid pink, hardy, everywhere now.'],
-  ['everblossom', 'Everblossom', '常桜', 5, '#FFEFC2', { prod: 1.25 },
-    { stage: 5 }, 'Not in any botanical register. Gold in the grain, aurora in the fall, and no dormant season at all. You have been growing it this whole time.'],
-].map(([id, name, kanji, rarity, tint, eff, req, desc]) => ({
-  id, name, kanji, rarity, tint, eff, req, desc,
+  ['somei', 'Somei Yoshino', '소메이 요시노', '染井吉野', 3, '#FFD9E6', { passive: 1.02 },
+    { seasonTotal: 1e3 }, '다섯 장의 옅은 꽃잎, 가장자리에 거의 흰빛. 이 나라의 모든 가로수는 한 그루의 복제본으로 심어졌고, 모든 봄에 같은 날에 함께 핀다.'],
+  ['shidare', 'Shidarezakura', '시다레자쿠라', '枝垂桜', 3, '#FFC6DC', { click: 1.03 },
+    { tenderOwned: ['sprite', 25] }, ' weeping cherry. 가지가 물처럼 떨어지며 그 과정에서 꽃을 피운다. 북쪽에서 가장 오래된 것은 천 년 동안 기울어져 왔다.'],
+  ['yae', 'Yaezakura', '야에자쿠라', '八重桜', 3, '#FFB6CE', { passive: 1.03 },
+    { tenderOwned: ['miko', 10] }, '겹쳐 핀다 — 꽃 한 송이에 20, 30, 때로는 100장. 무거워서 가지가 끄덕인다. 더 많은 시간이 필요하다 듯이, 늦게 핀다.'],
+  ['yama', 'Yamazakura', '야마자쿠라', '山桜', 3, '#F6D3D8', { passive: 1.03 },
+    { seasonTotal: 1e6 }, '산벗꽃, 그리고 옛 시들이 의미하는 그것. 구릿빛 잎이 꽃과 함께 열리므로, 온 언덕이 두 색깔로 동시에 바뀐다.'],
+  ['oshima', 'Oshima-zakura', '오시마자쿠라', '大島桜', 4, '#FFF2F6', { click: 1.04 },
+    { clicks: 1000 }, '희고, 꽃잎이 넓고, 희미하게 달다. 잎은 소금에 절여 콩과자로 감싼다. 나라의 절반이 매 봄 이 나무를 보지 않고 맛본다.'],
+  ['kawazu', 'Kawazu-zakura', '카와즈자쿠라', '河津桜', 4, '#F79EBD', { click: 1.04 },
+    { golden: 3 }, '짙은 장밋빛, 그리고 조급하다 — 다른 것들이 아직 잠들어 있는 2월에 피고, 그 뒤로 한 달을 서리에게 도전하듯 꽃을 붙잡고 있는다.'],
+  ['ukon', 'Ukon', '우콘', '鬱金桜', 4, '#E7E2B0', { passive: 1.04 },
+    { storms: 3 }, '옅은 황록색, 강황으로 들인 비단의 색. 나이를 먹으며 중앙이 분홍으로 바래진다. 꽃에게 잘못된 방향이지만 신경 쓰지 않는다.'],
+  ['gyoiko', 'Gyoiko', '교이고', '御衣黄', 4, '#C8D8A8', { passive: 1.05 },
+    { stage: 3 }, '초록이다. 진짜로 초록이다. 각 꽃잎 위로 붉은 줄무늬가 흐른다. 궁정의 법복 색이라서, 그 색을 가질 수 있는 게 그것밖에 없었다.'],
+  ['jugatsu', 'Jugatsu-zakura', '쥬가쓰자쿠라', '十月桜', 4, '#FFE1EA', { click: 1.05 },
+    { seasons: 1 }, '두 번 핀다: 10월에 한 차례 흩어지게, 봄에 나머지를. 이 배열을 설명한 적이 없고, 아무도 그것을 설득하지 못했다.'],
+  ['fuyu', 'Fuyuzakura', '후유자쿠라', '冬桜', 5, '#EAF0FF', { prod: 1.04 },
+    { offlineH: 3 }, '겨울의 벚꽃. 작고, 드문드문하며, 눈 속에서 꽃을 피운다 — 당신이 없는 동안에도 숲이 계속 일하고 있다는 증거.'],
+  ['yoko', 'Yoko', '요코', '陽光桜', 5, '#FF9FBE', { prod: 1.05 },
+    { crits: 100 }, '전쟁 후, 돌아오지 않은 학생들을 추모하기 위해 학교 선생님이 어디서든 자라날 무언가를 만들었다. 선명한 분홍, 강인함, 지금은 어디에나 있다.'],
+  ['everblossom', 'Everblossom', '영원한 꽃', '常桜', 5, '#FFEFC2', { prod: 1.25 },
+    { stage: 5 }, '어느 식물 도감에도 없다. 나뭇결에 금이, 낙하에는 오로라가, 그리고 휴면기가 전혀 없다. 당신은 이 모든 시간 동안 그것을 키우고 있었다.'],
+].map(([id, name, nameKo, kanji, rarity, tint, eff, req, desc]) => ({
+  id, name, nameKo, kanji, rarity, tint, eff, req, desc,
 }));
 export const CODEX_BY_ID = Object.fromEntries(CODEX.map((c) => [c.id, c]));
 
@@ -810,68 +811,68 @@ export const CODEX_BY_ID = Object.fromEntries(CODEX.map((c) => [c.id, c]));
  * 9. Achievements — 44, each +1% global production and +1 Blossom
  * ==================================================================== */
 
-const ach = (id, name, desc, req) => ({ id, name, desc, req });
+const ach = (id, name, nameKo, desc, req) => ({ id, name, nameKo, desc, req });
 
 export const ACHIEVEMENTS = [
   // — clicking (6)
-  ach('a_click1', 'First Shake', 'Shake the tree once.', { clicks: 1 }),
-  ach('a_click2', 'Hanami Habit', 'Shake the tree 100 times.', { clicks: 100 }),
-  ach('a_click3', 'Repetitive Strain', 'Shake the tree 1,000 times.', { clicks: 1000 }),
-  ach('a_click4', 'The Gardener’s Wrist', 'Shake the tree 10,000 times.', { clicks: 1e4 }),
-  ach('a_click5', 'Bark Polisher', 'Shake the tree 100,000 times.', { clicks: 1e5 }),
-  ach('a_click6', 'One With The Branch', 'Shake the tree a million times.', { clicks: 1e6 }),
+  ach('a_click1', 'First Shake', '첫 흔들기', '나무를 한 번 흔든다.', { clicks: 1 }),
+  ach('a_click2', 'Hanami Habit', '벚꽃 놀이 습관', '나무를 100번 흔든다.', { clicks: 100 }),
+  ach('a_click3', 'Repetitive Strain', '반복성 손상', '나무를 1,000번 흔든다.', { clicks: 1000 }),
+  ach('a_click4', 'The Gardener\u2019s Wrist', '정원사의 손목', '나무를 10,000번 흔든다.', { clicks: 1e4 }),
+  ach('a_click5', 'Bark Polisher', '나무껍질 닦는 사람', '나무를 100,000번 흔든다.', { clicks: 1e5 }),
+  ach('a_click6', 'One With The Branch', '가지와 하나됨', '나무를 백만 번 흔든다.', { clicks: 1e6 }),
   // — crits (2)
-  ach('a_crit1', 'Lucky Break', 'Land 100 critical shakes.', { crits: 100 }),
-  ach('a_crit2', 'Fortune Favours', 'Land 5,000 critical shakes.', { crits: 5000 }),
+  ach('a_crit1', 'Lucky Break', '행운의 균기', '치명타 100회 성공.', { crits: 100 }),
+  ach('a_crit2', 'Fortune Favours', '행운의 편', '치명타 5,000회 성공.', { crits: 5000 }),
   // — petals earned (7)
-  ach('a_pet1', 'A Thousand Petals', 'Earn 1,000 petals in a Season.', { seasonTotal: 1e3 }),
-  ach('a_pet2', 'Drift', 'Earn 100,000 petals in a Season.', { seasonTotal: 1e5 }),
-  ach('a_pet3', 'Snowfall in Spring', 'Earn 1 million petals in a Season.', { seasonTotal: 1e6 }),
-  ach('a_pet4', 'Petal Sea', 'Earn 100 million petals in a Season.', { seasonTotal: 1e8 }),
-  ach('a_pet5', 'The Pink Tide', 'Earn 10 billion petals in a Season.', { seasonTotal: 1e10 }),
-  ach('a_pet6', 'Weather System', 'Earn 1 trillion petals all-time.', { allTime: 1e12 }),
-  ach('a_pet7', 'Cosmic Fall', 'Earn 1 quadrillion petals all-time.', { allTime: 1e15 }),
+  ach('a_pet1', 'A Thousand Petals', '천 개의 꽃잎', '한 계절에 1,000 꽃잎 획득.', { seasonTotal: 1e3 }),
+  ach('a_pet2', 'Drift', '흘러감', '한 계절에 100,000 꽃잎 획득.', { seasonTotal: 1e5 }),
+  ach('a_pet3', 'Snowfall in Spring', '봄의 폭설', '한 계절에 백만 꽃잎 획득.', { seasonTotal: 1e6 }),
+  ach('a_pet4', 'Petal Sea', '꽃잎의 바다', '한 계절에 1억 꽃잎 획득.', { seasonTotal: 1e8 }),
+  ach('a_pet5', 'The Pink Tide', '분홍 밀물', '한 계절에 100억 꽃잎 획득.', { seasonTotal: 1e10 }),
+  ach('a_pet6', 'Weather System', '기상 체계', '전 생애에 1조 꽃잎 획득.', { allTime: 1e12 }),
+  ach('a_pet7', 'Cosmic Fall', '우주적 낙하', '전 생애에 1경 꽃잎 획득.', { allTime: 1e15 }),
   // — tenders owned, total (6)
-  ach('a_ten1', 'A Helping Hand', 'Own 10 Tenders.', { totalTenders: 10 }),
-  ach('a_ten2', 'Small Staff', 'Own 50 Tenders.', { totalTenders: 50 }),
-  ach('a_ten3', 'The Grove Employs', 'Own 100 Tenders.', { totalTenders: 100 }),
-  ach('a_ten4', 'Full Roster', 'Own 200 Tenders.', { totalTenders: 200 }),
-  ach('a_ten5', 'Standing Army of Spring', 'Own 400 Tenders.', { totalTenders: 400 }),
-  ach('a_ten6', 'Everyone Is Here', 'Own at least one of every Tender.', { oneOfEach: 1 }),
+  ach('a_ten1', 'A Helping Hand', '도우미 한 손', '정령 10명 보유.', { totalTenders: 10 }),
+  ach('a_ten2', 'Small Staff', '작은 직원', '정령 50명 보유.', { totalTenders: 50 }),
+  ach('a_ten3', 'The Grove Employs', '숲의 고용', '정령 100명 보유.', { totalTenders: 100 }),
+  ach('a_ten4', 'Full Roster', '충원된 명부', '정령 200명 보유.', { totalTenders: 200 }),
+  ach('a_ten5', 'Standing Army of Spring', '봄의 상비군', '정령 400명 보유.', { totalTenders: 400 }),
+  ach('a_ten6', 'Everyone Is Here', '모두 여기 있다', '모든 정령을 최소 1명씩 보유.', { oneOfEach: 1 }),
   // — specific tenders (5)
-  ach('a_sp1', 'Swarm', 'Own 100 Wind Sprites.', { tenderOwned: ['sprite', 100] }),
-  ach('a_sp2', 'Basket Economy', 'Own 100 Petal Gatherers.', { tenderOwned: ['gatherer', 100] }),
-  ach('a_sp3', 'Lit From Below', 'Own 50 Stone Lanterns.', { tenderOwned: ['lantern', 50] }),
-  ach('a_sp4', 'Nine Tails Each', 'Own 25 Kitsune Heralds.', { tenderOwned: ['kitsune', 25] }),
-  ach('a_sp5', 'Reaching', 'Own 10 Celestial Boughs.', { tenderOwned: ['bough', 10] }),
+  ach('a_sp1', 'Swarm', '떼', '바람 정령 100명 보유.', { tenderOwned: ['sprite', 100] }),
+  ach('a_sp2', 'Basket Economy', '바구니 경제', '꽃잎 줍는 아이 100명 보유.', { tenderOwned: ['gatherer', 100] }),
+  ach('a_sp3', 'Lit From Below', '아래에서 밝히다', '석등롱 50개 보유.', { tenderOwned: ['lantern', 50] }),
+  ach('a_sp4', 'Nine Tails Each', '아홉 꼬리씩', '여우 사자 25명 보유.', { tenderOwned: ['kitsune', 25] }),
+  ach('a_sp5', 'Reaching', '손 닿는 곳', '하늘의 가지 10개 보유.', { tenderOwned: ['bough', 10] }),
   // — milestones (2)
-  ach('a_mil1', 'Round Number', 'Take any Tender to 10 owned.', { anyMilestone: 10 }),
-  ach('a_mil2', 'Sixty-Four Times', 'Take any Tender to 200 owned.', { anyMilestone: 200 }),
+  ach('a_mil1', 'Round Number', '둥근 숫자', '어떤 정령이든 10명 보유에 도달.', { anyMilestone: 10 }),
+  ach('a_mil2', 'Sixty-Four Times', '64배', '어떤 정령이든 200명 보유에 도달.', { anyMilestone: 200 }),
   // — upgrades (3)
-  ach('a_up1', 'Improvements', 'Buy 10 Upgrades.', { upgrades: 10 }),
-  ach('a_up2', 'Renovation', 'Buy 40 Upgrades.', { upgrades: 40 }),
-  ach('a_up3', 'Nothing Left To Fix', 'Buy 70 Upgrades.', { upgrades: 70 }),
+  ach('a_up1', 'Improvements', '개선', '업그레이드 10개 구매.', { upgrades: 10 }),
+  ach('a_up2', 'Renovation', '리모델링', '업그레이드 40개 구매.', { upgrades: 40 }),
+  ach('a_up3', 'Nothing Left To Fix', '고칠 게 없다', '업그레이드 70개 구매.', { upgrades: 70 }),
   // — bloom stages (2)
-  ach('a_bl1', 'Full Bloom', 'Reach 満開 Full Bloom.', { stage: 3 }),
-  ach('a_bl2', 'Everblossom', 'Reach 常桜 Everblossom.', { stage: 5 }),
+  ach('a_bl1', 'Full Bloom', '만개', '만개에 도달.', { stage: 3 }),
+  ach('a_bl2', 'Everblossom', '영원한 꽃', '영원한 꽃에 도달.', { stage: 5 }),
   // — seasons (4)
-  ach('a_se1', 'Turn of the Season', 'Turn the Season once.', { seasons: 1 }),
-  ach('a_se2', 'Three Springs', 'Turn the Season 3 times.', { seasons: 3 }),
-  ach('a_se3', 'Decade of Blossom', 'Turn the Season 10 times.', { seasons: 10 }),
-  ach('a_se4', 'The Long Cycle', 'Turn the Season 25 times.', { seasons: 25 }),
+  ach('a_se1', 'Turn of the Season', '계절의 전환', '계절을 1번 돌린다.', { seasons: 1 }),
+  ach('a_se2', 'Three Springs', '세 개의 봄', '계절을 3번 돌린다.', { seasons: 3 }),
+  ach('a_se3', 'Decade of Blossom', '꽃의 10년', '계절을 10번 돌린다.', { seasons: 10 }),
+  ach('a_se4', 'The Long Cycle', '긴 순환', '계절을 25번 돌린다.', { seasons: 25 }),
   // — golden petals / storms / varieties (6)
-  ach('a_go1', 'Caught One', 'Catch a Golden Petal.', { golden: 1 }),
-  ach('a_go2', 'Sharp Eyes', 'Catch 10 Golden Petals.', { golden: 10 }),
-  ach('a_go3', 'Nothing Escapes You', 'Catch 50 Golden Petals.', { golden: 50 }),
-  ach('a_st1', 'Rode the Storm', 'Live through a Petal Storm.', { storms: 1 }),
-  ach('a_st2', 'Storm Season', 'Live through 10 Petal Storms.', { storms: 10 }),
-  ach('a_cx1', 'Botanist', 'Record 6 varieties in the Codex.', { codex: 6 }),
+  ach('a_go1', 'Caught One', '하나 잡았다', '황금 꽃잎을 잡는다.', { golden: 1 }),
+  ach('a_go2', 'Sharp Eyes', '날카로운 눈', '황금 꽃잎 10개 잡기.', { golden: 10 }),
+  ach('a_go3', 'Nothing Escapes You', '아무도 빠져나가지 못한다', '황금 꽃잎 50개 잡기.', { golden: 50 }),
+  ach('a_st1', 'Rode the Storm', '폭풍을 탔다', '꽃보라 폭풍을 겪는다.', { storms: 1 }),
+  ach('a_st2', 'Storm Season', '폭풍의 계절', '꽃보라 폭풍 10회 겪기.', { storms: 10 }),
+  ach('a_cx1', 'Botanist', '식물학자', '도감에 6종류 기록.', { codex: 6 }),
   // — secret / joke (5)
-  ach('a_sx1', 'Patience', 'Let five whole minutes pass without shaking the tree.', { idle: 300 }, true),
-  ach('a_sx2', 'The Long Way Home', 'Return after more than twelve hours away.', { offlineH: 12 }, true),
-  ach('a_sx3', 'Frugal', 'Reach a million petals in a Season having bought fewer than 8 Upgrades.', { frugal: 1 }, true),
-  ach('a_sx4', 'Insomnia', 'Be in the grove at night.', { night: 1 }, true),
-  ach('a_sx5', 'Ninety-Nine', 'Hold exactly 99 of a single Tender. On purpose.', { tenderExact: 99 }, true),
+  ach('a_sx1', 'Patience', '인내', '5분 동안 나무를 흔들지 않고 보낸다.', { idle: 300 }, true),
+  ach('a_sx2', 'The Long Way Home', '집까지 먼 길', '12시간 넘게 떠난 후 돌아온다.', { offlineH: 12 }, true),
+  ach('a_sx3', 'Frugal', '검약', '8개 미만의 업그레이드를 산 채, 한 계절에 백만 꽃잎에 도달.', { frugal: 1 }, true),
+  ach('a_sx4', 'Insomnia', '불면증', '밤에 숲에 있다.', { night: 1 }, true),
+  ach('a_sx5', 'Ninety-Nine', '아흔아홉', '어떤 정령이든 정확히 99명 보유. 일부러.', { tenderExact: 99 }, true),
 ].map((a, i) => ({ ...a, secret: a.id.startsWith('a_sx'), index: i }));
 
 /* ==================================================================== *
@@ -879,21 +880,21 @@ export const ACHIEVEMENTS = [
  * ==================================================================== */
 
 export const LIVE_EVENTS = {
-  storm: { id: 'storm', name: 'Petal Storm', kanji: '花嵐', color: '#FFC2D6', desc: '×10 petals per second. The whole hillside is in the air.' },
-  moon: { id: 'moon', name: 'Full Moon', kanji: '満月', color: '#C9D6FF', desc: '+25% critical chance while the moon is up.' },
-  golden: { id: 'golden', name: 'Golden Hour', kanji: '黄金時', color: '#FFD08A', desc: '+15% to every shake while the light holds.' },
-  rain: { id: 'rain', name: 'Spring Rain', kanji: '春雨', color: '#A8C8E0', desc: '+10% petals per second, and the fall slows to a drift.' },
+  storm: { id: 'storm', name: 'Petal Storm', nameKo: '꽃보라 폭풍', kanji: '花嵐', color: '#FFC2D6', desc: '초당 ×10 꽃잎. 언덕 전체가 공기 중에 떠 있다.' },
+  moon: { id: 'moon', name: 'Full Moon', nameKo: '보름달', kanji: '満月', color: '#C9D6FF', desc: '달이 떠 있는 동안 +25% 치명타 확률.' },
+  golden: { id: 'golden', name: 'Golden Hour', nameKo: '황금빛 시간', kanji: '黄金時', color: '#FFD08A', desc: '빛이 머무는 동안 모든 흔들기에 +15%.' },
+  rain: { id: 'rain', name: 'Spring Rain', nameKo: '봄비', kanji: '春雨', color: '#A8C8E0', desc: '초당 꽃잎 +10%, 그리고 꽃잎은 천천히 흘러내린다.' },
 };
 
 export const GOLDEN_BOONS = [
-  { id: 'frenzy', name: 'Frenzy', kanji: '狂咲', weight: 34, dur: 30, color: '#FFD46A',
-    desc: '×7 petals per second for 30 seconds.' },
-  { id: 'lucky', name: 'Lucky', kanji: '幸', weight: 34, dur: 0, color: '#FFE9A8',
-    desc: '+13% of your bank, instantly.' },
-  { id: 'clickfrenzy', name: 'Click Frenzy', kanji: '乱打', weight: 20, dur: 13, color: '#FFC0D8',
-    desc: '×77 per shake for 13 seconds.' },
-  { id: 'bloomfall', name: 'Bloomfall', kanji: '花降', weight: 12, dur: 6, color: '#FFF0C8',
-    desc: 'A minute of petals, all at once, falling where you can catch them.' },
+  { id: 'frenzy', name: 'Frenzy', nameKo: '광란의 꽃', kanji: '狂咲', weight: 34, dur: 30, color: '#FFD46A',
+    desc: '30초 동안 초당 ×7 꽃잎.' },
+  { id: 'lucky', name: 'Lucky', nameKo: '행운', kanji: '幸', weight: 34, dur: 0, color: '#FFE9A8',
+    desc: '현재 보유량의 +13%를 즉시 획득.' },
+  { id: 'clickfrenzy', name: 'Click Frenzy', nameKo: '연타 광란', kanji: '乱打', weight: 20, dur: 13, color: '#FFC0D8',
+    desc: '13초 동안 한 번 흔들기에 ×77.' },
+  { id: 'bloomfall', name: 'Bloomfall', nameKo: '만개 강우', kanji: '花降', weight: 12, dur: 6, color: '#FFF0C8',
+    desc: '1분 동안의 꽃잎이 한꺼번에, 잡을 수 있는 곳으로 떨어진다.' },
 ];
 
 /* ==================================================================== *

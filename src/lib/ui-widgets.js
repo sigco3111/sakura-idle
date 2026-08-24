@@ -104,81 +104,81 @@ export function formatTime(sec) {
  * Canonical content tables (fallbacks — GAME_DESIGN.md is the spec)
  * ------------------------------------------------------------------ */
 export const TENDER_DEFS = [
-  { id: 'sprite',   name: 'Wind Sprite',      kanji: '風精',   glyph: '風', baseCost: 15,     rate: 0.1 },
-  { id: 'gatherer', name: 'Petal Gatherer',   kanji: '花摘み', glyph: '摘', baseCost: 100,    rate: 1 },
-  { id: 'miko',     name: 'Shrine Maiden',    kanji: '巫女',   glyph: '巫', baseCost: 1.1e3,  rate: 8 },
-  { id: 'lantern',  name: 'Stone Lantern',    kanji: '石灯籠', glyph: '灯', baseCost: 1.2e4,  rate: 47 },
-  { id: 'koi',      name: 'Koi Spirit',       kanji: '鯉霊',   glyph: '鯉', baseCost: 1.3e5,  rate: 260 },
-  { id: 'rabbit',   name: 'Moon Rabbit',      kanji: '月兎',   glyph: '兎', baseCost: 1.4e6,  rate: 1.4e3 },
-  { id: 'kitsune',  name: 'Kitsune Herald',   kanji: '狐使',   glyph: '狐', baseCost: 2.0e7,  rate: 7.8e3 },
-  { id: 'envoy',    name: "Wind God's Envoy", kanji: '風神使', glyph: '神', baseCost: 3.3e8,  rate: 4.4e4 },
-  { id: 'heart',    name: 'Everblossom Heart',kanji: '常桜心', glyph: '心', baseCost: 5.1e9,  rate: 2.6e5 },
-  { id: 'bough',    name: 'Celestial Bough',  kanji: '天樹枝', glyph: '天', baseCost: 7.5e10, rate: 1.6e6 },
+  { id: 'sprite',   name: 'Wind Sprite',      nameKo: '바람 정령',   kanji: '風精',   glyph: '風', baseCost: 15,     rate: 0.1 },
+  { id: 'gatherer', name: 'Petal Gatherer',   nameKo: '꽃잎 줍는 아이', kanji: '花摘み', glyph: '摘', baseCost: 100,    rate: 1 },
+  { id: 'miko',     name: 'Shrine Maiden',    nameKo: '무녀',      kanji: '巫女',   glyph: '巫', baseCost: 1.1e3,  rate: 8 },
+  { id: 'lantern',  name: 'Stone Lantern',    nameKo: '석등롱',    kanji: '石灯籠', glyph: '灯', baseCost: 1.2e4,  rate: 47 },
+  { id: 'koi',      name: 'Koi Spirit',       nameKo: '잉어의 영혼', kanji: '鯉霊',   glyph: '鯉', baseCost: 1.3e5,  rate: 260 },
+  { id: 'rabbit',   name: 'Moon Rabbit',      nameKo: '달 토끼',   kanji: '月兎',   glyph: '兎', baseCost: 1.4e6,  rate: 1.4e3 },
+  { id: 'kitsune',  name: 'Kitsune Herald',   nameKo: '여우 사자', kanji: '狐使',   glyph: '狐', baseCost: 2.0e7,  rate: 7.8e3 },
+  { id: 'envoy',    name: "Wind God's Envoy", nameKo: '풍신의 사자', kanji: '風神使', glyph: '神', baseCost: 3.3e8,  rate: 4.4e4 },
+  { id: 'heart',    name: 'Everblossom Heart',nameKo: '영원한 꽃의 마음',kanji: '常桜心', glyph: '心', baseCost: 5.1e9,  rate: 2.6e5 },
+  { id: 'bough',    name: 'Celestial Bough',  nameKo: '하늘의 가지', kanji: '天樹枝', glyph: '天', baseCost: 7.5e10, rate: 1.6e6 },
 ];
 
 export const MILESTONES = [10, 25, 50, 100, 150, 200];
 
 export const STAGE_DEFS = [
-  { i: 0, kanji: '冬芽', name: 'Winter Bud',  threshold: 0 },
-  { i: 1, kanji: '蕾',   name: 'Budding',     threshold: 1e3 },
-  { i: 2, kanji: '初咲', name: 'First Bloom', threshold: 1e5 },
-  { i: 3, kanji: '満開', name: 'Full Bloom',  threshold: 1e7 },
-  { i: 4, kanji: '輝咲', name: 'Radiant',     threshold: 1e10 },
-  { i: 5, kanji: '常桜', name: 'Everblossom', threshold: 1e13 },
+  { i: 0, kanji: '冬芽', name: 'Winter Bud',  nameKo: '겨울 눈봉우리', threshold: 0 },
+  { i: 1, kanji: '蕾',   name: 'Budding',     nameKo: '봉우리',      threshold: 1e3 },
+  { i: 2, kanji: '初咲', name: 'First Bloom', nameKo: '초咲',         threshold: 1e5 },
+  { i: 3, kanji: '満開', name: 'Full Bloom',  nameKo: '만개',         threshold: 1e7 },
+  { i: 4, kanji: '輝咲', name: 'Radiant',     nameKo: '찬란한 꽃',     threshold: 1e10 },
+  { i: 5, kanji: '常桜', name: 'Everblossom', nameKo: '영원한 꽃',    threshold: 1e13 },
 ];
 
 export const EVENT_DEFS = {
-  storm:  { kanji: '花嵐',   name: 'Petal Storm', desc: '×10 passive · the grove roars' },
-  moon:   { kanji: '満月',   name: 'Full Moon',   desc: '+25% crit chance · moonlit palette' },
-  golden: { kanji: '黄金時', name: 'Golden Hour', desc: '+15% click value' },
-  rain:   { kanji: '春雨',   name: 'Spring Rain', desc: '+10% passive · petals fall slow' },
+  storm:  { kanji: '花嵐',   name: 'Petal Storm', nameKo: '꽃보라 폭풍', desc: '×10 수동적 · 숲이 포효한다.' },
+  moon:   { kanji: '満月',   name: 'Full Moon',   nameKo: '보름달',     desc: '+25% 치명타 · 달빛 팔레트.' },
+  golden: { kanji: '黄金時', name: 'Golden Hour', nameKo: '황금빛 시간', desc: '+15% 클릭 가치.' },
+  rain:   { kanji: '春雨',   name: 'Spring Rain', nameKo: '봄비',        desc: '+10% 수동적 · 꽃잎이 천천히 흐른다.' },
 };
 
 export const CODEX_DEFS = [
-  { id: 'somei',    kanji: '染井吉野', name: 'Somei Yoshino',  rarity: 3, glyph: '染', desc: 'The nation\'s clock. Every one of them a clone of a single tree, blooming as one mind.' },
-  { id: 'shidare',  kanji: '枝垂桜',   name: 'Shidarezakura',  rarity: 4, glyph: '垂', desc: 'Branches that bow like a woman letting down her hair. Grief made graceful.' },
-  { id: 'yae',      kanji: '八重桜',   name: 'Yaezakura',      rarity: 4, glyph: '八', desc: 'Thirty petals to a flower. Extravagant, late, unbothered by the ones who left early.' },
-  { id: 'kawazu',   kanji: '河津桜',   name: 'Kawazu-zakura',  rarity: 3, glyph: '河', desc: 'February\'s liar. Deep rose against a winter sky, a month before anyone is ready.' },
-  { id: 'yama',     kanji: '山桜',     name: 'Yamazakura',     rarity: 3, glyph: '山', desc: 'Leaf and flower together — the old poets\' sakura, before we bred the leaves away.' },
-  { id: 'oshima',   kanji: '大島桜',   name: 'Oshima-zakura',  rarity: 3, glyph: '島', desc: 'Salt-tolerant, fragrant. Its leaves wrap the mochi; nothing of it is wasted.' },
-  { id: 'ukon',     kanji: '鬱金桜',   name: 'Ukon',           rarity: 4, glyph: '鬱', desc: 'Turmeric-yellow blossom. Colour of a robe no commoner was allowed to wear.' },
-  { id: 'gyoiko',   kanji: '御衣黄',   name: 'Gyoiko',         rarity: 5, glyph: '衣', desc: 'Green sakura. Stand beneath it and you will argue with yourself about what you saw.' },
-  { id: 'jugatsu',  kanji: '十月桜',   name: 'Jugatsu-zakura', rarity: 4, glyph: '十', desc: 'Blooms twice — autumn, then spring. It never quite believes the year is over.' },
-  { id: 'fuyu',     kanji: '冬桜',     name: 'Fuyuzakura',     rarity: 4, glyph: '冬', desc: 'Small, sparse, and flowering in snow. Proof that stubbornness can be beautiful.' },
-  { id: 'yoko',     kanji: '陽光桜',   name: 'Yoko',           rarity: 5, glyph: '陽', desc: 'Bred by a schoolmaster to mourn his students. Planted, now, on every continent.' },
-  { id: 'ever',     kanji: '常桜',     name: 'Everblossom',    rarity: 5, glyph: '常', desc: 'The tree that refused the calendar. Petals fall and are replaced in the same breath.' },
+  { id: 'somei',    kanji: '染井吉野', name: 'Somei Yoshino',  nameKo: '소메이 요시노', rarity: 3, glyph: '染', desc: '다섯 장의 옅은 꽃잎, 가장자리에 거의 흰빛. 이 나라의 모든 가로수는 한 그루의 복제본으로 심어졌고, 모든 봄에 같은 날에 함께 핀다.' },
+  { id: 'shidare',  kanji: '枝垂桜',   name: 'Shidarezakura',  nameKo: '시다레자쿠라', rarity: 4, glyph: '垂', desc: '가지가 물처럼 떨어지며 그 과정에서 꽃을 피운다. 북쪽에서 가장 오래된 것은 천 년 동안 기울어져 왔다.' },
+  { id: 'yae',      kanji: '八重桜',   name: 'Yaezakura',      nameKo: '야에자쿠라', rarity: 4, glyph: '八', desc: '겹쳐 핀다 — 꽃 한 송이에 20, 30, 때로는 100장. 무거워서 가지가 끄덕인다. 더 많은 시간이 필요하다 듯이, 늦게 핀다.' },
+  { id: 'kawazu',   kanji: '河津桜',   name: 'Kawazu-zakura',  nameKo: '카와즈자쿠라', rarity: 3, glyph: '河', desc: '짙은 장밋빛, 그리고 조급하다 — 다른 것들이 아직 잠들어 있는 2월에 피고, 그 뒤로 한 달을 서리에게 도전하듯 꽃을 붙잡고 있는다.' },
+  { id: 'yama',     kanji: '山桜',     name: 'Yamazakura',     nameKo: '야마자쿠라', rarity: 3, glyph: '山', desc: '산벗꽃, 그리고 옛 시들이 의미하는 그것. 구릿빛 잎이 꽃과 함께 열리므로, 온 언덕이 두 색깔로 동시에 바뀐다.' },
+  { id: 'oshima',   kanji: '大島桜',   name: 'Oshima-zakura',  nameKo: '오시마자쿠라', rarity: 3, glyph: '島', desc: '희고, 꽃잎이 넓고, 희미하게 달다. 잎은 소금에 절여 콩과자로 감싼다. 나라의 절반이 매 봄 이 나무를 보지 않고 맛본다.' },
+  { id: 'ukon',     kanji: '鬱金桜',   name: 'Ukon',           nameKo: '우콘', rarity: 4, glyph: '鬱', desc: '옅은 황록색, 강황으로 들인 비단의 색. 나이를 먹으며 중앙이 분홍으로 바래진다. 꽃에게 잘못된 방향이지만 신경 쓰지 않는다.' },
+  { id: 'gyoiko',   kanji: '御衣黄',   name: 'Gyoiko',         nameKo: '교이고', rarity: 5, glyph: '衣', desc: '초록이다. 진짜로 초록이다. 각 꽃잎 위로 붉은 줄무늬가 흐른다. 궁정의 법복 색이라서, 그 색을 가질 수 있는 게 그것밖에 없었다.' },
+  { id: 'jugatsu',  kanji: '十月桜',   name: 'Jugatsu-zakura', nameKo: '쥬가쓰자쿠라', rarity: 4, glyph: '十', desc: '두 번 핀다: 10월에 한 차례 흩어지게, 봄에 나머지를. 이 배열을 설명한 적이 없고, 아무도 그것을 설득하지 못했다.' },
+  { id: 'fuyu',     kanji: '冬桜',     name: 'Fuyuzakura',     nameKo: '후유자쿠라', rarity: 4, glyph: '冬', desc: '겨울의 벚꽃. 작고, 드문드문하며, 눈 속에서 꽃을 피운다 — 당신이 없는 동안에도 숲이 계속 일하고 있다는 증거.' },
+  { id: 'yoko',     kanji: '陽光桜',   name: 'Yoko',           nameKo: '요코', rarity: 5, glyph: '陽', desc: '전쟁 후, 돌아오지 않은 학생들을 추모하기 위해 학교 선생님이 어디서든 자라날 무언가를 만들었다. 선명한 분홍, 강인함, 지금은 어디에나 있다.' },
+  { id: 'ever',     kanji: '常桜',     name: 'Everblossom',    nameKo: '영원한 꽃', rarity: 5, glyph: '常', desc: '어느 식물 도감에도 없다. 나뭇결에 금이, 낙하에는 오로라가, 그리고 휴면기가 전혀 없다. 당신은 이 모든 시간 동안 그것을 키우고 있었다.' },
 ];
 
 /** Upgrade families — id, kanji glyph, and the accent class used for the sigil. */
 export const UPGRADE_FAMILIES = [
-  { id: 'shake',  kanji: '揺', name: 'Shake',  sub: 'the hand upon the branch' },
-  { id: 'tender', kanji: '育', name: 'Tender', sub: 'those who keep the grove' },
-  { id: 'grove',  kanji: '苑', name: 'Grove',  sub: 'the shape of the place itself' },
+  { id: 'shake',  kanji: '揺', name: 'Shake',  nameKo: '손 흔들기', sub: '가지 위 손' },
+  { id: 'tender', kanji: '育', name: 'Tender', nameKo: '정령 돌봄', sub: '숲을 지키는 자들' },
+  { id: 'grove',  kanji: '苑', name: 'Grove',  nameKo: '숲 자체',  sub: '장소 자체의 형태' },
 ];
 
 /** Fallback upgrade list — the real catalogue lives in 60-game.js. */
 export const UPGRADE_DEFS = [
-  { id: 's1', family: 'shake', name: 'Steady Hand',      cost: 100,   flavour: 'You stop grabbing at the branch and simply ask it.' },
-  { id: 's2', family: 'shake', name: 'Wrist of the Wind', cost: 1.2e3, flavour: 'The gust does the work; you only suggest the timing.' },
-  { id: 's3', family: 'shake', name: 'Falling Star Strike', cost: 1.4e4, flavour: 'Rarely, the tree gives back more than it was asked for.' },
-  { id: 's4', family: 'shake', name: 'Ninefold Petalfall', cost: 2.6e5, flavour: 'One shake, nine breaths of falling. Nobody counts the ninth.' },
-  { id: 't1', family: 'tender', name: 'Sprite Whistle',   cost: 480,   flavour: 'Two notes. They pretend not to have heard the first.' },
-  { id: 't2', family: 'tender', name: 'Woven Baskets',    cost: 3.6e3, flavour: 'Bamboo, split thin. A gatherer with a good basket is worth two without.' },
-  { id: 't3', family: 'tender', name: 'Morning Prayer',   cost: 4.4e4, flavour: 'The maidens sing before the sun. The tree seems to prefer it.' },
-  { id: 't4', family: 'tender', name: 'All Hands to the Bough', cost: 6.5e5, flavour: 'Every tender ×1.5. Nobody is permitted to be a bystander.' },
-  { id: 'g1', family: 'grove', name: 'Dew Reservoir',     cost: 2.2e3, flavour: 'A stone basin that holds the night for you while you are away.' },
-  { id: 'g2', family: 'grove', name: 'Gilded Fortune',    cost: 2.8e4, flavour: 'Golden petals drift more often. Luck, it turns out, is landscaping.' },
-  { id: 'g3', family: 'grove', name: 'Petal Magnet',      cost: 1.8e5, flavour: 'Fallen petals lean toward you, the way cats do when it suits them.' },
-  { id: 'g4', family: 'grove', name: 'Windward Shrine',   cost: 3.1e6, flavour: 'Storms linger. The shrine gives them a reason to stay.' },
+  { id: 's1', family: 'shake', name: 'Steady Hand',      nameKo: '단단한 손',       cost: 100,   flavour: '가지를 움켜잡는 것을 멈추고, 단순히 부탁하기 시작한다.' },
+  { id: 's2', family: 'shake', name: 'Wrist of the Wind', nameKo: '바람의 손목',    cost: 1.2e3, flavour: '바람이 일을 하고, 당신은 타이밍만 알려준다.' },
+  { id: 's3', family: 'shake', name: 'Falling Star Strike', nameKo: '별이 떨어지는 타격', cost: 1.4e4, flavour: '드물게, 나무가 요구한 것보다 더 많이 돌려준다.' },
+  { id: 's4', family: 'shake', name: 'Ninefold Petalfall', nameKo: '아홉 겹 꽃낙하', cost: 2.6e5, flavour: '한 번 흔들어 아홉 호흡의 낙하. 아홉 번째는 아무도 세지 않는다.' },
+  { id: 't1', family: 'tender', name: 'Sprite Whistle',   nameKo: '정령의 호루라기', cost: 480,   flavour: '두 음. 첫 번째는 못 들은 척한다.' },
+  { id: 't2', family: 'tender', name: 'Woven Baskets',    nameKo: '짠 바구니',     cost: 3.6e3, flavour: '얇게 쪼갠 대나무. 좋은 바구니를 가진 줍는 아이 둘이 없는 아이 셋보다 낫다.' },
+  { id: 't3', family: 'tender', name: 'Morning Prayer',   nameKo: '아침 기도',     cost: 4.4e4, flavour: '무녀들이 해 뜸 전에 노래한다. 나무가 그것을 좋아하는 것 같다.' },
+  { id: 't4', family: 'tender', name: 'All Hands to the Bough', nameKo: '모두 가지로', cost: 6.5e5, flavour: '모든 정령 ×1.5. 아무도 구경할 수 없다.' },
+  { id: 'g1', family: 'grove', name: 'Dew Reservoir',     nameKo: '이슬 저장고',   cost: 2.2e3, flavour: '밤 동안 당신을 위해 머무는 돌 그릇.' },
+  { id: 'g2', family: 'grove', name: 'Gilded Fortune',    nameKo: '금빛 행운',     cost: 2.8e4, flavour: '황금 꽃잎이 더 자주 흘러온다. 결국, 행운은 조경이다.' },
+  { id: 'g3', family: 'grove', name: 'Petal Magnet',      nameKo: '꽃잎 자석',     cost: 1.8e5, flavour: '떨어진 꽃잎이 당신 쪽으로 기울어진다. 고양이가 마음에 드는 것처럼.' },
+  { id: 'g4', family: 'grove', name: 'Windward Shrine',   nameKo: '바람쪽 사당',   cost: 3.1e6, flavour: '폭풍이 머문다. 사당이 그것이 머무를 이유를 준다.' },
 ];
 
 /** Constellation — 5 branches × ~6 nodes, laid out radially. */
 export const CONSTEL_BRANCHES = [
-  { id: 'wind',    kanji: '風', name: 'Wind',    hue: '#9FD4E8' },
-  { id: 'water',   kanji: '水', name: 'Water',   hue: '#8FA8E8' },
-  { id: 'moon',    kanji: '月', name: 'Moon',    hue: '#D8CBF0' },
-  { id: 'stone',   kanji: '石', name: 'Stone',   hue: '#D8C29A' },
-  { id: 'blossom', kanji: '桜', name: 'Blossom', hue: '#F2A8C6' },
+  { id: 'wind',    kanji: '風', name: 'Wind',    nameKo: '바람', hue: '#9FD4E8' },
+  { id: 'water',   kanji: '水', name: 'Water',   nameKo: '물',  hue: '#8FA8E8' },
+  { id: 'moon',    kanji: '月', name: 'Moon',    nameKo: '달',  hue: '#D8CBF0' },
+  { id: 'stone',   kanji: '石', name: 'Stone',   nameKo: '돌',  hue: '#D8C29A' },
+  { id: 'blossom', kanji: '桜', name: 'Blossom', nameKo: '꽃',  hue: '#F2A8C6' },
 ];
 
 /** Deterministic radial node layout: [{id,branch,x,y,ring,cost}] + edges. */

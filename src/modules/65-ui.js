@@ -39,10 +39,10 @@ const EVENT_PRIORITY = ['storm', 'clickFrenzy', 'frenzy', 'bloomfall', 'rain', '
  * the chip forced 花びら to wrap and the HUD plate grew 30 px on dusk alone.
  */
 const PHASE_META = {
-  dawn: { kanji: '朝', name: 'DAWN', note: 'first light' },
-  day: { kanji: '昼', name: 'DAY', note: 'full sun' },
-  dusk: { kanji: '夕', name: 'DUSK', note: '黄金時 +15%' },
-  night: { kanji: '夜', name: 'NIGHT', note: '満月 +25%' },
+  dawn: { kanji: '朝', name: 'DAWN', note: '첫 빛' },
+  day: { kanji: '昼', name: 'DAY', note: '온갖 햇살' },
+  dusk: { kanji: '夕', name: 'DUSK', note: '황금시 +15%' },
+  night: { kanji: '夜', name: 'NIGHT', note: '보름달 +25%' },
 };
 /**
  * Keyboard map — the whole of it, in one place, so a new binding cannot quietly
@@ -58,21 +58,21 @@ const PHASE_META = {
  * to [ and ]. Do not bind Tab, Shift+Tab, or the arrow keys at window level.
  */
 const KEY_HELP = [
-  ['Space', 'shake the bough'],
-  ['1–9', 'buy a Tender'],
-  ['S', 'these settings'],
-  ['[  ]', 'cycle panels'],
-  ['Esc', 'close'],
-  ['Tab', 'move between controls'],
+  ['Space', '나뭇가지 흔들기'],
+  ['1–9', '정령 구매'],
+  ['S', '이 설정'],
+  ['[  ]', '패널 순환'],
+  ['Esc', '닫기'],
+  ['Tab', '컨트롤 사이 이동'],
 ];
 const EVENT_META = {
-  storm: { kanji: '花嵐', name: 'Petal Storm', desc: '×10 petals per second · the whole hillside is in the air' },
-  rain: { kanji: '春雨', name: 'Spring Rain', desc: '+10% petals per second · the fall slows to a drift' },
-  moon: { kanji: '満月', name: 'Full Moon', desc: '+25% critical chance while the moon is up' },
-  goldenHour: { kanji: '黄金時', name: 'Golden Hour', desc: '+15% to every shake while the light holds' },
-  frenzy: { kanji: '狂咲', name: 'Frenzy', desc: '×7 petals per second' },
-  clickFrenzy: { kanji: '乱打', name: 'Click Frenzy', desc: '×77 to every shake' },
-  bloomfall: { kanji: '花降', name: 'Bloomfall', desc: 'a minute of the grove, falling all at once' },
+  storm: { kanji: '花嵐', name: 'Petal Storm', desc: '초당 ×10 꽃잎 · 온 언덕이 공기 중에 떠 있다' },
+  rain: { kanji: '春雨', name: 'Spring Rain', desc: '초당 +10% 꽃잎 · 낙화가 흘러내리듯 천천히' },
+  moon: { kanji: '満月', name: 'Full Moon', desc: '달이 떠 있는 동안 +25% 치명타' },
+  goldenHour: { kanji: '黄金時', name: 'Golden Hour', desc: '빛이 머무는 동안 매 흔들기 +15%' },
+  frenzy: { kanji: '狂咲', name: 'Frenzy', desc: '초당 ×7 꽃잎' },
+  clickFrenzy: { kanji: '乱打', name: 'Click Frenzy', desc: '매 흔들기 ×77' },
+  bloomfall: { kanji: '花降', name: 'Bloomfall', desc: '숲의 1분이 한꺼번에 떨어진다' },
 };
 
 export default {
@@ -209,18 +209,18 @@ export default {
         setClass(muteBtn, 'off', !!s.muteAll);
         muteBtn.setAttribute('aria-pressed', s.muteAll ? 'true' : 'false');
         muteBtn.setAttribute('aria-label', s.muteAll
-          ? 'Sound is off. Unmute all sound'
-          : 'Sound is on. Mute all sound');
-        muteBtn.title = s.muteAll ? 'Sound is off — click to bring it back' : 'Mute all sound  音';
+          ? '소리가 꺼져 있습니다. 모든 소리를 켭니다'
+          : '소리가 켜져 있습니다. 모든 소리를 끕니다');
+        muteBtn.title = s.muteAll ? '소리 꺼짐 — 클릭하면 다시 켭니다' : '모든 소리 끄기  音';
       }
       /* Both states are announced, not just recoloured. One string covers both so
          `announce`'s de-dupe means the many no-change syncs cost nothing, and
          switching a state back OFF is spoken as clearly as switching it on. */
       announce(
-        (s.muteAll ? 'All sound muted.' : 'Sound on.') + ' '
+        (s.muteAll ? '모든 소리가 음소거되었습니다.' : '소리가 켜졌습니다.') + ' '
         + (s.reducedMotion
-          ? 'Reduced motion on — screen shake, camera drift and flashes are held off.'
-          : 'Motion effects on.'));
+          ? '동작 감소 켜짐 — 화면 흔들림, 카메라 흐름, 섬광이 억제됩니다.'
+          : '동작 효과가 켜졌습니다.'));
 
       /* No isConnected test here: buildSoundAndMotion() paints its controls
          before they are mounted, and an isConnected check would drop the handle
@@ -291,8 +291,8 @@ export default {
 
     const seasonChip = h('button.sk-chip.season', {
       type: 'button', onclick: () => selectTab('star'),
-      title: 'Turn the Season', 'aria-label': 'Season ready — open the Constellation',
-    }, h('i', { 'aria-hidden': 'true' }), h('span', 'SEASON READY'));
+      title: '계절을 돌립니다', 'aria-label': '계절 준비 완료 — 별자리(은하수)를 엽니다',
+    }, h('i', { 'aria-hidden': 'true' }), h('span', '계절 준비 완료'));
     seasonChip.style.display = 'none';
 
     /* Bloom capsule: the whole 0 → 常桜 run in log space, one tick per stage
@@ -311,8 +311,8 @@ export default {
        Moon, so the player needs to see which window they are in. */
     const elPhaseK = h('i.sk-kanji', '昼');
     const elPhaseN = h('b', 'DAY');
-    const elPhaseNote = h('span', 'full sun');
-    const phaseChip = h('div.sk-phase', { title: 'Time of day' }, elPhaseK,
+    const elPhaseNote = h('span', '온갖 햇살');
+    const phaseChip = h('div.sk-phase', { title: '시간대' }, elPhaseK,
       h('div', elPhaseN, elPhaseNote));
 
     const hud = h('div.sk-hud',
@@ -329,8 +329,8 @@ export default {
           ),
         ),
         h('div.sk-chips',
-          h('div.sk-chip.blossom', { title: 'Blossoms 桜花 — permanent, never reset' }, h('i'), elBlossom),
-          h('div.sk-chip.essence', { title: 'Sakura Essence 桜精 — earned by turning the Season' }, h('i'), elEssence),
+          h('div.sk-chip.blossom', { title: '꽃송이 桜花 — 영구적, 절대 초기화되지 않음' }, h('i'), elBlossom),
+          h('div.sk-chip.essence', { title: '벚꽃 정수 桜精 — 계절을 돌려서 획득' }, h('i'), elEssence),
           seasonChip,
         ),
         h('div.sk-stage',
@@ -348,15 +348,15 @@ export default {
        activates it from ALSO reaching 60-game's window handler and double-shaking. */
     const shakeBtn = h('button.sk-shake', {
       type: 'button', onclick: () => doShake(),
-      title: 'Shake the bough  (Space)',
-      'aria-label': 'Shake the bough — Space',
+      title: '가지 흔들기  (Space)',
+      'aria-label': '가지 흔들기 — Space',
     },
-      h('div.tip', { 'aria-hidden': 'true' }, 'start here — the bough drops petals when you shake it'),
+      h('div.tip', { 'aria-hidden': 'true' }, '여기서 시작 — 가지를 흔들면 꽃잎이 떨어집니다'),
       h('kbd', { 'aria-hidden': 'true' }, 'SPACE'),
-      h('span', 'shake the bough'),
+      h('span', '가지 흔들기'),
       h('div.bar', { 'aria-hidden': 'true' }),
       elShake2,
-      h('span', { style: { opacity: '.66', letterSpacing: '.16em' }, 'aria-hidden': 'true' }, '花びら'));
+      h('span', { style: { opacity: '.66', letterSpacing: '.16em' }, 'aria-hidden': 'true' }, '꽃잎'));
     ui.append(shakeBtn);
 
     /* One-click mute, bottom-left, always on screen. The full mix lives behind
@@ -366,13 +366,13 @@ export default {
     muteBtn = h('button.sk-mute', {
       type: 'button',
       'aria-pressed': 'false',
-      'aria-label': 'Mute all sound',
-      title: 'Mute all sound  音',
+      'aria-label': '모든 소리 음소거',
+      title: '모든 소리 음소거  音',
       onclick: (e) => { e.stopPropagation(); SETTINGS.set('muteAll', !SETTINGS.get('muteAll')); },
     }, h('i', { 'aria-hidden': 'true' }));
     ui.append(muteBtn);
 
-    const goldenHint = h('div.sk-golden', h('i'), h('span', '金花弁 — catch it'));
+    const goldenHint = h('div.sk-golden', h('i'), h('span', '금화弁 — 잡아라'));
     goldenHint.style.display = 'none';
     ui.append(goldenHint);
 
@@ -387,11 +387,11 @@ export default {
      * 3.  Right rail + tabs
      * ============================================================== */
     const TABS = [
-      { id: 'tenders', kanji: '世', title: 'Tenders', jp: '世話', key: null },
-      { id: 'upgrades', kanji: '強', title: 'Upgrades', jp: '強化', key: null },
-      { id: 'codex', kanji: '図', title: 'Codex', jp: '桜図鑑', key: null },
-      { id: 'star', kanji: '星', title: 'Constellation', jp: '星屑ノ樹', key: null },
-      { id: 'set', kanji: '設', title: 'Settings', jp: '設定', key: 'S' },
+      { id: 'tenders', kanji: '世', title: 'Tenders', titleKo: '정령', jp: '世話', key: null },
+      { id: 'upgrades', kanji: '強', title: 'Upgrades', titleKo: '업그레이드', jp: '強化', key: null },
+      { id: 'codex', kanji: '図', title: 'Codex', titleKo: '벚꽃 도감', jp: '桜図鑑', key: null },
+      { id: 'star', kanji: '星', title: 'Constellation', titleKo: '별자리', jp: '星屑ノ樹', key: null },
+      { id: 'set', kanji: '設', title: 'Settings', titleKo: '설정', jp: '設定', key: 'S' },
     ];
     const TAB_ORDER = TABS.map((t) => t.id);
     const tabEls = new Map();
@@ -405,7 +405,7 @@ export default {
      * explicit aria-label on every one.
      */
     const tabStrip = h('div.sk-tabs', {
-      role: 'tablist', 'aria-label': 'Grove panels', 'aria-orientation': 'vertical',
+      role: 'tablist', 'aria-label': '숲 패널', 'aria-orientation': 'vertical',
     });
     function railKey(e) {
       let d = 0;
@@ -435,8 +435,8 @@ export default {
         id: 'sk-tab-' + t.id,
         tabindex: '-1',
         'aria-selected': 'false',
-        'aria-label': `${t.title} ${t.jp}` + (t.key ? ` — shortcut ${t.key}` : ''),
-        title: `${t.title} ${t.jp}` + (t.key ? `  (${t.key})` : ''),
+        'aria-label': `${t.titleKo ?? t.title} ${t.jp}` + (t.key ? ` — 단축키 ${t.key}` : ''),
+        title: `${t.titleKo ?? t.title} ${t.jp}` + (t.key ? `  (${t.key})` : ''),
         onclick: () => selectTab(t.id, true),
         onkeydown: railKey,
       }, h('span', { 'aria-hidden': 'true' }, t.kanji));
@@ -533,7 +533,7 @@ export default {
       rabbit: '兎', kitsune: '狐', envoy: '神', heart: '心', bough: '天',
     };
     const tenderRows = new Map();
-    const tenderPanel = panel({ title: 'TENDERS', kanji: '世 話', cls: 'sk-panel' });
+    const tenderPanel = panel({ title: '정령', kanji: '世 話', cls: 'sk-panel' });
     let bulkSeg = null, tenderTotalEl = null, teaser = null, teaserNeed = null;
     /** One tapered rule per rarity transition, keyed by the row that follows it. */
     const bandRules = new Map();
@@ -579,7 +579,7 @@ export default {
       tenderPanel.body.append(teaser);
 
       bulkSeg = segmented([['×1', 1], ['×10', 10], ['×25', 25], ['MAX', -1]],
-        (v) => { A.setBulk(v); refresh(); }, { ariaLabel: 'How many to buy at once' });
+        (v) => { A.setBulk(v); refresh(); }, { ariaLabel: '한 번에 구매할 수량' });
       tenderTotalEl = h('span.sk-hint.num', '');
       tenderPanel.root.append(h('div.sk-panel-foot', bulkSeg.root, tenderTotalEl));
     }
@@ -588,17 +588,17 @@ export default {
     /* ============================================================== *
      * 5.  Upgrade panel (dynamic — the available set changes)
      * ============================================================== */
-    const upgradePanel = panel({ title: 'UPGRADES', kanji: '強 化', cls: 'sk-panel' });
-    const upgradeFootL = h('span.sk-hint', 'one-shot purchases · they never expire');
+    const upgradePanel = panel({ title: '업그레이드', kanji: '強 化', cls: 'sk-panel' });
+    const upgradeFootL = h('span.sk-hint', '일회성 구매 · 만료되지 않음');
     const upgradeFootR = h('span.sk-hint.num', '');
     upgradePanel.root.append(h('div.sk-panel-foot', upgradeFootL, upgradeFootR));
     let upgradeKey = '';
     const upgradeRows = [];
 
-    const HEART_FAM = { id: 'heart', kanji: '心', name: 'Heartwood', sub: 'bought with Blossoms · survives every Season' };
+    const HEART_FAM = { id: 'heart', kanji: '心', name: 'Heartwood', nameKo: '나무심장', sub: '꽃송이로 구매 · 매 계절을 살아남음' };
     function famMeta(id) {
       if (id === 'heart') return HEART_FAM;
-      return UPGRADE_FAMILIES.find((f) => f.id === id) ?? { id, kanji: '強', name: id, sub: '' };
+      return UPGRADE_FAMILIES.find((f) => f.id === id) ?? { id, kanji: '強', name: id, nameKo: id, sub: '' };
     }
 
     function buildUpgrades() {
@@ -643,18 +643,18 @@ export default {
         const canP = A.canPrestige();
         upgradePanel.body.append(h('div.sk-done',
           h('div.sl'),
-          h('div.cap', bought.length ? 'Nothing left to learn' : 'Nothing to learn yet'),
-          h('h3', bought.length ? '強化 完 · ALL LESSONS TAKEN' : '強化 未 · THE GROVE IS YOUNG'),
+          h('div.cap', bought.length ? '더 배울 게 없습니다' : '아직 배울 게 없습니다'),
+          h('h3', bought.length ? '強化 完 · 모든 학습 완료' : '強化 未 · 숲은 어리다'),
           h('div.fv', bought.length
-            ? `All ${A.fmt(bought.length)} of them are yours. They keep until the Season turns — and the next Season starts with everything you have earned since the first.`
-            : 'Buy a Tender or two and the grove will start suggesting things.'),
+            ? `${A.fmt(bought.length)}개가 모두 당신의 것입니다. 계절이 돌아올 때까지 유지되며, 다음 계절은 첫 계절 이후로 모은 모든 것을 가지고 시작합니다.`
+            : '정령을 한둘 사면, 숲이 제안하기 시작합니다.'),
           bought.length
             ? h('div.act', canP
-              ? goldBtn(`TURN THE SEASON  +${A.fmt(A.essencePreview())} 桜精`, () => { A.prestige(); refresh(); })
-              : goldBtn('OPEN THE CONSTELLATION', () => selectTab('star'), { cls: 'ghost' }))
+              ? goldBtn(`계절 전환  +${A.fmt(A.essencePreview())} 정수`, () => { A.prestige(); refresh(); })
+              : goldBtn('별자리 열기', () => selectTab('star'), { cls: 'ghost' }))
             : null));
         if (bought.length) {
-          upgradePanel.body.append(famHeader({ id: 'done', kanji: '済', name: 'Learned', sub: `${bought.length} kept until the Season turns` }));
+          upgradePanel.body.append(famHeader({ id: 'done', kanji: '済', name: 'Learned', nameKo: '학습 완료', sub: `${bought.length}개, 계절이 돌아올 때까지 유지됨` }));
           const grid = h('div.sk-learned');
           for (const u of bought.slice().reverse()) {
             grid.append(h('div.sk-lchip', { class: 'fam-' + (u.family ?? 'grove'), title: `${u.name ?? u.id}\n${u.flavour ?? ''}` },
@@ -663,15 +663,15 @@ export default {
           upgradePanel.body.append(grid);
         }
       }
-      upgradeFootR.textContent = `${bought.length} learned`;
+      upgradeFootR.textContent = `${bought.length} 학습 완료`;
     }
     function famHeader(fam) {
-      return h('div.sk-fam', h('div.d'), h('h4', fam.name), h('div.ln'),
+      return h('div.sk-fam', h('div.d'), h('h4', fam.nameKo ?? fam.name), h('div.ln'),
         h('span.sk-hint', { style: { fontStyle: 'italic' } }, fam.sub ?? ''));
     }
     function mkUpgradeRow({ id, family, name, flavour, cost, currency, buy }) {
-      const btn = buyBtn(buy, `${currency === 'blossoms' ? 'Engrave' : 'Learn'} ${name}`,
-        currency === 'blossoms' ? 'ENGRAVE' : 'LEARN');
+      const btn = buyBtn(buy, `${currency === 'blossoms' ? '조각하다' : '배우다'} ${name}`,
+        currency === 'blossoms' ? '조각' : '배움');
       btn.root.classList.add('sm');
       btn.set(A.fmt(cost), currency === 'blossoms' ? '桜花' : '花');
       const row = h('div.sk-up', { class: 'fam-' + family, onclick: buy },
@@ -690,22 +690,22 @@ export default {
       /* `codexw`: twelve rarity cards at 6x2. Four across x three rows never fit
          inside an 82vh modal at any size we ship — the bottom row sat under the
          fold. See the .sk-codex block in ui-style.js for the measurements. */
-      const p = panel({ title: 'SAKURA CODEX', kanji: '桜 図 鑑', cls: 'sk-modal codexw', close: closeModal });
+      const p = panel({ title: '벚꽃 도감', kanji: '桜 図 鑑', cls: 'sk-modal codexw', close: closeModal });
       p.root.__titleId = p.titleId;
       const list = A.codexViews();
       /* the reading pane is a live region: selecting a card by keyboard updates
          text well away from the focus, which a screen reader would otherwise miss */
       const detail = h('div.sk-detail', { role: 'status', 'aria-live': 'polite' },
-        h('div.sk-title', { style: { fontSize: 'calc(var(--u)*1.0)' } }, '十二の桜'),
-        h('div.sk-flavour', 'Twelve varieties answer to the Everblossom. Select one to read it.'));
+        h('div.sk-title', { style: { fontSize: 'calc(var(--u)*1.0)' } }, '열두 개의 벚꽃'),
+        h('div.sk-flavour', '열두 종류가 영원한 꽃에 응답합니다. 하나를 골라 읽어보세요.'));
       const grid = h('div.sk-codex', { role: 'list' });
       list.forEach((d, i) => {
         const r = d.rarity ?? 3;
         const found = !!(d.found ?? d.unlocked);
         const pick = () => {
           clear(detail).append(
-            h('div.sk-title', { style: { fontSize: 'calc(var(--u)*1.05)' } }, found ? `${d.kanji}  ${d.name}` : '？？？'),
-            h('div.sk-flavour', found ? d.desc : 'Not yet found. The grove keeps its own counsel.'));
+            h('div.sk-title', { style: { fontSize: 'calc(var(--u)*1.05)' } }, found ? `${d.kanji}  ${d.nameKo ?? d.name}` : '？？？'),
+            h('div.sk-flavour', found ? d.desc : '아직 발견되지 않았습니다. 숲은 스스로의 의견을 가집니다.'));
           card.classList.remove('flip'); void card.offsetWidth; card.classList.add('flip');
         };
         /* role=button + tabindex=0 rather than a real <button>: .sk-rc is an
@@ -719,8 +719,8 @@ export default {
           role: 'button',
           tabindex: '0',
           'aria-label': found
-            ? `${d.name} ${d.kanji} — ${r} star, found`
-            : `Variety ${i + 1} of ${list.length} — undiscovered`,
+            ? `${d.nameKo ?? d.name} ${d.kanji} — ${r}성, 발견됨`
+            : `종류 ${i + 1}/${list.length} — 미발견`,
           onclick: pick,
           onkeydown: (e) => {
             if (e.key !== 'Enter' && e.key !== ' ' && e.key !== 'Spacebar') return;
@@ -731,7 +731,7 @@ export default {
             found ? (d.kanji?.[0] ?? '桜') : '？', h('div.shine')),
           h('div.nameplate', stars(found ? r : 0, r),
             h('div.jp', found ? d.kanji : '？？？'),
-            h('div.en', found ? d.name : 'undiscovered')));
+            h('div.en', found ? (d.nameKo ?? d.name) : '미발견')));
         if (found) card.classList.add('flip');
         grid.append(card);
       });
@@ -743,27 +743,27 @@ export default {
         /* "earned" is a gold seal visually; the word has to be in the name too */
         achWrap.append(h('div.sk-ach', {
           class: a.got ? 'got' : '', title: a.desc, role: 'listitem',
-          'aria-label': `${a.got ? a.name : (a.secret ? 'Secret achievement' : a.name)} — `
-            + (a.got ? 'earned' : 'not yet earned') + (a.desc ? '. ' + a.desc : ''),
+          'aria-label': `성취 ${a.got ? (a.nameKo ?? a.name) : (a.secret ? '비밀 성취' : (a.nameKo ?? a.name))} — `
+            + (a.got ? '달성' : '미달성') + (a.desc ? '. ' + a.desc : ''),
         },
-          h('i', { 'aria-hidden': 'true' }), h('span', a.got ? a.name : (a.secret ? '???' : a.name))));
+          h('i', { 'aria-hidden': 'true' }), h('span', a.got ? (a.nameKo ?? a.name) : (a.secret ? '???' : (a.nameKo ?? a.name)))));
       }
 
       /* Two views behind a segmented control. Stacked, the 48-row achievement
          grid sat below the modal's 82vh fold and read as unbuilt. */
-      const nav = segmented([['桜 図鑑', 'varieties'], [`実績 ${got}/${achs.length}`, 'achievements']],
+      const nav = segmented([['桜 図鑑', 'varieties'], [`성취 ${got}/${achs.length}`, 'achievements']],
         (v) => openModal(buildCodex(v), 'codex', { rebuild: true }),
-        { ariaLabel: 'Codex view' });
+        { ariaLabel: '도감 보기' });
       nav.set(view);
 
       if (view === 'achievements' && achs.length) {
         mount(p.body, h('div.sk-mnav', nav.root),
           h('div.sk-flavour', { style: { textAlign: 'center', marginBottom: 'calc(var(--u)*.5)' } },
-            'Every one of them is worth +1% of everything, forever.'),
+            '모두 하나씩, 영원히 모든 것에 +1%를 부여합니다.'),
           achWrap);
         p.root.append(h('div.sk-panel-foot',
-          h('span.sk-hint', 'each one adds +1% to all production'),
-          h('span.sk-hint.num', `${got} / ${achs.length} earned`)));
+          h('span.sk-hint', '각 성취는 모든 생산에 +1%를 더한다'),
+          h('span.sk-hint.num', `${got} / ${achs.length} 획득`)));
         return p.root;
       }
 
@@ -772,8 +772,8 @@ export default {
       mount(p.body, achs.length ? h('div.sk-mnav', nav.root) : null, grid);
       p.root.append(h('div.sk-nodebar', detail));
       p.root.append(h('div.sk-panel-foot',
-        h('span.sk-hint', 'each variety tints the petals of the world'),
-        h('span.sk-hint.num', `${list.filter((d) => d.found).length} / ${list.length} found`)));
+        h('span.sk-hint', '각 종류는 세상의 꽃잎을 물들인다'),
+        h('span.sk-hint.num', `${list.filter((d) => d.found).length} / ${list.length} 발견`)));
       return p.root;
     }
 
@@ -781,7 +781,7 @@ export default {
      * 7.  Constellation modal — radial star tree over a night sky
      * ============================================================== */
     function buildConstellation(preselect = null) {
-      const p = panel({ title: 'CONSTELLATION', kanji: '星 屑 ノ 樹', cls: 'sk-modal wide', close: closeModal });
+      const p = panel({ title: '별자리', kanji: '星 屑 ノ 樹', cls: 'sk-modal wide', close: closeModal });
       p.root.__titleId = p.titleId;
       const nodes = A.nodeViews();
       const branches = A.branches();
@@ -811,9 +811,9 @@ export default {
       /* The star map is a single-tab-stop listbox with a roving tabindex: thirty
          separate tab stops would make Tab useless inside this dialog, and arrow
          keys are what a star map wants anyway. */
-      const gNode = svg('g', { role: 'listbox', 'aria-label': 'Constellation stars', tabindex: null });
+      const gNode = svg('g', { role: 'listbox', 'aria-label': '별자리', tabindex: null });
       s.setAttribute('role', 'group');
-      s.setAttribute('aria-label', 'Star map');
+      s.setAttribute('aria-label', '별지도');
       s.append(gEdge, gNode);
       const starEls = [];
 
@@ -842,7 +842,7 @@ export default {
          real AWAKEN button, which is also the only way to read what a node does. */
       const nodeHost = h('div', { role: 'status', 'aria-live': 'polite' });
       const detail = h('div.sk-detail', { style: { minHeight: '0' } },
-        h('div.sk-flavour', 'Pick a star with the arrow keys, then Enter. Essence spent here still counts toward the +2% it grants — spend freely.'));
+        h('div.sk-flavour', '방향키로 별을 고르고 Enter. 여기서 쓴 정수도 +2% 보너스에 포함되니, 거리낌 없이 쓰세요.'));
       let selectedNode = null;
       const showNode = (n) => {
         if (!n) return;
@@ -855,22 +855,22 @@ export default {
         const hue = hueOf(n);
         let action;
         if (n.owned) {
-          action = h('div.sk-taken', '刻 TAKEN');
+          action = h('div.sk-taken', '刻 획득');
         } else {
           const b = buyBtn(() => {
             if (!n.affordable) return;
             A.buyNode(n.id);
             openModal(buildConstellation(n.id), 'star', { rebuild: true });
             refresh();
-          }, n.available ? `Awaken ${n.name}` : 'Take the star before it first', n.available ? 'AWAKEN' : 'SEALED');
+          }, n.available ? `각성 ${n.nameKo ?? n.name}` : '별을 먼저 따르라', n.available ? '각성' : '봉인됨');
           b.set(A.fmt(n.cost), '桜精');
           b.setEnabled(!!n.affordable);
           action = b.root;
         }
         clear(nodeHost).append(h('div.sk-nodecard',
           h('div.em', { style: { color: hue, borderColor: hue } }, n.kanji ?? '星'),
-          h('div.br', `${n.branchName ?? ''} · ${ROMAN[Math.max(0, num(n.tier))] ?? ''}`),
-          h('h3', n.name ?? ''),
+          h('div.br', `${n.branchNameKo ?? n.branchName ?? ''} · ${ROMAN[Math.max(0, num(n.tier))] ?? ''}`),
+          h('h3', n.nameKo ?? n.name ?? ''),
           h('div.fv', n.flavour ?? ''),
           action));
       };
@@ -884,10 +884,10 @@ export default {
           tabindex: '-1',
           'aria-selected': 'false',
           /* the state a sighted player reads from the halo, spoken instead */
-          'aria-label': `${n.name ?? n.id} ${n.kanji ?? ''} — ${n.branchName ?? ''} tier `
+          'aria-label': `${n.nameKo ?? n.name ?? n.id} ${n.kanji ?? ''} — ${n.branchNameKo ?? n.branchName ?? ''} 단계 `
             + `${ROMAN[Math.max(0, num(n.tier))] ?? '?'}, `
-            + (n.owned ? 'awakened' : n.affordable ? `available for ${A.fmt(n.cost)} essence`
-              : n.available ? `costs ${A.fmt(n.cost)} essence, not enough held` : 'sealed'),
+            + (n.owned ? '각성됨' : n.affordable ? `정수 ${A.fmt(n.cost)}로 구매 가능`
+              : n.available ? `정수 ${A.fmt(n.cost)} 필요, 부족` : '봉인됨'),
         });
         g.__n = n;
         starEls.push(g);
@@ -973,10 +973,10 @@ export default {
          filled the modal and pushed the AWAKEN button below the fold. */
       p.root.append(h('div.sk-nodebar', nodeHost));
       p.root.append(h('div.sk-panel-foot',
-        h('span.sk-hint.num', `${owned} / ${nodes.length} nodes · ${A.fmt(A.essence())} 桜精 held`),
+        h('span.sk-hint.num', `${owned} / ${nodes.length} 노드 · ${A.fmt(A.essence())} 정수 보유`),
         canP
-          ? goldBtn(`TURN THE SEASON  +${A.fmt(gain)}`, () => { A.prestige(); closeModal(); refresh(); })
-          : h('span.sk-hint', `Season turns at ${A.fmt(1e6)} petals earned`)));
+          ? goldBtn(`계절 전환  +${A.fmt(gain)}`, () => { A.prestige(); closeModal(); refresh(); })
+          : h('span.sk-hint', `계절 전환은 ${A.fmt(1e6)} 꽃잎 획득 시 가능`)));
       return p.root;
     }
 
@@ -997,54 +997,54 @@ export default {
       const write = (k) => (v) => { SETTINGS.set(k, v); syncSettingsUi(); };
 
       const master = slider({
-        label: 'Master', kanji: '全体', ariaLabel: 'Master volume',
+        label: '마스터', kanji: '全体', ariaLabel: '마스터 볼륨',
         value: s.masterVolume, onInput: write('masterVolume'),
       });
       const music = slider({
-        label: 'Music', kanji: '音楽', ariaLabel: 'Music volume',
+        label: '음악', kanji: '音楽', ariaLabel: '음악 볼륨',
         value: s.musicVolume, onInput: write('musicVolume'),
       });
       const sfx = slider({
-        label: 'Sound effects', kanji: '効果音', ariaLabel: 'Sound effects volume',
+        label: '효과음', kanji: '効果音', ariaLabel: '효과음 볼륨',
         value: s.sfxVolume, onInput: write('sfxVolume'),
       });
       const muteAll = toggleRow({
-        label: 'Silence everything', kanji: '消音',
-        desc: 'one switch for the whole grove',
+        label: '전체 무음', kanji: '消音',
+        desc: '숲 전체를 위한 하나의 스위치',
         value: s.muteAll, onChange: write('muteAll'),
       });
       const muteMusic = toggleRow({
-        label: 'Mute music', kanji: '音楽切',
-        desc: 'the koto, and the wind bed under it',
-        lockNote: 'already silent — everything is muted',
+        label: '음악 음소거', kanji: '音楽切',
+        desc: '고토와 그 아래 깔린 바람 소리',
+        lockNote: '이미 무음 — 모든 것이 음소거됨',
         value: s.muteMusic, onChange: write('muteMusic'),
       });
       const muteSfx = toggleRow({
-        label: 'Mute sound effects', kanji: '効果音切',
-        desc: 'the bough, the falling petals, the small bells',
-        lockNote: 'already silent — everything is muted',
+        label: '효과음 음소거', kanji: '効果音切',
+        desc: '가지, 떨어지는 꽃잎, 작은 종소리',
+        lockNote: '이미 무음 — 모든 것이 음소거됨',
         value: s.muteSfx, onChange: write('muteSfx'),
       });
 
-      const HELD = 'held off by Reduce motion';
+      const HELD = '동작 감소로 보류됨';
       const reduced = toggleRow({
-        label: 'Reduce motion', kanji: '動きを控える',
-        desc: 'holds the three below off, whatever they are set to',
+        label: '동작 감소', kanji: '動きを控える',
+        desc: '설정에 관계없이 아래 세 항목을 끕니다',
         value: s.reducedMotion, onChange: write('reducedMotion'),
       });
       const shake = toggleRow({
-        label: 'Screen shake', kanji: '揺れ',
-        desc: 'the small camera kick when you shake the bough',
+        label: '화면 흔들림', kanji: '揺れ',
+        desc: '가지를 흔들 때의 작은 카메라 킥',
         lockNote: HELD, value: s.screenShake, onChange: write('screenShake'),
       });
       const drift = toggleRow({
-        label: 'Camera drift', kanji: '漂い',
-        desc: 'the slow breathing of the view while you stand still',
+        label: '카메라 흐름', kanji: '漂い',
+        desc: '가만히 서 있을 때 시야의 느린 호흡',
         lockNote: HELD, value: s.cameraDrift, onChange: write('cameraDrift'),
       });
       const flashes = toggleRow({
-        label: 'Flashes', kanji: '閃光',
-        desc: 'the bright bloom on a critical shake or a new stage',
+        label: '섬광', kanji: '閃光',
+        desc: '치명타 흔들기나 새 단계의 밝은 빛',
         lockNote: HELD, value: s.flashes, onChange: write('flashes'),
       });
 
@@ -1057,18 +1057,16 @@ export default {
       const root = h('div',
         h('div.sk-sgrid',
           h('div',
-            groupHead('Sound', '音'),
+            groupHead('소리', '音'),
             master.root, music.root, sfx.root,
             muteAll.root, muteMusic.root, muteSfx.root),
           h('div',
-            groupHead('Motion', '動'),
+            groupHead('동작', '動'),
             reduced.root, shake.root, drift.root, flashes.root,
             osReduce
-              ? noteBox('Your system asks for reduced motion. The grove noticed before you '
-                + 'arrived and left these off — turn any of them back on whenever you like.')
+              ? noteBox('시스템이 동작 감소를 요청합니다. 숲은 당신이 도착하기 전에 알아차리고 이것들을 꺼뒀습니다 — 원할 때 다시 켜세요.')
               : h('div.sk-flavour', { style: { marginTop: 'calc(var(--u)*.7)', lineHeight: '1.5' } },
-                'None of this changes the game — only how much the picture moves. '
-                + 'Nothing you earn depends on it.')),
+                '이 중 어떤 것도 게임을 바꾸지 않습니다 — 다만 화면이 얼마나 움직이느냐만. 당신이 얻는 어떤 것도 여기에 의존하지 않습니다.')),
         ),
       );
 
@@ -1081,16 +1079,16 @@ export default {
     }
 
     function buildSettings() {
-      const p = panel({ title: 'SETTINGS', kanji: '設 定', cls: 'sk-modal wide', close: closeModal });
+      const p = panel({ title: '설정', kanji: '設 定', cls: 'sk-modal wide', close: closeModal });
       p.root.__titleId = p.titleId;
       const io = h('textarea.sk-io', {
         spellcheck: 'false',
-        placeholder: 'paste a save here, or press EXPORT to read yours out',
-        'aria-label': 'Save data, base64. Press EXPORT to fill this box, or paste a save in and press IMPORT.',
+        placeholder: '세이브 데이터를 여기에 붙여넣거나 EXPORT를 눌러 자신의 데이터를 채우세요',
+        'aria-label': '세이브 데이터, base64. EXPORT를 눌러 이 칸을 채우거나, 세이브를 붙여넣고 IMPORT를 누르세요.',
       });
       const confirmIn = h('input.sk-in', {
-        type: 'text', placeholder: 'type ERASE',
-        'aria-label': 'Type the word ERASE to arm the hard reset',
+        type: 'text', placeholder: 'ERASE 입력',
+        'aria-label': 'ERASE라는 단어를 입력하여 완전 초기화를 준비합니다',
       });
       /* every EXPORT / IMPORT / ERASE outcome is a one-line message a long way
          from the button that caused it — live, or it may as well not be there */
@@ -1105,32 +1103,32 @@ export default {
            and statistics; the accessibility controls are what someone opens
            this panel in a hurry to find. */
         buildSoundAndMotion(),
-        groupHead('The grove', '記録'),
-        h('div.sk-row', h('div', h('div.lbl', 'Export save'), h('div.sub', 'base64 · copy it somewhere safe')),
-          goldBtn('EXPORT', () => { io.value = A.exportSave(); io.select?.(); say('written into the box below'); })),
-        h('div.sk-row', h('div', h('div.lbl', 'Import save'), h('div.sub', 'overwrites everything you have now')),
-          goldBtn('IMPORT', () => say(A.importSave(io.value.trim()) ? 'save restored' : 'that string was refused'), { cls: 'ghost' })),
+        groupHead('숲 기록', '記録'),
+        h('div.sk-row', h('div', h('div.lbl', '세이브 내보내기'), h('div.sub', 'base64 · 안전한 곳에 복사')),
+          goldBtn('내보내기', () => { io.value = A.exportSave(); io.select?.(); say('아래 칸에 작성됨'); })),
+        h('div.sk-row', h('div', h('div.lbl', '세이브 가져오기'), h('div.sub', '지금 가진 모든 것을 덮어씁니다')),
+          goldBtn('가져오기', () => say(A.importSave(io.value.trim()) ? '세이브 복원됨' : '그 문자열은 거부되었습니다'), { cls: 'ghost' })),
         io,
         h('div.sk-row', { style: { marginTop: 'calc(var(--u)*.7)' } },
-          h('div', h('div.lbl', 'Hard reset'), h('div.sub', 'type ERASE to arm · everything is lost, including Blossoms')),
+          h('div', h('div.lbl', '완전 초기화'), h('div.sub', '활성화하려면 ERASE 입력 · 모든 것이 사라짐, 꽃송이 포함')),
           h('div', { style: { display: 'flex', gap: 'calc(var(--u)*.4)', alignItems: 'center' } }, confirmIn,
-            goldBtn('ERASE', () => {
-              if (confirmIn.value.trim().toUpperCase() !== 'ERASE') { say('type ERASE first'); return; }
-              A.hardReset(); say('the grove has been returned to winter'); closeModal(); refresh();
+            goldBtn('삭제', () => {
+              if (confirmIn.value.trim().toUpperCase() !== 'ERASE') { say('먼저 ERASE를 입력하세요'); return; }
+              A.hardReset(); say('숲이 겨울로 돌아왔습니다'); closeModal(); refresh();
             }, { cls: 'danger' }))),
         status,
         h('div.sk-rule', { style: { margin: 'calc(var(--u)*.6) 0' } }),
-        h('div.sk-row', h('div.lbl', 'Seasons turned'), h('b.num', A.fmt(num(st.season)))),
-        h('div.sk-row', h('div.lbl', 'Shakes'), h('b.num', A.fmt(num(st.stats?.clicks)))),
-        h('div.sk-row', h('div.lbl', 'Critical shakes'), h('b.num', A.fmt(num(st.stats?.crits)))),
-        h('div.sk-row', h('div.lbl', 'Petals, all time'), h('b.num', A.fmt(num(st.totalAllTime)))),
-        h('div.sk-row', h('div.lbl', 'Time in the grove'), h('b.num', A.time(num(st.stats?.playTime)))),
+        h('div.sk-row', h('div.lbl', '돌린 계절 수'), h('b.num', A.fmt(num(st.season)))),
+        h('div.sk-row', h('div.lbl', '흔든 횟수'), h('b.num', A.fmt(num(st.stats?.clicks)))),
+        h('div.sk-row', h('div.lbl', '치명타 흔들기'), h('b.num', A.fmt(num(st.stats?.crits)))),
+        h('div.sk-row', h('div.lbl', '꽃잎, 전 생애'), h('b.num', A.fmt(num(st.totalAllTime)))),
+        h('div.sk-row', h('div.lbl', '숲에서의 시간'), h('b.num', A.time(num(st.stats?.playTime)))),
         h('div.sk-flavour', { style: { marginTop: 'calc(var(--u)*.9)', textAlign: 'center' } },
-          'Autosaves every ten seconds and whenever you look away.'),
+          '10초마다 그리고 다른 곳을 볼 때마다 자동 저장.'),
         /* The shortcut list lives HERE because this is the panel a keyboard
            player opens first, and a shortcut nobody wrote down is a shortcut
            nobody has. Kept last so it never pushes the audio controls down. */
-        groupHead('Keys', '鍵'),
+        groupHead('단축키', '鍵'),
         h('div.sk-keys', KEY_HELP.map(([k, what]) =>
           h('span', h('kbd', k), what))),
       );
@@ -1203,9 +1201,9 @@ export default {
       if (toastQ.length > 24) toastQ.shift();
     }
     const KIND_CAP = {
-      achievement: 'Achievement', codex: 'New Variety', upgrade: 'Upgrade',
-      node: 'Constellation', heartwood: 'Heartwood', event: 'Live Event',
-      boon: 'Golden Petal', milestone: 'Milestone',
+      achievement: '성취', codex: '새 종류', upgrade: '업그레이드',
+      node: '별자리', heartwood: '나무심장', event: '실시간 이벤트',
+      boon: '황금 꽃잎', milestone: '이정표',
     };
     function pumpToasts(dt) {
       toastTimer -= dt;
@@ -1214,7 +1212,7 @@ export default {
       const el = h('div.sk-toast.sk-paper', { class: 'r' + (t.rarity ?? 4) }, corners(true),
         h('div.glyph'),
         h('div', { style: { minWidth: '0' } },
-          h('div.cap', KIND_CAP[t.kind] ?? 'Unlocked'),
+          h('div.cap', KIND_CAP[t.kind] ?? '해제됨'),
           h('div.nm', t.title ?? ''),
           t.body ? h('div.rw', t.body) : null));
       toasts.append(el);
@@ -1278,11 +1276,11 @@ export default {
         h('div.dim'), h('div.glow'),
         h('div.card',
           h('div.bars.t'), h('div.bars.b'),
-          h('div.eyebrow', 'Bloom Stage ' + ROMAN[i]),
+          h('div.eyebrow', '개화 단계 ' + ROMAN[i]),
           h('div.kj', info?.kanji ?? s.kanji),
           h('div.en', String(info?.name ?? s.name).toUpperCase()),
           h('div.blurb', info?.blurb ?? s.blurb ?? ''),
-          h('div.reward', `+${A.fmt(num(info?.blossoms ?? i * 3))} Blossoms 桜花`)));
+          h('div.reward', `+${A.fmt(num(info?.blossoms ?? i * 3))} 꽃송이 桜花`)));
       ui.append(stageCard);
       stageCardT = 4.6;
     }
@@ -1292,26 +1290,26 @@ export default {
       if (!r) return;
       const away = num(r.awayS ?? r.seconds);
       const gained = num(r.gained ?? r.petals);
-      const p = panel({ title: 'WELCOME BACK', kanji: 'お か え り', cls: 'sk-modal sk-wb', close: dismiss });
+      const p = panel({ title: '다시 오신 걸 환영합니다', kanji: 'お か え り', cls: 'sk-modal sk-wb', close: dismiss });
       p.root.__titleId = p.titleId;
       function dismiss() { A.clearOffline(); closeModal(); }
       const stages = A.stages();
       mount(p.body,
         h('div.band'),
-        h('div.lead', 'The grove kept working while you were gone.'),
+        h('div.lead', '당신이 없는 동안에도 숲은 계속 일했습니다.'),
         h('div.big.num', '+' + A.fmt(gained)),
-        h('div.cap', 'petals gathered'),
-        h('div.stat', h('span', 'Time away'), h('b.num', A.time(away))),
-        h('div.stat', h('span', 'Counted'), h('b.num', A.time(num(r.cappedS ?? away)))),
-        h('div.stat', h('span', 'Idle rate'), h('b.num', Math.round(num(r.rate ?? 0.55) * 100) + '% of live')),
-        h('div.stat', h('span', 'Dew Reservoir'), h('b.num', r.capped ? `FULL — ${A.fmt(num(r.capH ?? 3))} h` : `${A.fmt(num(r.capH ?? 3))} h`)),
+        h('div.cap', '꽃잎 모음'),
+        h('div.stat', h('span', '부재 시간'), h('b.num', A.time(away))),
+        h('div.stat', h('span', '실측된 시간'), h('b.num', A.time(num(r.cappedS ?? away)))),
+        h('div.stat', h('span', '유휴 비율'), h('b.num', Math.round(num(r.rate ?? 0.55) * 100) + '% 실시간')),
+        h('div.stat', h('span', '이슬 저장고'), h('b.num', r.capped ? `가득 — ${A.fmt(num(r.capH ?? 3))} 시간` : `${A.fmt(num(r.capH ?? 3))} 시간`)),
         Array.isArray(r.stages) && r.stages.length
-          ? h('div.stat', h('span', 'Bloom advanced to'),
-            h('b', `${stages[r.stages[r.stages.length - 1]]?.kanji ?? ''} ${stages[r.stages[r.stages.length - 1]]?.name ?? ''}`))
+          ? h('div.stat', h('span', '개화 진행'),
+            h('b', `${stages[r.stages[r.stages.length - 1]]?.kanji ?? ''} ${stages[r.stages[r.stages.length - 1]]?.nameKo ?? stages[r.stages[r.stages.length - 1]]?.name ?? ''}`))
           : null,
-        h('div.note', '“The petals do not wait for anyone, and they do not hold it against you.”'),
+        h('div.note', '"꽃잎은 누구도 기다리지 않으며, 그것을 원망하지도 않는다."'),
       );
-      p.root.append(h('div.sk-panel-foot', { style: { justifyContent: 'center' } }, goldBtn('GATHER THEM', dismiss)));
+      p.root.append(h('div.sk-panel-foot', { style: { justifyContent: 'center' } }, goldBtn('모아두기', dismiss)));
       openModal(p.root, 'welcome');
     }
 
@@ -1355,7 +1353,7 @@ export default {
       setText(elStageA, A.fmt(total) + ' 花びら');
       // the capsule carries the whole run in log space; ticks mark the thresholds
       stageBar.set(nxt ? total : Infinity);
-      if (!nxt) { setText(elStageB, '常桜 · ETERNAL'); return; }
+      if (!nxt) { setText(elStageB, '常桜 · 영원히'); return; }
       const hi = num(nxt.need ?? nxt.threshold);
       setText(elStageB, A.fmt(hi) + ' → ' + (nxt.kanji ?? ''));
     }
@@ -1405,17 +1403,17 @@ export default {
           const ms = A.milestones();
           const prevM = ms.filter((m) => m <= owned).pop() ?? 0;
           r.mBar.set((owned - prevM) / Math.max(1, nextM - prevM));
-          setText(r.mPre, 'next ×2 at ');
+          setText(r.mPre, '다음 ×2 시점: ');
           setText(r.mLbl, String(nextM));
         } else {
           r.mBar.set(1);
-          setText(r.mPre, 'all milestones · ');
+          setText(r.mPre, '모든 이정표 · ');
           setText(r.mLbl, '×' + (num(v.milestoneMult) || 64));
         }
         live += num(v.total);
       }
       bulkSeg?.set(bulk);
-      if (tenderTotalEl) setText(tenderTotalEl, shown ? `${A.rate(live)} /s base · ${shown} kinds` : '');
+      if (tenderTotalEl) setText(tenderTotalEl, shown ? `${A.rate(live)} /s 기본 · ${shown} 종류` : '');
 
       if (teaser) {
         const want = !!nextHidden;
@@ -1455,7 +1453,7 @@ export default {
         const m = EVENT_META[pick.id] ?? EVENT_DEFS[pick.id] ?? { kanji: '祭', name: 'Live Event', desc: '' };
         eventFill = h('i', { style: { width: '100%' } });
         eventEl = h('div.sk-event',
-          h('div.sk-event-t', h('em', { class: 'sk-kanji' }, m.kanji), String(m.name).toUpperCase()),
+          h('div.sk-event-t', h('em', { class: 'sk-kanji' }, m.kanji), String(m.nameKo ?? m.name).toUpperCase()),
           h('div.sk-event-d', m.desc),
           h('div.sk-event-bar', eventFill));
         ui.append(eventEl);
@@ -1691,9 +1689,9 @@ export default {
       S['ui-welcome'] = () => { base('rich'); welcomeShown = false; try { S['game-offline']?.(); } catch { /* ignore */ } };
       S['ui-toasts'] = () => {
         base('rich');
-        toast({ kind: 'achievement', title: 'One With The Branch', body: 'Shake the tree a million times.', rarity: 4 });
-        toast({ kind: 'codex', title: '御衣黄  Gyoiko', body: 'Green sakura. You will argue with yourself about what you saw.', rarity: 5 });
-        toast({ kind: 'upgrade', title: 'Windward Shrine', body: 'Storms linger. The shrine gives them a reason to stay.', rarity: 3 });
+        toast({ kind: 'achievement', title: '가지와 하나됨', body: '나무를 백만 번 흔든다.', rarity: 4 });
+        toast({ kind: 'codex', title: '교이고', body: '초록 벚꽃. 본 것에 대해 스스로 논쟁하게 될 것이다.', rarity: 5 });
+        toast({ kind: 'upgrade', title: '바람쪽 사당', body: '폭풍이 머문다. 사당이 그것이 머무를 이유를 준다.', rarity: 3 });
         for (let i = 0; i < 3; i++) pumpToasts(1);
       };
     }

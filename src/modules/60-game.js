@@ -342,8 +342,8 @@ export default {
       if (crossed) {
         bus.emit('petals:burst', { point: treePoint(), count: 60, power: 1.4 });
         bus.emit('game:toast', {
-          kind: 'milestone', title: `${t.name} ×${E.milestoneMult(state.tenders[id])}`,
-          body: `${state.tenders[id]} tending the grove. Output doubled.`, rarity: 4,
+          kind: 'milestone', title: `${t.nameKo ?? t.name} ×${E.milestoneMult(state.tenders[id])}`,
+          body: `${state.tenders[id]}명이 숲을 돌봅니다. 산출량이 두 배가 되었습니다.`, rarity: 4,
         });
       }
       checkUnlocks();
@@ -364,7 +364,7 @@ export default {
       state.stats.upgrades = Object.keys(state.upgrades).length;
       invalidate();
       bus.emit('upgrade:bought', { id, level: 1, tier: BUY_RANK[u.family] ?? 2, family: u.family });
-      bus.emit('game:toast', { kind: 'upgrade', title: u.name, body: u.flavour, rarity: 3 });
+      bus.emit('game:toast', { kind: 'upgrade', title: u.nameKo ?? u.name, body: u.flavour, rarity: 3 });
       checkUnlocks();
       pushState(true);
       return true;
@@ -382,7 +382,7 @@ export default {
       state.nodes[id] = 1;
       invalidate();
       bus.emit('upgrade:bought', { id, level: 1, tier: BUY_RANK.constellation, family: 'constellation' });
-      bus.emit('game:toast', { kind: 'node', title: `${n.branchName} · ${n.name}`, body: n.flavour, rarity: 5 });
+      bus.emit('game:toast', { kind: 'node', title: `${n.branchNameKo ?? n.branchName} · ${n.nameKo ?? n.name}`, body: n.flavour, rarity: 5 });
       pushState(true);
       return true;
     }
@@ -394,7 +394,7 @@ export default {
       state.heartwood[id] = 1;
       invalidate();
       bus.emit('upgrade:bought', { id, level: 1, tier: BUY_RANK.heartwood, family: 'heartwood' });
-      bus.emit('game:toast', { kind: 'heartwood', title: h.name, body: h.flavour, rarity: 5 });
+      bus.emit('game:toast', { kind: 'heartwood', title: h.nameKo ?? h.name, body: h.flavour, rarity: 5 });
       pushState(true);
       return true;
     }
@@ -488,7 +488,7 @@ export default {
         changed = true;
         if (!quiet) {
           bus.emit('game:codex', { id: c.id, ...c });
-          bus.emit('game:toast', { kind: 'codex', title: `${c.kanji} ${c.name}`, body: c.desc, rarity: c.rarity });
+          bus.emit('game:toast', { kind: 'codex', title: `${c.kanji} ${c.nameKo ?? c.name}`, body: c.desc, rarity: c.rarity });
           snd('codex', 1);
         }
       }
@@ -498,7 +498,7 @@ export default {
         state.blossoms += 1;
         changed = true;
         if (!quiet) {
-          bus.emit('game:toast', { kind: 'achievement', title: a.name, body: a.desc, rarity: a.secret ? 5 : 4 });
+          bus.emit('game:toast', { kind: 'achievement', title: a.nameKo ?? a.name, body: a.desc, rarity: a.secret ? 5 : 4 });
           snd('achievement', 0.9);
         }
       }
@@ -534,8 +534,8 @@ export default {
       bus.emit('petals:burst', { point: treePoint(), count: 300, power: 2.6 });
       snd('storm-start', 1);
       bus.emit('game:toast', {
-        kind: 'event', title: '花嵐  Petal Storm', rarity: 5,
-        body: `The hillside is in the air. ×${E.format(d.grove.stormMult)} for ${Math.round(timers.storm)} seconds.`,
+        kind: 'event', title: '花嵐  꽃보라 폭풍', rarity: 5,
+        body: `언덕 전체가 공기 중에 떠 있습니다. ${Math.round(timers.storm)}초 동안 ×${E.format(d.grove.stormMult)}.`,
       });
       checkUnlocks();
     }
@@ -553,7 +553,7 @@ export default {
       setLive();
       bus.emit('game:event', { id: 'rain', active: true, dur: timers.rain, remain: timers.rain });
       snd('rain-start', 0.7);
-      bus.emit('game:toast', { kind: 'event', title: '春雨  Spring Rain', body: 'The fall slows to a drift. +10% while it lasts.', rarity: 3 });
+      bus.emit('game:toast', { kind: 'event', title: '春雨  봄비', body: '낙화가 천천히 흘러내립니다. 지속되는 동안 +10%.', rarity: 3 });
     }
 
     /* ---- Golden Petal ---------------------------------------------- */
@@ -587,7 +587,7 @@ export default {
         timers.bloomfall = b.dur;
       }
       setLive();
-      bus.emit('game:toast', { kind: 'boon', title: `${b.kanji}  ${b.name}`, body: b.desc, rarity: 5 });
+      bus.emit('game:toast', { kind: 'boon', title: `${b.kanji}  ${b.nameKo ?? b.name}`, body: b.desc, rarity: 5 });
       snd('golden-catch', 1);
     }
 

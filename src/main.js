@@ -51,7 +51,7 @@ async function boot() {
 
   if (!ctx.renderer || !ctx.scene || !ctx.camera) {
     errors.push({ where: 'main', message: 'no renderer/scene/camera after boot — is 00-renderer.js present?' });
-    document.getElementById('boot').textContent = 'renderer module missing';
+    document.getElementById('boot').textContent = '렌더러 모듈 없음';
     window.__READY = 'error';
     return;
   }
