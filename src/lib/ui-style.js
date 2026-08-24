@@ -1758,10 +1758,11 @@ export function uiCss() {
 
 /* HUD 도움 버튼 — 큰 라벨 (모달 안 "도움말 열기" 탭 진입점)
    탭 패널 안에 명시적인 큰 버튼을 추가하면 시인성이 더 좋다.
-   위치: 좌측 하단 muteBtn 바로 위 (muteBtn과 같은 left 정렬, bottom만 위로).
-   크기: muteBtn(약 1.5u 원형)보다 충분히 크게 — 1.3u 패딩 + 1.5u 아이콘. */
+   위치: mute 사운드 버튼 **옆** (가로 정렬, 같은 bottom).
+   mute가 left 1.35u + width 2.8u = right edge 4.15u, 그래서 도움말은
+   left 4.5u + bottom 1.5u에서 시작 — mute와 한 줄. */
 .sk-help-entry{
-  position:absolute;left:calc(var(--u)*0.7);bottom:calc(var(--u)*4.0);
+  position:absolute;left:calc(var(--u)*4.5);bottom:calc(var(--u)*1.5);
   display:flex;align-items:center;gap:calc(var(--u)*0.85);
   width:auto;padding:calc(var(--u)*0.7) calc(var(--u)*1.1);
   background:linear-gradient(180deg,#fff8e6,#f5e6c0);
