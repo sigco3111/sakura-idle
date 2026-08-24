@@ -253,43 +253,43 @@ export const TUNING = {
 
 export const TENDERS = [
   {
-    id: 'sprite', name: 'Wind Sprite', nameKo: '바람 정령', kanji: '風精', baseCost: 15, rate: 0.1,
+    id: 'sprite', name: '바람 정령', nameKo: '바람 정령', kanji: '바람', baseCost: 15, rate: 0.1,
     blurb: '눈엔 안 보일 만큼 작지만, 무시하기엔 시끄럽다. 한 번에 나뭇가지 하나를 흔들고, 그것만으로 엄청나게 자랑한다.',
   },
   {
-    id: 'gatherer', name: 'Petal Gatherer', nameKo: '꽃잎 줍는 아이', kanji: '花摘み', baseCost: 100, rate: 1,
+    id: 'gatherer', name: '꽃잎 줍는 아이', nameKo: '꽃잎 줍는 아이', kanji: '꽃', baseCost: 100, rate: 1,
     blurb: '맨발, 넓은 바구니, 어딘가 아름다운 곳에 떨어진 것만 골라 눈독 들인다.',
   },
   {
-    id: 'miko', name: 'Shrine Maiden', nameKo: '무녀', kanji: '巫女', baseCost: 1.1e3, rate: 8,
+    id: 'miko', name: '무녀', nameKo: '무녀', kanji: '무', baseCost: 1.1e3, rate: 8,
     blurb: '꽃잎을 줍지 않는다. 정중히 부탁하면, 꽃잎이 스스로 온다.',
   },
   {
-    id: 'lantern', name: 'Stone Lantern', nameKo: '석등롱', kanji: '石灯籠', baseCost: 1.2e4, rate: 47,
+    id: 'lantern', name: '석등롱', nameKo: '석등롱', kanji: '등', baseCost: 1.2e4, rate: 47,
     blurb: '꽃잎은 나방처럼 빛을 따라 흘러간다. 꽃잎에게 나방이 아니라는 건 아무도 알려준 적 없다.',
   },
   {
-    id: 'koi', name: 'Koi Spirit', nameKo: '잉어의 영혼', kanji: '鯉霊', baseCost: 1.3e5, rate: 260,
+    id: 'koi', name: '잉어의 영혼', nameKo: '잉어의 영혼', kanji: '비', baseCost: 1.3e5, rate: 260,
     blurb: '연못 위 공기 속을 헤엄치며 꽃의 반영을 마신다.',
   },
   {
-    id: 'rabbit', name: 'Moon Rabbit', nameKo: '달 토끼', kanji: '月兎', baseCost: 1.4e6, rate: 1.4e3,
+    id: 'rabbit', name: '달 토끼', nameKo: '달 토끼', kanji: '달', baseCost: 1.4e6, rate: 1.4e3,
     blurb: '돌 절구에서 꽃잎을 찧는다. 무엇을 만드는지는 모르겠지만, 확실히 떡은 아니다.',
   },
   {
-    id: 'kitsune', name: 'Kitsune Herald', nameKo: '여우 사자', kanji: '狐使', baseCost: 2.0e7, rate: 7.8e3,
+    id: 'kitsune', name: '여우 사자', nameKo: '여우 사자', kanji: '여', baseCost: 2.0e7, rate: 7.8e3,
     blurb: '나무와 더 오래된 것 사이의 메시지를 옮긴다. 어느 쪽이 답하는지는 말해주지 않는다.',
   },
   {
-    id: 'envoy', name: "Wind God's Envoy", nameKo: '풍신의 사자', kanji: '風神使', baseCost: 3.3e8, rate: 4.4e4,
+    id: 'envoy', name: '풍신의 사자', nameKo: '풍신의 사자', kanji: '신', baseCost: 3.3e8, rate: 4.4e4,
     blurb: '끝내지 못한 날씨를 한 주머니에 담아오고, 끈을 느슨하게 묶은 채 떠난다.',
   },
   {
-    id: 'heart', name: 'Everblossom Heart', nameKo: '영원한 꽃의 마음', kanji: '常桜心', baseCost: 5.1e9, rate: 2.6e5,
+    id: 'heart', name: '영원한 꽃의 마음', nameKo: '영원한 꽃의 마음', kanji: '마음', baseCost: 5.1e9, rate: 2.6e5,
     blurb: '뿌리가 엉키는 곳에 묻혀 있다. 한 번 뛸 때마다 하나의 봄이 나무를 통과한다.',
   },
   {
-    id: 'bough', name: 'Celestial Bough', nameKo: '하늘의 가지', kanji: '天樹枝', baseCost: 7.5e10, rate: 1.6e6,
+    id: 'bough', name: '하늘의 가지', nameKo: '하늘의 가지', kanji: '하늘', baseCost: 7.5e10, rate: 1.6e6,
     blurb: '하늘을 지나 더 많은 하늘을 만나고, 예의상 계속 자라난 가지.',
   },
 ];
@@ -410,7 +410,7 @@ const tenderUpNames = {
   gatherer: [
     ['Wider Baskets', '더 넓은 바구니', '두 배 짠, 절반의 횟수, 같은 콧노래.'],
     ['Dawn Shift', '새벽 교대', '안개가 걷히기도 전에 일을 시작한다. 아무도 시킨 적 없다.'],
-    ['Guild of the Fallen Bloom', '낙화 조합', '이제纹章가 있다. 꽃잎이다. 당연히 그렇다.'],
+    ['낙화 조합', '낙화 조합', '이제 휘장이 있다. 꽃잎이다. 당연히 그렇다.'],
     ['Ten Thousand Sleeves', '만 소매', '모든 소매에 주머니, 모든 주머니에 봄.'],
   ],
   miko: [
@@ -633,12 +633,12 @@ export const HEARTWOOD_LIST = HEARTWOOD.map((h) => HEARTWOOD_BY_ID[h[0]]);
  * ==================================================================== */
 
 export const BLOOM_STAGES = [
-  { stage: 0, name: 'Winter Bud', nameKo: '겨울 눈봉우리', kanji: '冬芽', threshold: 0, blurb: '벌거벗은 어두운 가지, 손에 잡힐 듯한 꽃봉우리, 온기 없는 빛뿐이다.' },
-  { stage: 1, name: 'Budding', nameKo: '봉우리', kanji: '蕾', threshold: 1e3, blurb: '꽃봉우리가 하룻밤 사이에 분홍색으로 부푼다. 아무도 보지 않는 곳에서 첫 꽃이 핀다.' },
-  { stage: 2, name: 'First Bloom', nameKo: '초咲', kanji: '初咲', threshold: 1e5, blurb: '캐노피의 3분의 1이 색을 바꿨다. 꽃잎이 하나둘씩 떨어지기 시작한다.' },
-  { stage: 3, name: 'Full Bloom', nameKo: '만개', kanji: '満開', threshold: 1e7, blurb: '캐노피 가득, 끊임없는 낙화, 길 위의 꽃잎 카펫. 사람들이 여기 걸어오려는 이유가 이것이다.' },
-  { stage: 4, name: 'Radiant', nameKo: '찬란한 꽃', kanji: '輝咲', threshold: 1e10, blurb: '꽃잎이 황혼 뒤에도 빛을 머금는다. 빛의 알갱이가 아래로보다 위로 더 자주 흘러간다.' },
-  { stage: 5, name: 'Everblossom', nameKo: '영원한 꽃', kanji: '常桜', threshold: 1e13, blurb: '나무껍질 속으로 금이 흐른다. 꽃은 더 이상 봄을 기다리지 않고, 그 곁의 어떤 것도 기다리지 않는다.' },
+  { stage: 0, name: '겨울 눈봉우리', nameKo: '겨울 눈봉우리', kanji: '한겨울', threshold: 0, blurb: '벌거벗은 어두운 가지, 손에 잡힐 듯한 꽃봉우리, 온기 없는 빛뿐이다.' },
+  { stage: 1, name: '봉우리', nameKo: '봉우리', kanji: '봉오리', threshold: 1e3, blurb: '꽃봉우리가 하룻밤 사이에 분홍색으로 부푼다. 아무도 보지 않는 곳에서 첫 꽃이 핀다.' },
+  { stage: 2, name: '초咲', nameKo: '초咲', kanji: '첫꽃', threshold: 1e5, blurb: '캐노피의 3분의 1이 색을 바꿨다. 꽃잎이 하나둘씩 떨어지기 시작한다.' },
+  { stage: 3, name: '만개', nameKo: '만개', kanji: '만개', threshold: 1e7, blurb: '캐노피 가득, 끊임없는 낙화, 길 위의 꽃잎 카펫. 사람들이 여기 걸어오려는 이유가 이것이다.' },
+  { stage: 4, name: '찬란한 꽃', nameKo: '찬란한 꽃', kanji: '찬란', threshold: 1e10, blurb: '꽃잎이 황혼 뒤에도 빛을 머금는다. 빛의 알갱이가 아래로보다 위로 더 자주 흘러간다.' },
+  { stage: 5, name: '영원한 꽃', nameKo: '영원한 꽃', kanji: '영원', threshold: 1e13, blurb: '나무껍질 속으로 금이 흐른다. 꽃은 더 이상 봄을 기다리지 않고, 그 곁의 어떤 것도 기다리지 않는다.' },
 ];
 
 /**
@@ -740,7 +740,7 @@ const NODE_ROWS = {
     ['Second Hand', '두 번째 손', 11, { doubleShake: 0.25 }, '네 번 중 한 번의 흔들기가 두 번 들어간다. 어떻게 그렇게 되는지는 보려 하지 않는다.'],
     ['Hastened Spring', '성급한 봄', 26, { bloomThreshold: 0.8 }, '나무가 열려도 되는지 허락을 기다리지 않는다.'],
     ['Blossomheart', '꽃의 마음', 60, { click: 2 }, '나무껍질 위 손, 손목 안 나무의 맥박, 일치한다.'],
-    ['Everblossom Seed', '영원한 꽃의 씨앗', 120, { prod: 1.5 }, '처음으로 계절을 돌린 그 계절에 심겼다. 그 이후로 스스로 값을 벌고 있다.'],
+    ['영원한 꽃의 씨앗', '영원한 꽃의 씨앗', 120, { prod: 1.5 }, '처음으로 계절을 돌린 그 계절에 심겼다. 그 이후로 스스로 값을 벌고 있다.'],
   ],
 };
 
@@ -778,29 +778,29 @@ export const CODEX = [
    * out on frame one, silently, during the quiet boot unlock pass. The petal
    * mark is the same moment the old stage-1 threshold described (~90 s) and it
    * gives that beat something to show now that the tree is already budded. */
-  ['somei', 'Somei Yoshino', '소메이 요시노', '染井吉野', 3, '#FFD9E6', { passive: 1.02 },
+  ['somei', '소메이 요시노', '소메이 요시노', '소메이', 3, '#FFD9E6', { passive: 1.02 },
     { seasonTotal: 1e3 }, '다섯 장의 옅은 꽃잎, 가장자리에 거의 흰빛. 이 나라의 모든 가로수는 한 그루의 복제본으로 심어졌고, 모든 봄에 같은 날에 함께 핀다.'],
-  ['shidare', 'Shidarezakura', '시다레자쿠라', '枝垂桜', 3, '#FFC6DC', { click: 1.03 },
+  ['shidare', '시다레자쿠라', '시다레자쿠라', '시다레', 3, '#FFC6DC', { click: 1.03 },
     { tenderOwned: ['sprite', 25] }, ' weeping cherry. 가지가 물처럼 떨어지며 그 과정에서 꽃을 피운다. 북쪽에서 가장 오래된 것은 천 년 동안 기울어져 왔다.'],
-  ['yae', 'Yaezakura', '야에자쿠라', '八重桜', 3, '#FFB6CE', { passive: 1.03 },
+  ['yae', '야에자쿠라', '야에자쿠라', '야에', 3, '#FFB6CE', { passive: 1.03 },
     { tenderOwned: ['miko', 10] }, '겹쳐 핀다 — 꽃 한 송이에 20, 30, 때로는 100장. 무거워서 가지가 끄덕인다. 더 많은 시간이 필요하다 듯이, 늦게 핀다.'],
-  ['yama', 'Yamazakura', '야마자쿠라', '山桜', 3, '#F6D3D8', { passive: 1.03 },
+  ['yama', '야마자쿠라', '야마자쿠라', '야마', 3, '#F6D3D8', { passive: 1.03 },
     { seasonTotal: 1e6 }, '산벗꽃, 그리고 옛 시들이 의미하는 그것. 구릿빛 잎이 꽃과 함께 열리므로, 온 언덕이 두 색깔로 동시에 바뀐다.'],
-  ['oshima', 'Oshima-zakura', '오시마자쿠라', '大島桜', 4, '#FFF2F6', { click: 1.04 },
+  ['oshima', '오시마자쿠라', '오시마자쿠라', '오시마', 4, '#FFF2F6', { click: 1.04 },
     { clicks: 1000 }, '희고, 꽃잎이 넓고, 희미하게 달다. 잎은 소금에 절여 콩과자로 감싼다. 나라의 절반이 매 봄 이 나무를 보지 않고 맛본다.'],
-  ['kawazu', 'Kawazu-zakura', '카와즈자쿠라', '河津桜', 4, '#F79EBD', { click: 1.04 },
+  ['kawazu', '카와즈자쿠라', '카와즈자쿠라', '카와즈', 4, '#F79EBD', { click: 1.04 },
     { golden: 3 }, '짙은 장밋빛, 그리고 조급하다 — 다른 것들이 아직 잠들어 있는 2월에 피고, 그 뒤로 한 달을 서리에게 도전하듯 꽃을 붙잡고 있는다.'],
-  ['ukon', 'Ukon', '우콘', '鬱金桜', 4, '#E7E2B0', { passive: 1.04 },
+  ['ukon', '우콘', '우콘', '우콘', 4, '#E7E2B0', { passive: 1.04 },
     { storms: 3 }, '옅은 황록색, 강황으로 들인 비단의 색. 나이를 먹으며 중앙이 분홍으로 바래진다. 꽃에게 잘못된 방향이지만 신경 쓰지 않는다.'],
-  ['gyoiko', 'Gyoiko', '교이고', '御衣黄', 4, '#C8D8A8', { passive: 1.05 },
+  ['gyoiko', '교이고', '교이고', '교이고', 4, '#C8D8A8', { passive: 1.05 },
     { stage: 3 }, '초록이다. 진짜로 초록이다. 각 꽃잎 위로 붉은 줄무늬가 흐른다. 궁정의 법복 색이라서, 그 색을 가질 수 있는 게 그것밖에 없었다.'],
-  ['jugatsu', 'Jugatsu-zakura', '쥬가쓰자쿠라', '十月桜', 4, '#FFE1EA', { click: 1.05 },
+  ['jugatsu', '쥬가쓰자쿠라', '쥬가쓰자쿠라', '쥬가쓰', 4, '#FFE1EA', { click: 1.05 },
     { seasons: 1 }, '두 번 핀다: 10월에 한 차례 흩어지게, 봄에 나머지를. 이 배열을 설명한 적이 없고, 아무도 그것을 설득하지 못했다.'],
-  ['fuyu', 'Fuyuzakura', '후유자쿠라', '冬桜', 5, '#EAF0FF', { prod: 1.04 },
+  ['fuyu', '후유자쿠라', '후유자쿠라', '후유', 5, '#EAF0FF', { prod: 1.04 },
     { offlineH: 3 }, '겨울의 벚꽃. 작고, 드문드문하며, 눈 속에서 꽃을 피운다 — 당신이 없는 동안에도 숲이 계속 일하고 있다는 증거.'],
-  ['yoko', 'Yoko', '요코', '陽光桜', 5, '#FF9FBE', { prod: 1.05 },
+  ['yoko', '요코', '요코', '요코', 5, '#FF9FBE', { prod: 1.05 },
     { crits: 100 }, '전쟁 후, 돌아오지 않은 학생들을 추모하기 위해 학교 선생님이 어디서든 자라날 무언가를 만들었다. 선명한 분홍, 강인함, 지금은 어디에나 있다.'],
-  ['everblossom', 'Everblossom', '영원한 꽃', '常桜', 5, '#FFEFC2', { prod: 1.25 },
+  ['everblossom', '영원한 꽃', '영원한 꽃', '영원', 5, '#FFEFC2', { prod: 1.25 },
     { stage: 5 }, '어느 식물 도감에도 없다. 나뭇결에 금이, 낙하에는 오로라가, 그리고 휴면기가 전혀 없다. 당신은 이 모든 시간 동안 그것을 키우고 있었다.'],
 ].map(([id, name, nameKo, kanji, rarity, tint, eff, req, desc]) => ({
   id, name, nameKo, kanji, rarity, tint, eff, req, desc,
@@ -854,7 +854,7 @@ export const ACHIEVEMENTS = [
   ach('a_up3', 'Nothing Left To Fix', '고칠 게 없다', '업그레이드 70개 구매.', { upgrades: 70 }),
   // — bloom stages (2)
   ach('a_bl1', 'Full Bloom', '만개', '만개에 도달.', { stage: 3 }),
-  ach('a_bl2', 'Everblossom', '영원한 꽃', '영원한 꽃에 도달.', { stage: 5 }),
+  ach('a_bl2', '영원한 꽃', '영원한 꽃', '영원한 꽃에 도달.', { stage: 5 }),
   // — seasons (4)
   ach('a_se1', 'Turn of the Season', '계절의 전환', '계절을 1번 돌린다.', { seasons: 1 }),
   ach('a_se2', 'Three Springs', '세 개의 봄', '계절을 3번 돌린다.', { seasons: 3 }),
@@ -880,20 +880,20 @@ export const ACHIEVEMENTS = [
  * ==================================================================== */
 
 export const LIVE_EVENTS = {
-  storm: { id: 'storm', name: 'Petal Storm', nameKo: '꽃보라 폭풍', kanji: '花嵐', color: '#FFC2D6', desc: '초당 ×10 꽃잎. 언덕 전체가 공기 중에 떠 있다.' },
-  moon: { id: 'moon', name: 'Full Moon', nameKo: '보름달', kanji: '満月', color: '#C9D6FF', desc: '달이 떠 있는 동안 +25% 치명타 확률.' },
-  golden: { id: 'golden', name: 'Golden Hour', nameKo: '황금빛 시간', kanji: '黄金時', color: '#FFD08A', desc: '빛이 머무는 동안 모든 흔들기에 +15%.' },
-  rain: { id: 'rain', name: 'Spring Rain', nameKo: '봄비', kanji: '春雨', color: '#A8C8E0', desc: '초당 꽃잎 +10%, 그리고 꽃잎은 천천히 흘러내린다.' },
+  storm: { id: 'storm', name: '꽃보라 폭풍', nameKo: '꽃보라 폭풍', kanji: '꽃보라', color: '#FFC2D6', desc: '초당 ×10 꽃잎. 언덕 전체가 공기 중에 떠 있다.' },
+  moon: { id: 'moon', name: '보름달', nameKo: '보름달', kanji: '보름', color: '#C9D6FF', desc: '달이 떠 있는 동안 +25% 치명타 확률.' },
+  golden: { id: 'golden', name: '황금빛 시간', nameKo: '황금빛 시간', kanji: '황금', color: '#FFD08A', desc: '빛이 머무는 동안 모든 흔들기에 +15%.' },
+  rain: { id: 'rain', name: '봄비', nameKo: '봄비', kanji: '봄비', color: '#A8C8E0', desc: '초당 꽃잎 +10%, 그리고 꽃잎은 천천히 흘러내린다.' },
 };
 
 export const GOLDEN_BOONS = [
-  { id: 'frenzy', name: 'Frenzy', nameKo: '광란의 꽃', kanji: '狂咲', weight: 34, dur: 30, color: '#FFD46A',
+  { id: 'frenzy', name: '광란의 꽃', nameKo: '광란의 꽃', kanji: '광란', weight: 34, dur: 30, color: '#FFD46A',
     desc: '30초 동안 초당 ×7 꽃잎.' },
-  { id: 'lucky', name: 'Lucky', nameKo: '행운', kanji: '幸', weight: 34, dur: 0, color: '#FFE9A8',
+  { id: 'lucky', name: '행운', nameKo: '행운', kanji: '행운', weight: 34, dur: 0, color: '#FFE9A8',
     desc: '현재 보유량의 +13%를 즉시 획득.' },
-  { id: 'clickfrenzy', name: 'Click Frenzy', nameKo: '연타 광란', kanji: '乱打', weight: 20, dur: 13, color: '#FFC0D8',
+  { id: 'clickfrenzy', name: '연타 광란', nameKo: '연타 광란', kanji: '연타', weight: 20, dur: 13, color: '#FFC0D8',
     desc: '13초 동안 한 번 흔들기에 ×77.' },
-  { id: 'bloomfall', name: 'Bloomfall', nameKo: '만개 강우', kanji: '花降', weight: 12, dur: 6, color: '#FFF0C8',
+  { id: 'bloomfall', name: '만개 강우', nameKo: '만개 강우', kanji: '만개비', weight: 12, dur: 6, color: '#FFF0C8',
     desc: '1분 동안의 꽃잎이 한꺼번에, 잡을 수 있는 곳으로 떨어진다.' },
 ];
 

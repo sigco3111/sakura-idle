@@ -112,7 +112,7 @@ export const TENDER_DEFS = [
   { id: 'rabbit',   name: 'Moon Rabbit',      nameKo: '달 토끼',   kanji: '月兎',   glyph: '兎', baseCost: 1.4e6,  rate: 1.4e3 },
   { id: 'kitsune',  name: 'Kitsune Herald',   nameKo: '여우 사자', kanji: '狐使',   glyph: '狐', baseCost: 2.0e7,  rate: 7.8e3 },
   { id: 'envoy',    name: "Wind God's Envoy", nameKo: '풍신의 사자', kanji: '風神使', glyph: '神', baseCost: 3.3e8,  rate: 4.4e4 },
-  { id: 'heart',    name: 'Everblossom Heart',nameKo: '영원한 꽃의 마음',kanji: '常桜心', glyph: '心', baseCost: 5.1e9,  rate: 2.6e5 },
+  { id: 'heart',    name: '영원한 꽃의 마음',nameKo: '영원한 꽃의 마음',kanji: '마음', glyph: '마', baseCost: 5.1e9,  rate: 2.6e5 },
   { id: 'bough',    name: 'Celestial Bough',  nameKo: '하늘의 가지', kanji: '天樹枝', glyph: '天', baseCost: 7.5e10, rate: 1.6e6 },
 ];
 

@@ -1698,6 +1698,35 @@ export function uiCss() {
 @keyframes sk-up-en{0%{opacity:0;transform:translateY(calc(var(--u)*.8));}100%{opacity:1;transform:none;}}
 @keyframes sk-up-bar{0%{opacity:0;transform:scaleX(0);}100%{opacity:1;transform:scaleX(1);}}
 
+/* ───── Help modal styles ───── */
+.sk-modal.help{width:min(960px,92vw);max-height:84vh;}
+.sk-modal.help .sk-body{padding:0;overflow-y:auto;max-height:calc(84vh - 64px);}
+.sk-modal.help .help-sec{padding:calc(var(--u)*1.0) calc(var(--u)*1.4);border-bottom:1px solid rgba(255,255,255,.07);}
+.sk-modal.help .help-sec:last-child{border-bottom:none;}
+.sk-modal.help .help-sec h2{margin:0 0 calc(var(--u)*.55);font-size:calc(var(--u)*1.1);font-weight:600;color:rgba(255,220,230,.95);letter-spacing:.04em;}
+.sk-modal.help .help-grid{display:flex;flex-direction:column;gap:calc(var(--u)*.45);}
+.sk-modal.help .help-tbl{width:100%;border-collapse:collapse;table-layout:fixed;}
+.sk-modal.help .help-tbl th{width:30%;text-align:left;vertical-align:top;padding:calc(var(--u)*.4) calc(var(--u)*.7) calc(var(--u)*.4) 0;font-weight:600;color:rgba(255,180,200,.9);font-size:calc(var(--u)*.78);}
+.sk-modal.help .help-tbl td{padding:calc(var(--u)*.4) 0;vertical-align:top;color:rgba(255,235,235,.86);font-size:calc(var(--u)*.78);line-height:1.45;}
+.sk-modal.help .help-tbl tr{border-bottom:1px dashed rgba(255,255,255,.06);}
+.sk-modal.help .help-tbl tr:last-child{border-bottom:none;}
+.sk-modal.help .help-p{margin:0;color:rgba(255,225,225,.78);font-size:calc(var(--u)*.78);line-height:1.55;}
+.sk-modal.help .help-foot{padding:calc(var(--u)*1.0) calc(var(--u)*1.4);text-align:center;color:rgba(255,200,210,.65);font-style:italic;font-size:calc(var(--u)*.8);border-top:1px solid rgba(255,255,255,.05);}
+
+/* Help button on the HUD */
+.sk-help{
+  position:absolute;top:calc(var(--u)*.7);right:calc(var(--u)*3.5);
+  width:calc(var(--u)*1.4);height:calc(var(--u)*1.4);
+  display:grid;place-items:center;
+  background:rgba(255,255,255,.06);border:1px solid rgba(255,255,255,.12);
+  border-radius:50%;color:rgba(255,210,220,.85);
+  font-size:calc(var(--u)*.9);font-weight:700;
+  cursor:pointer;transition:background .15s,transform .15s,color .15s;
+  z-index:4;
+}
+.sk-help:hover{background:rgba(255,180,200,.22);color:#fff;transform:scale(1.05);}
+.sk-help:focus-visible{outline:2px solid rgba(255,200,210,.7);outline-offset:2px;}
+
 @media (prefers-reduced-motion:reduce){
   #ui-root *{animation-duration:.01ms!important;transition-duration:.01ms!important;}
 }

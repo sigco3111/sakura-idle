@@ -372,7 +372,15 @@ export default {
     }, h('i', { 'aria-hidden': 'true' }));
     ui.append(muteBtn);
 
-    const goldenHint = h('div.sk-golden', h('i'), h('span', '금화弁 — 잡아라'));
+    const helpBtn = h('button.sk-help', {
+      type: 'button',
+      'aria-label': '도움말 열기',
+      title: '도움말 — ? 키',
+      onclick: (e) => { e.stopPropagation(); openHelp(); },
+    }, h('i', { 'aria-hidden': 'true' }, '?'));
+    ui.append(helpBtn);
+
+    const goldenHint = h('div.sk-golden', h('i'), h('span', '황금 꽃잎 — 잡아라'));
     goldenHint.style.display = 'none';
     ui.append(goldenHint);
 
@@ -508,6 +516,16 @@ export default {
          first thing announced, and Tab from here walks the panel in DOM order */
       if (!ctx.shotMode) focusIt(node);
       return scrim;
+    }
+
+    /* Help modal — wired to "?" key and the help button. Build is delegated
+       to src/modules/66-help.js so the giant 65-ui.js file stays read-only
+       at the top. We pass the same h, panel, closeModal helpers the other
+       modal builders (buildCodex, buildConstellation, buildSettings) use. */
+    async function openHelp() {
+      const { buildHelp } = await import('./66-help.js');
+      const node = buildHelp({ h, panel, closeModal });
+      openModal(node, 'help', { rebuild: true });
     }
 
     function closeModal({ restore = true } = {}) {
@@ -1633,6 +1651,13 @@ export default {
         const cur = (scrim && scrim.__tab) || activeTab || TAB_ORDER[TAB_ORDER.length - 1];
         const i = TAB_ORDER.indexOf(cur);
         selectTab(TAB_ORDER[(i + (e.key === ']' ? 1 : -1) + TAB_ORDER.length) % TAB_ORDER.length]);
+        return;
+      }
+
+      /* Help modal — "?" key opens the in-game guide. ESC closes. */
+      if (e.key === '?' || e.key === '/') {
+        e.preventDefault();
+        openHelp();
         return;
       }
 
