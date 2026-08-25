@@ -1760,7 +1760,10 @@ export function uiCss() {
    탭 패널 안에 명시적인 큰 버튼을 추가하면 시인성이 더 좋다.
    위치: mute 사운드 버튼 **옆** (가로 정렬, 같은 bottom).
    mute가 left 1.35u + width 2.8u = right edge 4.15u, 그래서 도움말은
-   left 4.5u + bottom 1.5u에서 시작 — mute와 한 줄. */
+   left 4.5u + bottom 1.5u에서 시작 — mute와 한 줄.
+   
+   ★ pointer-events:auto 필수: 부모 #ui-root가 pointer-events:none이므로
+     모든 자식 버튼이 명시적으로 auto로 설정해야 클릭 가능. */
 .sk-help-entry{
   position:absolute;left:calc(var(--u)*4.5);bottom:calc(var(--u)*1.5);
   display:flex;align-items:center;gap:calc(var(--u)*0.85);
@@ -1769,7 +1772,7 @@ export function uiCss() {
   border:1.5px solid #b89a55;border-radius:6px;
   color:#5a4310;font-weight:800;font-size:calc(var(--u)*1.0);
   cursor:pointer;transition:transform .12s,background .12s;
-  z-index:5;
+  z-index:5;pointer-events:auto;
   box-shadow:0 2px 5px rgba(120,90,40,.30);
 }
 .sk-help-entry:hover{background:linear-gradient(180deg,#fff5d2,#f1dba0);transform:translateX(2px);box-shadow:0 3px 8px rgba(120,90,40,.4);}
