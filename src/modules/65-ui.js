@@ -114,11 +114,20 @@ export default {
       boughtUpgrades() { return call(() => G()?.views?.boughtUpgrades?.(), null) ?? []; },
       heartwood() { return call(() => G()?.views?.heartwood?.(), null) ?? []; },
       codexViews() {
+        /* The canonical view lives at game.views.codex; if that returns null
+         * (adapter race on first paint, or a torn upgrade where codex/achievements
+         * were forgotten in the views block) we fall through to state.codex so
+         * the modal never lies about unlocks the player already earned. */
         const v = call(() => G()?.views?.codex?.(), null);
-        if (Array.isArray(v)) return v;
-        return CODEX_DEFS.map((c) => ({ ...c, found: false }));
+        if (Array.isArray(v) && v.length) return v;
+        return CODEX_DEFS.map((c) => ({ ...c, found: !!(this.state()?.codex ?? {})[c.id] }));
       },
-      achievements() { return call(() => G()?.views?.achievements?.(), null) ?? []; },
+      achievements() {
+        const v = call(() => G()?.views?.achievements?.(), null);
+        if (Array.isArray(v) && v.length) return v;
+        return call(() => G()?.data?.ACHIEVEMENTS, [])?.map?.((a) =>
+          ({ ...a, got: !!(this.state()?.achievements ?? {})[a.id] })) ?? [];
+      },
       nodeViews() { return call(() => G()?.views?.nodes?.(), null) ?? []; },
       branches() { return this.data()?.CONSTELLATION_BRANCHES ?? CONSTEL_BRANCHES; },
       petals() { return num(this.state().petals); },
