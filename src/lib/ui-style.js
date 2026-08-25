@@ -524,7 +524,9 @@ export function uiCss() {
   -webkit-font-smoothing:antialiased; text-rendering:optimizeLegibility;
   user-select:none; -webkit-user-select:none;
 }
-#ui-root *{box-sizing:border-box;margin:0;padding:0;}
+#ui-root *{box-sizing:border-box;margin:0;}
+/* ★ padding은 reset 하지 않음 — th/td/help-card/help-p 등이 자체 padding을
+   가질 수 있도록. 도움말 모달 패딩 문제의 진짜 원인이었음. */
 #ui-root .num{font-variant-numeric:tabular-nums;font-feature-settings:"tnum" 1,"lnum" 1;}
 #ui-root button{font:inherit;color:inherit;background:none;border:0;cursor:pointer;}
 
