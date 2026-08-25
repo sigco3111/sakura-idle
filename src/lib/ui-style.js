@@ -1712,7 +1712,7 @@ export function uiCss() {
 .sk-modal.help .help-sec h2{margin:0 0 calc(var(--u)*.65);font-size:calc(var(--u)*1.25);font-weight:800;color:#5a1f3a;letter-spacing:.04em;text-shadow:0 1px 0 rgba(255,255,255,.5);}
 
 /* 카드: 흰 종이결 위에 부드러운 그림자 */
-.sk-modal.help .help-card{background:#fdfaf3;border:1px solid rgba(120,60,80,.16);border-radius:6px;padding:calc(var(--u)*.6) calc(var(--u)*1.0);box-shadow:0 2px 8px rgba(60,30,40,.10);margin-bottom:calc(var(--u)*.6);}
+.sk-modal.help .help-card{background:#fdfaf3;border:1px solid rgba(120,60,80,.16);border-radius:6px;padding:calc(var(--u)*0.8) calc(var(--u)*1.2) calc(var(--u)*0.8) calc(var(--u)*1.2);box-shadow:0 2px 8px rgba(60,30,40,.10);margin-bottom:calc(var(--u)*.6);}
 .sk-modal.help .help-card:last-child{margin-bottom:0;}
 
 /* 그리드 컨테이너 */
@@ -1721,15 +1721,15 @@ export function uiCss() {
 
 /* 표: 위계 명확 */
 .sk-modal.help .help-tbl{width:100%;border-collapse:collapse;table-layout:fixed;background:transparent;}
-.sk-modal.help .help-tbl th{width:28%;text-align:left;vertical-align:top;padding:calc(var(--u)*.5) calc(var(--u)*.9);font-weight:700;color:#fff;background:linear-gradient(180deg,#6e2541 0%,#5a1f3a 100%);border-right:2px solid #fdfaf3;font-size:calc(var(--u)*.88);line-height:1.45;}
+.sk-modal.help .help-tbl th{width:30%;text-align:left;vertical-align:top;padding:calc(var(--u)*0.7) calc(var(--u)*1.1) calc(var(--u)*0.7) calc(var(--u)*1.1);font-weight:700;color:#fff;background:linear-gradient(180deg,#6e2541 0%,#5a1f3a 100%);border-right:3px solid #fdfaf3;font-size:calc(var(--u)*.88);line-height:1.45;}
 .sk-modal.help .help-tbl th:first-child{border-top-left-radius:4px;border-bottom-left-radius:4px;}
-.sk-modal.help .help-tbl td{padding:calc(var(--u)*.5) calc(var(--u)*.9);vertical-align:top;color:#2a1820;background:#fff;font-weight:500;font-size:calc(var(--u)*.88);line-height:1.55;}
+.sk-modal.help .help-tbl td{padding:calc(var(--u)*0.7) calc(var(--u)*1.0) calc(var(--u)*0.7) calc(var(--u)*1.0);vertical-align:top;color:#2a1820;background:#fff;font-weight:500;font-size:calc(var(--u)*.88);line-height:1.55;}
 .sk-modal.help .help-tbl tr{border-bottom:1px solid rgba(120,60,80,.12);}
 .sk-modal.help .help-tbl tr:last-child{border-bottom:none;}
 .sk-modal.help .help-tbl tr:hover td{background:#fdf4e3;}
 
 /* 단락 */
-.sk-modal.help .help-p{margin:calc(var(--u)*.55) 0 0;padding:calc(var(--u)*.5) calc(var(--u)*.9);color:#2a1820;background:#fdf4e3;border-left:3px solid #b8637d;font-size:calc(var(--u)*.9);line-height:1.65;border-radius:0 4px 4px 0;}
+.sk-modal.help .help-p{margin:calc(var(--u)*.55) 0 0;padding:calc(var(--u)*0.7) calc(var(--u)*1.2);color:#2a1820;background:#fdf4e3;border-left:3px solid #b8637d;font-size:calc(var(--u)*.9);line-height:1.65;border-radius:0 4px 4px 0;}
 .sk-modal.help .help-p.help-p:last-child{margin-bottom:0;}
 
 /* 푸터 */
