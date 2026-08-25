@@ -1740,7 +1740,8 @@ export function uiCss() {
 .sk-modal.help .sk-head h1,
 .sk-modal.help .sk-head .sk-h1{color:#fff !important;font-weight:800;}
 
-/* 도움 버튼 (HUD 우상단) — 위치: muteBtn과 0.7u 간격 */
+/* 도움 버튼 (HUD 우상단) — 위치: muteBtn과 0.7u 간격
+   ★ pointer-events:auto 필수 (#ui-root가 pointer-events:none) */
 .sk-help{
   position:absolute;top:calc(var(--u)*.7);right:calc(var(--u)*3.5);
   width:calc(var(--u)*1.6);height:calc(var(--u)*1.6);
@@ -1749,7 +1750,7 @@ export function uiCss() {
   border-radius:50%;color:#fff;
   font-size:calc(var(--u)*1.0);font-weight:800;
   cursor:pointer;transition:transform .15s,box-shadow .15s;
-  z-index:4;
+  z-index:4;pointer-events:auto;
   box-shadow:0 2px 6px rgba(60,30,40,.35);
 }
 .sk-help:hover{transform:scale(1.08);box-shadow:0 4px 12px rgba(184,99,125,.55);background:linear-gradient(180deg,#b8637d,#9d4b6a);}
